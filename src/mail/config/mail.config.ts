@@ -9,6 +9,7 @@ import {
   IsBoolean,
   IsEmail,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import validateConfig from '../../utils/validate-config';
 import { MailConfig } from './mail-config.type';
 
@@ -36,12 +37,15 @@ class EnvironmentVariablesValidator {
   @IsString()
   MAIL_DEFAULT_NAME: string;
 
+  @Transform(({ value }) => value === 'true')
   @IsBoolean()
   MAIL_IGNORE_TLS: boolean;
 
+  @Transform(({ value }) => value === 'true')
   @IsBoolean()
   MAIL_SECURE: boolean;
 
+  @Transform(({ value }) => value === 'true')
   @IsBoolean()
   MAIL_REQUIRE_TLS: boolean;
 }
