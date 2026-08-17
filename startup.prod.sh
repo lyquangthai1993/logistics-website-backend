@@ -1,11 +1,16 @@
-#!/usr/bin/env bash
-# startup.prod.sh — Production startup script for Oracle Cloud VM
-# Runs DB migrations then starts the compiled NestJS server
+#!/bin/sh
+# startup.prod.sh — Production startup (no wait-for-it, Neon is always online)
 set -e
 
 echo "▶ Running database migrations..."
-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js \
-  --dataSource=dist/database/data-source.js migration:run
+node -e "
+require('reflect-metadata');
+const { AppDataSource } = require('./dist/database/data-source');
+AppDataSource.initialize()
+  .then(() => AppDataSource.runMigrations())
+  .then(() => { console.log('✅ Migrations complete'); process.exit(0); })
+  .catch((err) => { console.error('❌ Migration failed:', err); process.exit(1); });
+"
 
 echo "▶ Starting NestJS server..."
-node dist/main
+exec node dist/main

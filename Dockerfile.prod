@@ -14,16 +14,20 @@ FROM node:22-alpine AS runner
 
 WORKDIR /app
 
-# Install only production dependencies
+# Install production dependencies only
 COPY package*.json ./
 RUN npm ci --only=production && npm cache clean --force
 
 # Copy compiled output from builder
 COPY --from=builder /app/dist ./dist
 
-# Copy i18n translation files if they exist
+# Copy i18n translation files
 COPY --from=builder /app/src/i18n ./src/i18n
+
+# Copy and prepare startup script
+COPY startup.prod.sh ./startup.prod.sh
+RUN chmod +x ./startup.prod.sh
 
 EXPOSE 3001
 
-CMD ["node", "dist/main"]
+CMD ["sh", "./startup.prod.sh"]
