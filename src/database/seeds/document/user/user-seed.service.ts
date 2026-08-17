@@ -15,7 +15,7 @@ export class UserSeedService {
 
   async run() {
     const admin = await this.model.findOne({
-      email: 'admin@example.com',
+      email: 'admin@spiderexpress.vn',
     });
 
     if (!admin) {
@@ -23,12 +23,12 @@ export class UserSeedService {
       const password = await bcrypt.hash('secret', salt);
 
       const data = new this.model({
-        email: 'admin@example.com',
+        email: 'admin@spiderexpress.vn',
         password: password,
         firstName: 'Super',
         lastName: 'Admin',
         role: {
-          _id: RoleEnum.admin.toString(),
+          _id: RoleEnum.SUPER_ADMIN.toString(),
         },
         status: {
           _id: StatusEnum.active.toString(),
@@ -38,7 +38,7 @@ export class UserSeedService {
     }
 
     const user = await this.model.findOne({
-      email: 'john.doe@example.com',
+      email: 'ducanh@spiderexpress.vn',
     });
 
     if (!user) {
@@ -46,12 +46,12 @@ export class UserSeedService {
       const password = await bcrypt.hash('secret', salt);
 
       const data = new this.model({
-        email: 'john.doe@example.com',
+        email: 'ducanh@spiderexpress.vn',
         password: password,
-        firstName: 'John',
-        lastName: 'Doe',
+        firstName: 'Đức',
+        lastName: 'Anh',
         role: {
-          _id: RoleEnum.user.toString(),
+          _id: RoleEnum.DISPATCHER.toString(),
         },
         status: {
           _id: StatusEnum.active.toString(),

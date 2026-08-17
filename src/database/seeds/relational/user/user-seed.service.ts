@@ -15,64 +15,65 @@ export class UserSeedService {
   ) {}
 
   async run() {
-    const countAdmin = await this.repository.count({
-      where: {
-        role: {
-          id: RoleEnum.admin,
-        },
+    const seedUsers = [
+      {
+        firstName: 'Super',
+        lastName: 'Admin',
+        email: 'admin@spiderexpress.vn',
+        roleId: RoleEnum.SUPER_ADMIN,
+        roleName: 'Super Admin',
       },
-    });
-
-    if (!countAdmin) {
-      const salt = await bcrypt.genSalt();
-      const password = await bcrypt.hash('secret', salt);
-
-      await this.repository.save(
-        this.repository.create({
-          firstName: 'Super',
-          lastName: 'Admin',
-          email: 'admin@example.com',
-          password,
-          role: {
-            id: RoleEnum.admin,
-            name: 'Admin',
-          },
-          status: {
-            id: StatusEnum.active,
-            name: 'Active',
-          },
-        }),
-      );
-    }
-
-    const countUser = await this.repository.count({
-      where: {
-        role: {
-          id: RoleEnum.user,
-        },
+      {
+        firstName: 'Đức',
+        lastName: 'Anh',
+        email: 'ducanh@spiderexpress.vn',
+        roleId: RoleEnum.DISPATCHER,
+        roleName: 'Dispatcher',
       },
-    });
+      {
+        firstName: 'Quản lý',
+        lastName: 'Đội Xe',
+        email: 'fleet@spiderexpress.vn',
+        roleId: RoleEnum.FLEET_MANAGER,
+        roleName: 'Fleet Manager',
+      },
+      {
+        firstName: 'Quản lý',
+        lastName: 'Kho',
+        email: 'warehouse@spiderexpress.vn',
+        roleId: RoleEnum.WAREHOUSE_MANAGER,
+        roleName: 'Warehouse Manager',
+      },
+    ];
 
-    if (!countUser) {
-      const salt = await bcrypt.genSalt();
-      const password = await bcrypt.hash('secret', salt);
+    const salt = await bcrypt.genSalt();
+    const password = await bcrypt.hash('secret', salt);
 
-      await this.repository.save(
-        this.repository.create({
-          firstName: 'John',
-          lastName: 'Doe',
-          email: 'john.doe@example.com',
-          password,
-          role: {
-            id: RoleEnum.user,
-            name: 'Admin',
-          },
-          status: {
-            id: StatusEnum.active,
-            name: 'Active',
-          },
-        }),
-      );
+    for (const u of seedUsers) {
+      const count = await this.repository.count({
+        where: {
+          email: u.email,
+        },
+      });
+
+      if (!count) {
+        await this.repository.save(
+          this.repository.create({
+            firstName: u.firstName,
+            lastName: u.lastName,
+            email: u.email,
+            password,
+            role: {
+              id: u.roleId,
+              name: u.roleName,
+            },
+            status: {
+              id: StatusEnum.active,
+              name: 'Active',
+            },
+          }),
+        );
+      }
     }
   }
 }
