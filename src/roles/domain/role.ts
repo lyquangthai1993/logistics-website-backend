@@ -22,4 +22,20 @@ export class Role {
     example: 'admin',
   })
   name?: string;
+
+  @Allow()
+  @ApiProperty({
+    type: String,
+    example: 'Super Administrator',
+    nullable: true,
+  })
+  displayName?: string | null;
+
+  @Allow()
+  @ApiProperty({
+    type: String,
+    example: 'Has full access to all system features and settings.',
+    nullable: true,
+  })
+  description?: string | null;
 }

@@ -10,4 +10,11 @@ export class RoleEntity extends EntityRelationalHelper {
 
   @Column()
   name?: string;
+
+  @Column({ nullable: true, type: 'varchar', length: 100 })
+  displayName?: string | null;
+
+  @Column({ nullable: true, type: 'text' })
+  description?: string | null;
 }
+
