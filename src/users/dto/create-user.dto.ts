@@ -17,6 +17,11 @@ import { StatusDto } from '../../statuses/dto/status.dto';
 import { lowerCaseTransformer } from '../../utils/transformers/lower-case.transformer';
 
 export class CreateUserDto {
+  @ApiPropertyOptional({ example: 'admin', type: String })
+  @Transform(lowerCaseTransformer)
+  @IsOptional()
+  username?: string | null;
+
   @ApiProperty({ example: 'test1@example.com', type: String })
   @Transform(lowerCaseTransformer)
   @IsNotEmpty()

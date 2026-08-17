@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1e293b; background-color: #f8fafc; margin: 0; padding: 24px; }
+    .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; }
+    .header { background: #0f172a; color: #ffffff; padding: 24px; text-align: center; }
+    .header h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+    .content { padding: 24px; }
+    .badge-external { display: inline-block; background-color: #fef3c7; color: #b45309; font-weight: 700; padding: 6px 12px; border-radius: 6px; border: 1px solid #fde68a; font-size: 14px; margin-bottom: 16px; }
+    .info-table { width: 100%; border-collapse: collapse; margin-top: 16px; margin-bottom: 16px; }
+    .info-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; font-size: 14px; }
+    .info-table td.label { font-weight: 600; color: #64748b; width: 40%; }
+    .info-table td.value { font-weight: 600; color: #0f172a; }
+    .footer { background: #f8fafc; padding: 16px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🚚 SPIDER EXPRESS — XÁC NHẬN CHUYẾN XE</h1>
+    </div>
+    <div class="content">
+      {{#if isExternal}}
+      <div class="badge-external">
+        🚛 CHUYẾN XE THUÊ NGOÀI (EXTERNAL VEHICLE)
+      </div>
+      {{/if}}
+      <p>Kính gửi Quý bộ phận,</p>
+      <p>Chuyến xe cho đơn hàng <strong>{{orderCode}}</strong> đã được Quản lý Đội xe xác nhận điều phối với thông tin chi tiết như sau:</p>
+
+      <table class="info-table">
+        <tr>
+          <td class="label">Mã đơn hàng:</td>
+          <td class="value">{{orderCode}}</td>
+        </tr>
+        <tr>
+          <td class="label">Tuyến vận chuyển:</td>
+          <td class="value">{{route}}</td>
+        </tr>
+        <tr>
+          <td class="label">Hub xuất phát:</td>
+          <td class="value">{{originHub}}</td>
+        </tr>
+        <tr>
+          <td class="label">Hub đích (Kho nhận):</td>
+          <td class="value">{{destinationHub}}</td>
+        </tr>
+        <tr>
+          <td class="label">Biển số xe:</td>
+          <td class="value">{{licensePlate}}</td>
+        </tr>
+        {{#if isExternal}}
+        <tr>
+          <td class="label">Đơn vị xe ngoài:</td>
+          <td class="value" style="color: #b45309;">{{externalProvider}}</td>
+        </tr>
+        {{/if}}
+        <tr>
+          <td class="label">Tài xế & SĐT:</td>
+          <td class="value">{{driverName}} ({{driverPhone}})</td>
+        </tr>
+        <tr>
+          <td class="label">Khối lượng / Thể tích:</td>
+          <td class="value">{{weightAllocated}} kg / {{volumeAllocated}} m³</td>
+        </tr>
+        <tr>
+          <td class="label">Ngày/Giờ lấy hàng:</td>
+          <td class="value">{{pickupDate}} {{pickupTime}}</td>
+        </tr>
+        <tr>
+          <td class="label">Dự kiến đến kho:</td>
+          <td class="value">{{estimatedDeliveryDate}}</td>
+        </tr>
+      </table>
+
+      <p style="font-size: 13px; color: #64748b;">Vui lòng kiểm tra và chuẩn bị tiếp nhận hàng hóa tại Inbound Hub theo đúng lịch trình.</p>
+    </div>
+    <div class="footer">
+      Hệ thống Quản lý Vận tải Spider Express TMS &bull; Thông báo tự động
+    </div>
+  </div>
+</body>
+</html>

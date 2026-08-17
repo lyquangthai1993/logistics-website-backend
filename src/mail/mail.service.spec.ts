@@ -7,6 +7,7 @@ import {
   FleetNotificationType,
   WarehouseNotificationType,
 } from './interfaces/logistics-mail-data.interface';
+import { NotificationsService } from '../notifications/notifications.service';
 
 describe('MailService', () => {
   let service: MailService;
@@ -29,6 +30,10 @@ describe('MailService', () => {
       }),
     };
 
+    const mockNotificationsService = {
+      create: jest.fn().mockResolvedValue({}),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MailService,
@@ -39,6 +44,10 @@ describe('MailService', () => {
         {
           provide: ConfigService,
           useValue: mockConfigService,
+        },
+        {
+          provide: NotificationsService,
+          useValue: mockNotificationsService,
         },
       ],
     }).compile();

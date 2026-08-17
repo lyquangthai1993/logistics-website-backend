@@ -32,4 +32,10 @@ export class VehicleEntity extends AbstractBaseEntity {
 
   @Column({ type: Number, nullable: true })
   assignedDriverId: number | null;
+
+  @Column({ type: Boolean, nullable: false, default: false })
+  isExternal: boolean;
+
+  @Column({ type: String, nullable: true })
+  externalProvider: string | null;
 }

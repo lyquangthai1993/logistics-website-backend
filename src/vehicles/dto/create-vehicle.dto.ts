@@ -41,4 +41,13 @@ export class CreateVehicleDto {
   @IsOptional()
   @IsNumber()
   assignedDriverId?: number;
+
+  @ApiPropertyOptional({ example: false })
+  @IsOptional()
+  isExternal?: boolean;
+
+  @ApiPropertyOptional({ example: 'Công ty TNHH Vận Tải ABC' })
+  @IsOptional()
+  @IsString()
+  externalProvider?: string;
 }

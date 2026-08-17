@@ -15,7 +15,10 @@ import { Notification } from './domain/notification';
 @WebSocketGateway({
   namespace: 'notifications',
   cors: {
-    origin: (origin: string, callback: (err: Error | null, allow?: boolean) => void) => {
+    origin: (
+      origin: string,
+      callback: (err: Error | null, allow?: boolean) => void,
+    ) => {
       callback(null, true);
     },
     credentials: true,
@@ -92,7 +95,9 @@ export class NotificationsGateway
           this.userSockets.delete(userId);
         }
       }
-      this.logger.log(`WS disconnected: userId=${userId} socketId=${client.id}`);
+      this.logger.log(
+        `WS disconnected: userId=${userId} socketId=${client.id}`,
+      );
     }
   }
 

@@ -40,7 +40,7 @@ export class AuthService {
   ) {}
 
   async validateLogin(loginDto: AuthEmailLoginDto): Promise<LoginResponseDto> {
-    const user = await this.usersService.findByEmail(loginDto.email);
+    const user = await this.usersService.findByEmailOrUsername(loginDto.email);
 
     if (!user) {
       throw this.invalidLoginException({

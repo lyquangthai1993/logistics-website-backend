@@ -37,6 +37,23 @@ export class UsersService {
       password = await bcrypt.hash(createUserDto.password, salt);
     }
 
+    let username: string | null = null;
+
+    if (createUserDto.username) {
+      const userObject = await this.usersRepository.findByUsername(
+        createUserDto.username,
+      );
+      if (userObject) {
+        throw new UnprocessableEntityException({
+          status: HttpStatus.UNPROCESSABLE_ENTITY,
+          errors: {
+            username: 'usernameAlreadyExists',
+          },
+        });
+      }
+      username = createUserDto.username;
+    }
+
     let email: string | null = null;
 
     if (createUserDto.email) {
@@ -116,6 +133,7 @@ export class UsersService {
     return this.usersRepository.create({
       // Do not remove comment below.
       // <creating-property-payload />
+      username: username,
       firstName: createUserDto.firstName,
       lastName: createUserDto.lastName,
       email: email,
@@ -156,6 +174,14 @@ export class UsersService {
     return this.usersRepository.findByEmail(email);
   }
 
+  findByUsername(username: User['username']): Promise<NullableType<User>> {
+    return this.usersRepository.findByUsername(username);
+  }
+
+  findByEmailOrUsername(identifier: string): Promise<NullableType<User>> {
+    return this.usersRepository.findByEmailOrUsername(identifier);
+  }
+
   findBySocialIdAndProvider({
     socialId,
     provider,
@@ -185,6 +211,27 @@ export class UsersService {
         const salt = await bcrypt.genSalt();
         password = await bcrypt.hash(updateUserDto.password, salt);
       }
+    }
+
+    let username: string | null | undefined = undefined;
+
+    if (updateUserDto.username) {
+      const userObject = await this.usersRepository.findByUsername(
+        updateUserDto.username,
+      );
+
+      if (userObject && userObject.id !== id) {
+        throw new UnprocessableEntityException({
+          status: HttpStatus.UNPROCESSABLE_ENTITY,
+          errors: {
+            username: 'usernameAlreadyExists',
+          },
+        });
+      }
+
+      username = updateUserDto.username;
+    } else if (updateUserDto.username === null) {
+      username = null;
     }
 
     let email: string | null | undefined = undefined;
@@ -270,6 +317,7 @@ export class UsersService {
     return this.usersRepository.update(id, {
       // Do not remove comment below.
       // <updating-property-payload />
+      username,
       firstName: updateUserDto.firstName,
       lastName: updateUserDto.lastName,
       email,

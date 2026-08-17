@@ -28,6 +28,12 @@ class EnvironmentVariablesValidator {
   @IsOptional()
   APP_PORT: number;
 
+  @IsInt()
+  @Min(0)
+  @Max(65535)
+  @IsOptional()
+  PORT: number;
+
   @IsUrl({ require_tld: false })
   @IsOptional()
   FRONTEND_DOMAIN: string;
@@ -79,10 +85,10 @@ export default registerAs<AppConfig>('app', () => {
           .replace(/\\\*/g, '.*');
         return new RegExp(`^${escaped}$`);
       }),
-    port: process.env.APP_PORT
-      ? parseInt(process.env.APP_PORT, 10)
-      : process.env.PORT
-        ? parseInt(process.env.PORT, 10)
+    port: process.env.PORT
+      ? parseInt(process.env.PORT, 10)
+      : process.env.APP_PORT
+        ? parseInt(process.env.APP_PORT, 10)
         : 3000,
     apiPrefix: process.env.API_PREFIX || 'api',
     fallbackLanguage: process.env.APP_FALLBACK_LANGUAGE || 'en',

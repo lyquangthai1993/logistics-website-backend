@@ -1,4 +1,4 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { NotificationEntity } from './infrastructure/persistence/relational/entities/notification.entity';
@@ -12,10 +12,7 @@ import { NotificationsController } from './notifications.controller';
     JwtModule.register({}),
   ],
   controllers: [NotificationsController],
-  providers: [
-    NotificationsService,
-    NotificationsGateway,
-  ],
+  providers: [NotificationsService, NotificationsGateway],
   exports: [NotificationsService],
 })
 export class NotificationsModule {}

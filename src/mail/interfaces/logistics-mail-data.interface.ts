@@ -77,3 +77,20 @@ export interface GenericNotificationData {
   actionUrl?: string;
   footerText?: string;
 }
+
+export interface TripConfirmedNotificationData {
+  orderCode: string;
+  route?: string;
+  originHub?: string;
+  destinationHub?: string;
+  licensePlate: string;
+  isExternal?: boolean;
+  externalProvider?: string;
+  driverName?: string;
+  driverPhone?: string;
+  weightAllocated: number;
+  volumeAllocated: number;
+  pickupDate?: string;
+  pickupTime?: string;
+  estimatedDeliveryDate?: string;
+}

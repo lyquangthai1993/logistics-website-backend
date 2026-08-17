@@ -77,6 +77,24 @@ export class UsersDocumentRepository implements UserRepository {
     return userObject ? UserMapper.toDomain(userObject) : null;
   }
 
+  async findByUsername(
+    username: User['username'],
+  ): Promise<NullableType<User>> {
+    if (!username) return null;
+
+    const userObject = await this.usersModel.findOne({ username });
+    return userObject ? UserMapper.toDomain(userObject) : null;
+  }
+
+  async findByEmailOrUsername(identifier: string): Promise<NullableType<User>> {
+    if (!identifier) return null;
+
+    const userObject = await this.usersModel.findOne({
+      $or: [{ email: identifier }, { username: identifier }],
+    });
+    return userObject ? UserMapper.toDomain(userObject) : null;
+  }
+
   async findBySocialIdAndProvider({
     socialId,
     provider,

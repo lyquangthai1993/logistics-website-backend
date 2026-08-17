@@ -9,6 +9,7 @@ export class UserMapper {
   static toDomain(raw: UserEntity): User {
     const domainEntity = new User();
     domainEntity.id = raw.id;
+    domainEntity.username = raw.username;
     domainEntity.email = raw.email;
     domainEntity.password = raw.password;
     domainEntity.provider = raw.provider;
@@ -55,6 +56,7 @@ export class UserMapper {
     if (domainEntity.id && typeof domainEntity.id === 'number') {
       persistenceEntity.id = domainEntity.id;
     }
+    persistenceEntity.username = domainEntity.username;
     persistenceEntity.email = domainEntity.email;
     persistenceEntity.password = domainEntity.password;
     persistenceEntity.provider = domainEntity.provider;

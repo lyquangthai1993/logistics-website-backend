@@ -1,5 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsEnum, IsNumber, IsOptional, IsString, IsUrl } from 'class-validator';
+import {
+  IsEmail,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUrl,
+} from 'class-validator';
 import { DispatcherNotificationType } from '../interfaces/logistics-mail-data.interface';
 
 export class SendDispatcherNotificationDto {

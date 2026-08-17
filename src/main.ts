@@ -88,6 +88,10 @@ async function bootstrap() {
     },
   });
 
-  await app.listen(configService.getOrThrow('app.port', { infer: true }));
+  const port = configService.getOrThrow('app.port', { infer: true });
+  await app.listen(port, '0.0.0.0');
+  console.log(
+    `🚀 Application is running on: http://0.0.0.0:${port}/${configService.getOrThrow('app.apiPrefix', { infer: true })}`,
+  );
 }
 void bootstrap();

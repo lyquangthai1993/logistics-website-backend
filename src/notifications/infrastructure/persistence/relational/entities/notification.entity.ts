@@ -1,9 +1,4 @@
-import {
-  Column,
-  Entity,
-  Index,
-  PrimaryGeneratedColumn,
-} from 'typeorm';
+import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 import { NotificationType } from '../../../../../notifications/domain/notification';
 

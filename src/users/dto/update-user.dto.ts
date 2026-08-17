@@ -9,6 +9,11 @@ import { StatusDto } from '../../statuses/dto/status.dto';
 import { lowerCaseTransformer } from '../../utils/transformers/lower-case.transformer';
 
 export class UpdateUserDto extends PartialType(CreateUserDto) {
+  @ApiPropertyOptional({ example: 'admin', type: String })
+  @Transform(lowerCaseTransformer)
+  @IsOptional()
+  username?: string | null;
+
   @ApiPropertyOptional({ example: 'test1@example.com', type: String })
   @Transform(lowerCaseTransformer)
   @IsOptional()

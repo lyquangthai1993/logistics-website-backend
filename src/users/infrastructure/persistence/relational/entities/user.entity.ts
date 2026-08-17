@@ -21,6 +21,10 @@ export class UserEntity extends AbstractBaseEntity {
   @PrimaryGeneratedColumn()
   id: number;
 
+  @Index()
+  @Column({ type: String, unique: true, nullable: true })
+  username?: string | null;
+
   // For "string | null" we need to use String type.
   // More info: https://github.com/typeorm/typeorm/issues/2567
   @Column({ type: String, unique: true, nullable: true })

@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, forwardRef, Inject } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  forwardRef,
+  Inject,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { NotificationEntity } from './infrastructure/persistence/relational/entities/notification.entity';
@@ -40,7 +45,12 @@ export class NotificationsService {
     userId: number,
     page: number = 1,
     limit: number = 20,
-  ): Promise<{ data: Notification[]; total: number; page: number; limit: number }> {
+  ): Promise<{
+    data: Notification[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
     const [data, total] = await this.notificationRepo.findAndCount({
       where: { userId },
       order: { createdAt: 'DESC' },
@@ -64,7 +74,9 @@ export class NotificationsService {
       throw new NotFoundException(`Notification #${id} not found`);
     }
     notification.isRead = true;
-    return this.notificationRepo.save(notification) as unknown as Promise<Notification>;
+    return this.notificationRepo.save(
+      notification,
+    ) as unknown as Promise<Notification>;
   }
 
   async markAllAsRead(userId: number): Promise<{ affected: number }> {

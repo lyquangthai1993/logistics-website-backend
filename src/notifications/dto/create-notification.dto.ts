@@ -17,7 +17,10 @@ export class CreateNotificationDto {
   @IsNotEmpty()
   body: string;
 
-  @ApiProperty({ enum: ['WAREHOUSE', 'FLEET', 'DISPATCHER', 'GENERIC'], default: 'GENERIC' })
+  @ApiProperty({
+    enum: ['WAREHOUSE', 'FLEET', 'DISPATCHER', 'GENERIC'],
+    default: 'GENERIC',
+  })
   @IsOptional()
   type?: NotificationType;
 

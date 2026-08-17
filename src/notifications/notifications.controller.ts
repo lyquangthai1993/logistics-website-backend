@@ -27,14 +27,21 @@ export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Tạo notification mới (dùng cho admin/internal trigger)' })
+  @ApiOperation({
+    summary: 'Tạo notification mới (dùng cho admin/internal trigger)',
+  })
   create(@Body() dto: CreateNotificationDto) {
     return this.notificationsService.create(dto);
   }
 
   @Get()
-  @ApiOperation({ summary: 'Lấy danh sách notification của user hiện tại (phân trang)' })
-  findAll(@Request() req: { user: { id: number } }, @Query() query: QueryNotificationDto) {
+  @ApiOperation({
+    summary: 'Lấy danh sách notification của user hiện tại (phân trang)',
+  })
+  findAll(
+    @Request() req: { user: { id: number } },
+    @Query() query: QueryNotificationDto,
+  ) {
     const userId = req.user.id;
     return this.notificationsService.findAllByUser(
       userId,

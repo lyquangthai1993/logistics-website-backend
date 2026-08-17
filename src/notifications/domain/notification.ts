@@ -1,8 +1,4 @@
-export type NotificationType =
-  | 'WAREHOUSE'
-  | 'FLEET'
-  | 'DISPATCHER'
-  | 'GENERIC';
+export type NotificationType = 'WAREHOUSE' | 'FLEET' | 'DISPATCHER' | 'GENERIC';
 
 export class Notification {
   id: number;

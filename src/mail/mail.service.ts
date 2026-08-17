@@ -301,4 +301,33 @@ export class MailService {
       },
     });
   }
+
+  async sendTripConfirmedNotification(
+    mailData: MailData<
+      import('./interfaces/logistics-mail-data.interface').TripConfirmedNotificationData
+    >,
+  ): Promise<void> {
+    const templatePath = path.join(
+      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
+      'src',
+      'mail',
+      'mail-templates',
+      'trip-confirmed.hbs',
+    );
+
+    const subject = mailData.data.isExternal
+      ? `🚨 [XE THUÊ NGOÀI] Xác nhận chuyến xe cho đơn hàng ${mailData.data.orderCode}`
+      : `🚚 [Điều vận] Xác nhận chuyến xe cho đơn hàng ${mailData.data.orderCode}`;
+
+    await this.mailerService.sendMail({
+      to: mailData.to,
+      subject,
+      text: `${subject} - Biển số: ${mailData.data.licensePlate}`,
+      templatePath,
+      context: {
+        ...mailData.data,
+        app_name: this.configService.get('app.name', { infer: true }),
+      },
+    });
+  }
 }
