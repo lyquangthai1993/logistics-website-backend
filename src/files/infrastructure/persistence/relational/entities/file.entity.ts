@@ -8,4 +8,7 @@ export class FileEntity extends EntityRelationalHelper {
 
   @Column()
   path: string;
+
+  @Column({ type: 'integer', nullable: true, default: null })
+  createdBy: number | null;
 }

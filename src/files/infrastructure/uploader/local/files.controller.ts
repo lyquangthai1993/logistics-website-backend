@@ -3,6 +3,7 @@ import {
   Get,
   Param,
   Post,
+  Request,
   Response,
   UploadedFile,
   UseGuards,
@@ -20,7 +21,10 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { FilesLocalService } from './files.service';
 import { FileResponseDto } from './dto/file-response.dto';
-import type { Response as ExpressResponse } from 'express';
+import type {
+  Request as ExpressRequest,
+  Response as ExpressResponse,
+} from 'express';
 
 @ApiTags('Files')
 @Controller({
@@ -51,8 +55,9 @@ export class FilesLocalController {
   @UseInterceptors(FileInterceptor('file'))
   async uploadFile(
     @UploadedFile() file: Express.Multer.File,
+    @Request() req: ExpressRequest & { user?: { id?: number } },
   ): Promise<FileResponseDto> {
-    return this.filesService.create(file);
+    return this.filesService.create(file, req.user?.id);
   }
 
   @Get(':path')

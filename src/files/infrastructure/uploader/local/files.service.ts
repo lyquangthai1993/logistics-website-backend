@@ -16,7 +16,10 @@ export class FilesLocalService {
     private readonly fileRepository: FileRepository,
   ) {}
 
-  async create(file: Express.Multer.File): Promise<{ file: FileType }> {
+  async create(
+    file: Express.Multer.File,
+    userId?: number | null,
+  ): Promise<{ file: FileType }> {
     if (!file) {
       throw new UnprocessableEntityException({
         status: HttpStatus.UNPROCESSABLE_ENTITY,
@@ -31,6 +34,7 @@ export class FilesLocalService {
         path: `/${this.configService.get('app.apiPrefix', {
           infer: true,
         })}/v1/${file.path}`,
+        createdBy: userId ?? null,
       }),
     };
   }

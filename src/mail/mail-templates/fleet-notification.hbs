@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{title}}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f1f5f9;
+      margin: 0;
+      padding: 20px;
+      color: #1e293b;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      border: 1px solid #e2e8f0;
+    }
+    .header {
+      background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+      color: #ffffff;
+      padding: 24px;
+      text-align: left;
+    }
+    .header .brand {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: #a5b4fc;
+      margin-bottom: 6px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .content {
+      padding: 24px;
+    }
+    .greeting {
+      font-size: 15px;
+      font-weight: 500;
+      margin-bottom: 16px;
+    }
+    .status-card {
+      background-color: #f8fafc;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 20px;
+      border: 1px solid #cbd5e1;
+    }
+    .status-title {
+      font-size: 13px;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .status-value {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1e1b4b;
+    }
+
+    .metrics-grid {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+    }
+    .metrics-grid td {
+      width: 50%;
+      padding: 12px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      vertical-align: top;
+    }
+    .metric-label {
+      font-size: 12px;
+      color: #64748b;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .metric-val {
+      font-size: 16px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-top: 4px;
+    }
+    .metric-limit {
+      font-size: 12px;
+      color: #64748b;
+    }
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+    }
+    .data-table th, .data-table td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid #f1f5f9;
+      font-size: 14px;
+    }
+    .data-table th {
+      color: #64748b;
+      font-weight: 600;
+      width: 38%;
+      background-color: #fafafa;
+    }
+    .data-table td {
+      color: #0f172a;
+      font-weight: 500;
+    }
+
+    .alert-box {
+      background-color: #fef2f2;
+      border-left: 4px solid #ef4444;
+      padding: 12px 16px;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #991b1b;
+      margin-bottom: 20px;
+    }
+
+    .btn-container {
+      text-align: center;
+      margin: 24px 0 12px 0;
+    }
+    .btn {
+      display: inline-block;
+      background-color: #4f46e5;
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 12px 28px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 14px;
+      box-shadow: 0 2px 4px rgba(79, 70, 229, 0.25);
+    }
+    .footer {
+      background-color: #f8fafc;
+      padding: 16px 24px;
+      text-align: center;
+      font-size: 12px;
+      color: #94a3b8;
+      border-top: 1px solid #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="brand">SPIDER EXPRESS FLEET MANAGEMENT</div>
+      <h1>THÔNG BÁO ĐỘI XE &amp; ĐIỀU HÀNH CHUYẾN</h1>
+    </div>
+
+    <div class="content">
+      <p class="greeting">Xin chào {{#if recipientName}}{{recipientName}}{{else}}Quản lý Đội Xe / Tài Xế{{/if}},</p>
+
+      <div class="status-card">
+        <div class="status-title">Mã Chuyến Xe &bull; Tuyến Đường</div>
+        <div class="status-value">{{tripCode}} &mdash; {{route}}</div>
+      </div>
+
+      <table class="data-table">
+        <tr>
+          <th>Biển số xe:</th>
+          <td><strong>{{vehiclePlate}}</strong></td>
+        </tr>
+        <tr>
+          <th>Tài xế lái xe:</th>
+          <td>{{driverName}}</td>
+        </tr>
+        {{#if status}}
+        <tr>
+          <th>Trạng thái chuyến:</th>
+          <td><span style="font-weight:700; color:#4338ca;">{{status}}</span></td>
+        </tr>
+        {{/if}}
+      </table>
+
+      {{#if currentWeight}}
+      <table class="metrics-grid">
+        <tr>
+          <td>
+            <div class="metric-label">Tải Trọng Chuyến</div>
+            <div class="metric-val">{{currentWeight}}</div>
+            {{#if maxPayload}}<div class="metric-limit">Cho phép: {{maxPayload}}</div>{{/if}}
+          </td>
+          <td>
+            <div class="metric-label">Thể Tích Hàng</div>
+            <div class="metric-val">{{#if currentVolume}}{{currentVolume}}{{else}}N/A{{/if}}</div>
+            {{#if maxVolume}}<div class="metric-limit">Cho phép: {{maxVolume}}</div>{{/if}}
+          </td>
+        </tr>
+      </table>
+      {{/if}}
+
+      {{#if notes}}
+      <div class="alert-box">
+        <strong>⚠️ Ghi chú / Cảnh báo:</strong> {{notes}}
+      </div>
+      {{/if}}
+
+      {{#if actionUrl}}
+      <div class="btn-container">
+        <a href="{{actionUrl}}" target="_blank" class="btn">Kiểm Tra &amp; Phê Duyệt Chuyến</a>
+      </div>
+      {{/if}}
+    </div>
+
+    <div class="footer">
+      Spider Express Logistics TMS &bull; Quản lý đội xe &amp; Tải trọng chuyến<br>
+      Trụ sở chính: TP. Huế | Hotline hỗ trợ: 1900-SPIDER
+    </div>
+  </div>
+</body>
+</html>

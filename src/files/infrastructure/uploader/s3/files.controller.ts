@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Request,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -16,6 +17,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { FilesS3Service } from './files.service';
 import { FileResponseDto } from './dto/file-response.dto';
+import type { Request as ExpressRequest } from 'express';
 
 @ApiTags('Files')
 @Controller({
@@ -46,7 +48,8 @@ export class FilesS3Controller {
   @UseInterceptors(FileInterceptor('file'))
   async uploadFile(
     @UploadedFile() file: Express.MulterS3.File,
+    @Request() req: ExpressRequest & { user?: { id?: number } },
   ): Promise<FileResponseDto> {
-    return this.filesService.create(file);
+    return this.filesService.create(file, req.user?.id);
   }
 }

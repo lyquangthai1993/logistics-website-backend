@@ -166,4 +166,104 @@ export class MailService {
       },
     });
   }
+
+  async sendWarehouseNotification(
+    mailData: MailData<
+      import('./interfaces/logistics-mail-data.interface').WarehouseNotificationData
+    >,
+  ): Promise<void> {
+    const templatePath = path.join(
+      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
+      'src',
+      'mail',
+      'mail-templates',
+      'warehouse-notification.hbs',
+    );
+
+    await this.mailerService.sendMail({
+      to: mailData.to,
+      subject: mailData.data.title,
+      text: `${mailData.data.title} - Hub: ${mailData.data.hubName}`,
+      templatePath,
+      context: {
+        ...mailData.data,
+        app_name: this.configService.get('app.name', { infer: true }),
+      },
+    });
+  }
+
+  async sendFleetNotification(
+    mailData: MailData<
+      import('./interfaces/logistics-mail-data.interface').FleetNotificationData
+    >,
+  ): Promise<void> {
+    const templatePath = path.join(
+      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
+      'src',
+      'mail',
+      'mail-templates',
+      'fleet-notification.hbs',
+    );
+
+    await this.mailerService.sendMail({
+      to: mailData.to,
+      subject: mailData.data.title,
+      text: `${mailData.data.title} - Xe: ${mailData.data.vehiclePlate} (${mailData.data.tripCode})`,
+      templatePath,
+      context: {
+        ...mailData.data,
+        app_name: this.configService.get('app.name', { infer: true }),
+      },
+    });
+  }
+
+  async sendDispatcherNotification(
+    mailData: MailData<
+      import('./interfaces/logistics-mail-data.interface').DispatcherNotificationData
+    >,
+  ): Promise<void> {
+    const templatePath = path.join(
+      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
+      'src',
+      'mail',
+      'mail-templates',
+      'dispatcher-notification.hbs',
+    );
+
+    await this.mailerService.sendMail({
+      to: mailData.to,
+      subject: mailData.data.title,
+      text: `${mailData.data.title} - Mã đơn: ${mailData.data.orderCode}`,
+      templatePath,
+      context: {
+        ...mailData.data,
+        app_name: this.configService.get('app.name', { infer: true }),
+      },
+    });
+  }
+
+  async sendGenericNotification(
+    mailData: MailData<
+      import('./interfaces/logistics-mail-data.interface').GenericNotificationData
+    >,
+  ): Promise<void> {
+    const templatePath = path.join(
+      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
+      'src',
+      'mail',
+      'mail-templates',
+      'generic-notification.hbs',
+    );
+
+    await this.mailerService.sendMail({
+      to: mailData.to,
+      subject: mailData.data.title,
+      text: `${mailData.data.title}: ${mailData.data.message}`,
+      templatePath,
+      context: {
+        ...mailData.data,
+        app_name: this.configService.get('app.name', { infer: true }),
+      },
+    });
+  }
 }

@@ -18,6 +18,14 @@ export class FileType {
   id: string;
 
   @ApiProperty({
+    type: Number,
+    example: 1,
+    nullable: true,
+    required: false,
+  })
+  createdBy?: number | null;
+
+  @ApiProperty({
     type: String,
     example: 'https://example.com/path/to/file.jpg',
   })

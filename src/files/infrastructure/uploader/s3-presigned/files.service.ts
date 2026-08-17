@@ -37,6 +37,7 @@ export class FilesS3PresignedService {
 
   async create(
     file: FileUploadDto,
+    userId?: number | null,
   ): Promise<{ file: FileType; uploadSignedUrl: string }> {
     if (!file) {
       throw new UnprocessableEntityException({
@@ -84,6 +85,7 @@ export class FilesS3PresignedService {
     const signedUrl = await getSignedUrl(this.s3, command, { expiresIn: 3600 });
     const data = await this.fileRepository.create({
       path: key,
+      createdBy: userId ?? null,
     });
 
     return {
