@@ -149,9 +149,14 @@ export class OrdersService {
     return this.orderRepository.save(order);
   }
 
-  async markNoVehicle(id: number): Promise<OrderEntity> {
+  async markNoVehicle(id: number, reason?: string): Promise<OrderEntity> {
     const order = await this.findOne(id);
     order.status = 'NO_VEHICLE';
+    if (reason && reason.trim()) {
+      const timestamp = new Date().toLocaleDateString('vi-VN');
+      const notePrefix = `[${timestamp} - Đội xe báo hết xe]: ${reason.trim()}`;
+      order.notes = order.notes ? `${order.notes}\n${notePrefix}` : notePrefix;
+    }
     return this.orderRepository.save(order);
   }
 

@@ -120,8 +120,11 @@ export class OrdersController {
     type: Number,
     required: true,
   })
-  markNoVehicle(@Param('id') id: string): Promise<OrderEntity> {
-    return this.ordersService.markNoVehicle(+id);
+  markNoVehicle(
+    @Param('id') id: string,
+    @Body() body?: { reason?: string },
+  ): Promise<OrderEntity> {
+    return this.ordersService.markNoVehicle(+id, body?.reason);
   }
 
   @Delete(':id')
