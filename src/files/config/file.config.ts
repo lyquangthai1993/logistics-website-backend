@@ -1,6 +1,6 @@
 import { registerAs } from '@nestjs/config';
 
-import { IsEnum, IsString, ValidateIf } from 'class-validator';
+import { IsEnum, IsOptional, IsString, ValidateIf } from 'class-validator';
 import validateConfig from '../../utils/validate-config';
 import { FileDriver, FileConfig } from './file-config.type';
 
@@ -31,6 +31,20 @@ class EnvironmentVariablesValidator {
   )
   @IsString()
   AWS_S3_REGION: string;
+
+  @ValidateIf((envValues) =>
+    [FileDriver.S3, FileDriver.S3_PRESIGNED].includes(envValues.FILE_DRIVER),
+  )
+  @IsOptional()
+  @IsString()
+  AWS_S3_ENDPOINT: string;
+
+  @ValidateIf((envValues) =>
+    [FileDriver.S3, FileDriver.S3_PRESIGNED].includes(envValues.FILE_DRIVER),
+  )
+  @IsOptional()
+  @IsString()
+  AWS_S3_PUBLIC_URL: string;
 }
 
 export default registerAs<FileConfig>('file', () => {
@@ -43,6 +57,10 @@ export default registerAs<FileConfig>('file', () => {
     secretAccessKey: process.env.SECRET_ACCESS_KEY,
     awsDefaultS3Bucket: process.env.AWS_DEFAULT_S3_BUCKET,
     awsS3Region: process.env.AWS_S3_REGION,
+    awsS3Endpoint: process.env.AWS_S3_ENDPOINT,
+    // Public URL base for serving files (bypasses presigned URLs for public buckets)
+    // Supabase: https://<ref>.supabase.co/storage/v1/object/public/<bucket>
+    awsS3PublicUrl: process.env.AWS_S3_PUBLIC_URL,
     maxFileSize: 5242880, // 5mb
   };
 });

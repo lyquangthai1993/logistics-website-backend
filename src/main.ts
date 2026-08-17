@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import {
   ClassSerializerInterceptor,
   ValidationPipe,
@@ -25,6 +26,7 @@ async function bootstrap() {
       crossOriginResourcePolicy: { policy: 'cross-origin' },
     }),
   );
+  app.use(cookieParser());
 
   const corsOrigins = configService.getOrThrow('app.corsOrigins', {
     infer: true,
@@ -70,7 +72,11 @@ async function bootstrap() {
     .build();
 
   const document = SwaggerModule.createDocument(app, options);
-  SwaggerModule.setup('docs', app, document);
+  SwaggerModule.setup('docs', app, document, {
+    swaggerOptions: {
+      persistAuthorization: true,
+    },
+  });
 
   await app.listen(configService.getOrThrow('app.port', { infer: true }));
 }

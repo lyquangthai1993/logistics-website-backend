@@ -1,7 +1,8 @@
 import {
-  // typeorm decorators here
   Column,
   Entity,
+  ManyToOne,
+  JoinColumn,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { EntityRelationalHelper } from '../../../../../utils/relational-entity-helper';
@@ -14,3 +15,4 @@ export class FileEntity extends EntityRelationalHelper {
   @Column()
   path: string;
 }
+

@@ -10,7 +10,9 @@ import {
   Patch,
   Delete,
   SerializeOptions,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { AuthEmailLoginDto } from './dto/auth-email-login.dto';
@@ -28,6 +30,14 @@ import type { RequestWithUser } from '../utils/types/request-with-user.type';
 import type { JwtPayloadType } from './strategies/types/jwt-payload.type';
 import type { JwtRefreshPayloadType } from './strategies/types/jwt-refresh-payload.type';
 
+const REFRESH_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'lax' as const,
+  path: '/',
+  maxAge: 30 * 24 * 60 * 60 * 1000,
+};
+
 @ApiTags('Auth')
 @Controller({
   path: 'auth',
@@ -44,8 +54,13 @@ export class AuthController {
     type: LoginResponseDto,
   })
   @HttpCode(HttpStatus.OK)
-  public login(@Body() loginDto: AuthEmailLoginDto): Promise<LoginResponseDto> {
-    return this.service.validateLogin(loginDto);
+  public async login(
+    @Body() loginDto: AuthEmailLoginDto,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<LoginResponseDto> {
+    const data = await this.service.validateLogin(loginDto);
+    response.cookie('refreshToken', data.refreshToken, REFRESH_COOKIE_OPTIONS);
+    return data;
   }
 
   @Post('email/register')
@@ -113,13 +128,16 @@ export class AuthController {
   @Post('refresh')
   @UseGuards(AuthGuard('jwt-refresh'))
   @HttpCode(HttpStatus.OK)
-  public refresh(
+  public async refresh(
     @Request() request: RequestWithUser<JwtRefreshPayloadType>,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<RefreshResponseDto> {
-    return this.service.refreshToken({
+    const data = await this.service.refreshToken({
       sessionId: request.user.sessionId,
       hash: request.user.hash,
     });
+    response.cookie('refreshToken', data.refreshToken, REFRESH_COOKIE_OPTIONS);
+    return data;
   }
 
   @ApiBearerAuth()
@@ -128,10 +146,12 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   public async logout(
     @Request() request: RequestWithUser<JwtPayloadType>,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<void> {
     await this.service.logout({
       sessionId: request.user.sessionId,
     });
+    response.clearCookie('refreshToken', { path: '/' });
   }
 
   @ApiBearerAuth()

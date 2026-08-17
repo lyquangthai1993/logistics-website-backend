@@ -10,5 +10,7 @@ export type FileConfig = {
   secretAccessKey?: string;
   awsDefaultS3Bucket?: string;
   awsS3Region?: string;
+  awsS3Endpoint?: string;    // S3-compatible endpoint (Supabase, R2, MinIO)
+  awsS3PublicUrl?: string;   // Public base URL for serving files (e.g. Supabase public bucket URL)
   maxFileSize: number;
 };

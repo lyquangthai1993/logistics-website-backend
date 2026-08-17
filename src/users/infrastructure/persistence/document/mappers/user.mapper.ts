@@ -35,7 +35,7 @@ export class UserMapper {
 
     domainEntity.createdAt = raw.createdAt;
     domainEntity.updatedAt = raw.updatedAt;
-    domainEntity.deletedAt = raw.deletedAt;
+    domainEntity.deletedAt = raw.deletedAt ?? null;
 
     return domainEntity;
   }

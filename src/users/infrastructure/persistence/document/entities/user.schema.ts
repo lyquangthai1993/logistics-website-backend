@@ -68,8 +68,8 @@ export class UserSchemaClass extends EntityDocumentHelper {
   @Prop({ default: now })
   updatedAt: Date;
 
-  @Prop()
-  deletedAt: Date;
+  @Prop({ type: Date })
+  deletedAt?: Date | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(UserSchemaClass);

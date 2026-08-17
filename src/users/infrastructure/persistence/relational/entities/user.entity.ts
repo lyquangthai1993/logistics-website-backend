@@ -1,12 +1,9 @@
 import {
   Column,
-  CreateDateColumn,
-  DeleteDateColumn,
   Entity,
   Index,
   ManyToOne,
   PrimaryGeneratedColumn,
-  UpdateDateColumn,
   JoinColumn,
   OneToOne,
 } from 'typeorm';
@@ -15,12 +12,12 @@ import { StatusEntity } from '../../../../../statuses/infrastructure/persistence
 import { FileEntity } from '../../../../../files/infrastructure/persistence/relational/entities/file.entity';
 
 import { AuthProvidersEnum } from '../../../../../auth/auth-providers.enum';
-import { EntityRelationalHelper } from '../../../../../utils/relational-entity-helper';
+import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 
 @Entity({
   name: 'user',
 })
-export class UserEntity extends EntityRelationalHelper {
+export class UserEntity extends AbstractBaseEntity {
   @PrimaryGeneratedColumn()
   id: number;
 
@@ -62,13 +59,5 @@ export class UserEntity extends EntityRelationalHelper {
     eager: true,
   })
   status?: StatusEntity;
-
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @UpdateDateColumn()
-  updatedAt: Date;
-
-  @DeleteDateColumn()
-  deletedAt: Date;
 }
+

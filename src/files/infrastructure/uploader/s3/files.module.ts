@@ -32,6 +32,10 @@ const infrastructurePersistenceModule = (databaseConfig() as DatabaseConfig)
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService<AllConfigType>) => {
+        const endpoint = configService.get('file.awsS3Endpoint', {
+          infer: true,
+        });
+
         const s3 = new S3Client({
           region: configService.get('file.awsS3Region', { infer: true }),
           credentials: {
@@ -42,11 +46,14 @@ const infrastructurePersistenceModule = (databaseConfig() as DatabaseConfig)
               infer: true,
             }),
           },
+          // S3-compatible providers (Cloudflare R2, Supabase Storage, MinIO)
+          // require a custom endpoint and forcePathStyle
+          ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
         });
 
         return {
           fileFilter: (request, file, callback) => {
-            if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/i)) {
+            if (!file.originalname.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
               return callback(
                 new UnprocessableEntityException({
                   status: HttpStatus.UNPROCESSABLE_ENTITY,
@@ -65,7 +72,9 @@ const infrastructurePersistenceModule = (databaseConfig() as DatabaseConfig)
             bucket: configService.getOrThrow('file.awsDefaultS3Bucket', {
               infer: true,
             }),
-            contentType: multerS3.AUTO_CONTENT_TYPE,
+            contentType: (request, file, callback) => {
+              callback(null, file.mimetype);
+            },
             key: (request, file, callback) => {
               callback(
                 null,

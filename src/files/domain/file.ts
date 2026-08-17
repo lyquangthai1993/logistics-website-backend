@@ -23,23 +23,35 @@ export class FileType {
   })
   @Transform(
     ({ value }) => {
-      if ((fileConfig() as FileConfig).driver === FileDriver.LOCAL) {
+      const config = fileConfig() as FileConfig;
+
+      if (config.driver === FileDriver.LOCAL) {
+        // Local: prepend backend domain
         return (appConfig() as AppConfig).backendDomain + value;
-      } else if (
-        [FileDriver.S3_PRESIGNED, FileDriver.S3].includes(
-          (fileConfig() as FileConfig).driver,
-        )
-      ) {
+      }
+
+      if ([FileDriver.S3, FileDriver.S3_PRESIGNED].includes(config.driver)) {
+        // ── Public bucket (Supabase, R2 public, MinIO public) ──────────
+        // If AWS_S3_PUBLIC_URL is set, construct a permanent public URL.
+        // Supabase format: https://<ref>.supabase.co/storage/v1/object/public/<bucket>/<key>
+        if (config.awsS3PublicUrl) {
+          return `${config.awsS3PublicUrl.replace(/\/$/, '')}/${value}`;
+        }
+
+        // ── Private bucket fallback ────────────────────────────────────
+        // Generate a presigned URL that expires in 1 hour.
+        const endpoint = config.awsS3Endpoint;
         const s3 = new S3Client({
-          region: (fileConfig() as FileConfig).awsS3Region ?? '',
+          region: config.awsS3Region ?? '',
           credentials: {
-            accessKeyId: (fileConfig() as FileConfig).accessKeyId ?? '',
-            secretAccessKey: (fileConfig() as FileConfig).secretAccessKey ?? '',
+            accessKeyId: config.accessKeyId ?? '',
+            secretAccessKey: config.secretAccessKey ?? '',
           },
+          ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
         });
 
         const command = new GetObjectCommand({
-          Bucket: (fileConfig() as FileConfig).awsDefaultS3Bucket ?? '',
+          Bucket: config.awsDefaultS3Bucket ?? '',
           Key: value,
         });
 
