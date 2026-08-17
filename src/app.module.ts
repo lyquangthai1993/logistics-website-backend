@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { UsersModule } from './users/users.module';
+import { VehiclesModule } from './vehicles/vehicles.module';
+import { DriversModule } from './drivers/drivers.module';
 import { FilesModule } from './files/files.module';
 import { AuthModule } from './auth/auth.module';
 import databaseConfig from './database/config/database.config';
@@ -92,6 +94,8 @@ const infrastructureDatabaseModule = (databaseConfig() as DatabaseConfig)
     MailModule,
     MailerModule,
     HomeModule,
+    VehiclesModule,
+    DriversModule,
   ],
 })
 export class AppModule {}
