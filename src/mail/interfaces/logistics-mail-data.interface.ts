@@ -93,4 +93,8 @@ export interface TripConfirmedNotificationData {
   pickupDate?: string;
   pickupTime?: string;
   estimatedDeliveryDate?: string;
+  goodsDescription?: string;
+  orderNotes?: string;
+  externalNote?: string;
+  tripNotes?: string;
 }

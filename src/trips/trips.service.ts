@@ -233,6 +233,10 @@ export class TripsService {
             pickupDate: trip.pickupDate || undefined,
             pickupTime: trip.pickupTime || undefined,
             estimatedDeliveryDate: trip.estimatedDeliveryDate || undefined,
+            goodsDescription: trip.order?.goodsDescription || undefined,
+            orderNotes: trip.order?.notes || undefined,
+            externalNote: trip.order?.externalNote || undefined,
+            tripNotes: trip.notes || undefined,
           },
         });
       }

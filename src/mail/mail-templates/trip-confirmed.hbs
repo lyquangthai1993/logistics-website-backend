@@ -2,84 +2,353 @@
 <html lang="vi">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Xác Nhận Chuyến Xe — Spider Express TMS</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1e293b; background-color: #f8fafc; margin: 0; padding: 24px; }
-    .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; }
-    .header { background: #0f172a; color: #ffffff; padding: 24px; text-align: center; }
-    .header h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
-    .content { padding: 24px; }
-    .badge-external { display: inline-block; background-color: #fef3c7; color: #b45309; font-weight: 700; padding: 6px 12px; border-radius: 6px; border: 1px solid #fde68a; font-size: 14px; margin-bottom: 16px; }
-    .info-table { width: 100%; border-collapse: collapse; margin-top: 16px; margin-bottom: 16px; }
-    .info-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; font-size: 14px; }
-    .info-table td.label { font-weight: 600; color: #64748b; width: 40%; }
-    .info-table td.value { font-weight: 600; color: #0f172a; }
-    .footer { background: #f8fafc; padding: 16px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #1e293b;
+      background-color: #f1f5f9;
+      margin: 0;
+      padding: 20px;
+    }
+    .container {
+      max-width: 640px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 12px;
+      border: 1px solid #cbd5e1;
+      overflow: hidden;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    }
+    .header {
+      background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
+      color: #ffffff;
+      padding: 24px;
+      text-align: left;
+    }
+    .header .brand {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: #38bdf8;
+      margin-bottom: 6px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+    .content {
+      padding: 24px;
+    }
+    
+    /* ── CALLOUT GHI CHÚ ĐIỀU HÀNH (DISPATCHER NOTE) ── */
+    .note-card-urgent {
+      background-color: #fffbeb;
+      border: 2px solid #f59e0b;
+      border-left: 6px solid #d97706;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 8px rgba(217, 119, 6, 0.12);
+    }
+    .note-card-urgent .note-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: #b45309;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+    }
+    .note-card-urgent .note-body {
+      font-size: 15px;
+      font-weight: 600;
+      color: #78350f;
+      line-height: 1.5;
+      white-space: pre-line;
+    }
+
+    .note-card-external {
+      background-color: #fef2f2;
+      border: 2px solid #ef4444;
+      border-left: 6px solid #dc2626;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 8px rgba(220, 38, 38, 0.12);
+    }
+    .note-card-external .note-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: #b91c1c;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .note-card-external .note-body {
+      font-size: 15px;
+      font-weight: 600;
+      color: #7f1d1d;
+      line-height: 1.5;
+      white-space: pre-line;
+    }
+
+    .note-card-trip {
+      background-color: #f0fdf4;
+      border: 1.5px solid #86efac;
+      border-left: 5px solid #16a34a;
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 20px;
+    }
+    .note-card-trip .note-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #15803d;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .note-card-trip .note-body {
+      font-size: 14px;
+      font-weight: 500;
+      color: #14532d;
+      line-height: 1.5;
+      white-space: pre-line;
+    }
+
+    /* ── CARD THÔNG TIN XE & TÀI XẾ ── */
+    .vehicle-driver-box {
+      background-color: #f8fafc;
+      border: 2px solid #94a3b8;
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin-bottom: 24px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+    }
+    .vehicle-driver-box .section-heading {
+      font-size: 14px;
+      font-weight: 800;
+      color: #0f172a;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1.5px solid #e2e8f0;
+      padding-bottom: 8px;
+      margin-bottom: 14px;
+    }
+    .plate-badge {
+      display: inline-block;
+      background-color: #ffffff;
+      border: 2.5px solid #0f172a;
+      border-radius: 6px;
+      padding: 6px 16px;
+      font-family: 'SFMono-Regular', Consolas, 'Courier New', monospace;
+      font-size: 19px;
+      font-weight: 800;
+      color: #0f172a;
+      letter-spacing: 2px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+      margin-top: 4px;
+    }
+    .phone-btn {
+      display: inline-block;
+      background-color: #ecfdf5;
+      border: 2px solid #10b981;
+      color: #065f46 !important;
+      font-size: 17px;
+      font-weight: 800;
+      text-decoration: none;
+      padding: 8px 18px;
+      border-radius: 8px;
+      margin-top: 6px;
+      letter-spacing: 0.5px;
+    }
+
+    /* ── BẢNG CHI TIẾT ĐƠN HÀNG & LỊCH TRÌNH ── */
+    .route-banner {
+      background-color: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 18px;
+      font-size: 14px;
+      font-weight: 700;
+      color: #1e40af;
+    }
+    .info-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      margin-bottom: 16px;
+    }
+    .info-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #f1f5f9;
+      font-size: 14px;
+    }
+    .info-table td.label {
+      font-weight: 600;
+      color: #64748b;
+      width: 38%;
+      background-color: #fafafa;
+    }
+    .info-table td.value {
+      font-weight: 600;
+      color: #0f172a;
+    }
+    .footer {
+      background: #f8fafc;
+      padding: 18px 24px;
+      text-align: center;
+      font-size: 12px;
+      color: #64748b;
+      border-top: 1px solid #e2e8f0;
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <h1>🚚 SPIDER EXPRESS — XÁC NHẬN CHUYẾN XE</h1>
+      <div class="brand">SPIDER EXPRESS LOGISTICS TMS</div>
+      <h1>🚚 XÁC NHẬN CHUYẾN XE &amp; ĐIỀU PHỐI VẬN TẢI</h1>
     </div>
+
     <div class="content">
-      {{#if isExternal}}
-      <div class="badge-external">
-        🚛 CHUYẾN XE THUÊ NGOÀI (EXTERNAL VEHICLE)
+      <div class="route-banner">
+        📦 Đơn hàng: <strong style="font-size: 16px; color: #1e3a8a;">{{orderCode}}</strong>
+        {{#if route}} &bull; Tuyến: <strong>{{route}}</strong>{{/if}}
+      </div>
+
+      <!-- 🔴 1. KHỐI LƯU Ý ĐIỀU HÀNH QUAN TRỌNG (DISPATCHER & EXTERNAL NOTES) -->
+      {{#if orderNotes}}
+      <div class="note-card-urgent">
+        <div class="note-title">
+          ⚠️ LƯU Ý ĐIỀU HÀNH QUAN TRỌNG (GHI CHÚ TỪ DISPATCHER)
+        </div>
+        <div class="note-body">
+          {{orderNotes}}
+        </div>
       </div>
       {{/if}}
-      <p>Kính gửi Quý bộ phận,</p>
-      <p>Chuyến xe cho đơn hàng <strong>{{orderCode}}</strong> đã được Quản lý Đội xe xác nhận điều phối với thông tin chi tiết như sau:</p>
 
+      {{#if isExternal}}
+      <div class="note-card-external">
+        <div class="note-title">
+          🚨 YÊU CẦU ĐIỀU XE NGOÀI / ĐỐI TÁC THUÊ NGOÀI
+        </div>
+        {{#if externalProvider}}
+        <div style="font-size: 14px; font-weight: 700; color: #991b1b; margin-bottom: 6px;">
+          🏢 Đơn vị vận tải: {{externalProvider}}
+        </div>
+        {{/if}}
+        {{#if externalNote}}
+        <div class="note-body">
+          <strong>Nội dung / Lý do thuê ngoài:</strong><br>
+          {{externalNote}}
+        </div>
+        {{/if}}
+      </div>
+      {{/if}}
+
+      {{#if tripNotes}}
+      <div class="note-card-trip">
+        <div class="note-title">
+          📋 GHI CHÚ ĐIỀU PHỐI CHUYẾN XE (TỪ FLEET MANAGER)
+        </div>
+        <div class="note-body">
+          {{tripNotes}}
+        </div>
+      </div>
+      {{/if}}
+
+      <!-- 🚗 2. KHỐI THÔNG TIN XE & TÀI XẾ VẬN CHUYỂN -->
+      <div class="vehicle-driver-box">
+        <div class="section-heading">
+          🚛 THÔNG TIN XE &amp; TÀI XẾ PHỤ TRÁCH
+        </div>
+        
+        <table style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <td style="width: 50%; vertical-align: top; padding-right: 12px;">
+              <div style="font-size: 13px; font-weight: 700; color: #475569; text-transform: uppercase;">
+                Biển số phương tiện:
+              </div>
+              <div class="plate-badge">
+                {{licensePlate}}
+              </div>
+              {{#if isExternal}}
+              <div style="font-size: 12px; font-weight: 700; color: #b45309; margin-top: 6px;">
+                (Xe thuê đối tác: {{#if externalProvider}}{{externalProvider}}{{else}}Xe ngoài{{/if}})
+              </div>
+              {{/if}}
+            </td>
+            
+            <td style="width: 50%; vertical-align: top; padding-left: 12px; border-left: 1.5px dashed #cbd5e1;">
+              <div style="font-size: 13px; font-weight: 700; color: #475569; text-transform: uppercase;">
+                Tài xế lái xe:
+              </div>
+              <div style="font-size: 17px; font-weight: 800; color: #0f172a; margin-top: 4px;">
+                👤 {{#if driverName}}{{driverName}}{{else}}Chưa chỉ định{{/if}}
+              </div>
+              
+              {{#if driverPhone}}
+              <div style="margin-top: 8px;">
+                <a href="tel:{{driverPhone}}" class="phone-btn">
+                  📞 {{driverPhone}}
+                </a>
+              </div>
+              {{/if}}
+            </td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- 📦 3. BẢNG THÔNG TIN LỊCH TRÌNH & HÀNG HÓA -->
       <table class="info-table">
         <tr>
-          <td class="label">Mã đơn hàng:</td>
-          <td class="value">{{orderCode}}</td>
-        </tr>
-        <tr>
-          <td class="label">Tuyến vận chuyển:</td>
-          <td class="value">{{route}}</td>
-        </tr>
-        <tr>
-          <td class="label">Hub xuất phát:</td>
+          <td class="label">Hub xuất phát (Gửi):</td>
           <td class="value">{{originHub}}</td>
         </tr>
         <tr>
           <td class="label">Hub đích (Kho nhận):</td>
-          <td class="value">{{destinationHub}}</td>
-        </tr>
-        <tr>
-          <td class="label">Biển số xe:</td>
-          <td class="value">{{licensePlate}}</td>
-        </tr>
-        {{#if isExternal}}
-        <tr>
-          <td class="label">Đơn vị xe ngoài:</td>
-          <td class="value" style="color: #b45309;">{{externalProvider}}</td>
-        </tr>
-        {{/if}}
-        <tr>
-          <td class="label">Tài xế & SĐT:</td>
-          <td class="value">{{driverName}} ({{driverPhone}})</td>
+          <td class="value"><span style="color: #0284c7; font-weight: 700;">{{destinationHub}}</span></td>
         </tr>
         <tr>
           <td class="label">Khối lượng / Thể tích:</td>
-          <td class="value">{{weightAllocated}} kg / {{volumeAllocated}} m³</td>
+          <td class="value"><strong>{{weightAllocated}} kg</strong> / <strong>{{volumeAllocated}} m³</strong></td>
         </tr>
+        {{#if goodsDescription}}
         <tr>
-          <td class="label">Ngày/Giờ lấy hàng:</td>
+          <td class="label">Mô tả loại hàng:</td>
+          <td class="value" style="white-space: pre-line;">{{goodsDescription}}</td>
+        </tr>
+        {{/if}}
+        <tr>
+          <td class="label">Thời gian lấy hàng:</td>
           <td class="value">{{pickupDate}} {{pickupTime}}</td>
         </tr>
         <tr>
           <td class="label">Dự kiến đến kho:</td>
-          <td class="value">{{estimatedDeliveryDate}}</td>
+          <td class="value"><strong style="color: #059669;">{{estimatedDeliveryDate}}</strong></td>
         </tr>
       </table>
 
-      <p style="font-size: 13px; color: #64748b;">Vui lòng kiểm tra và chuẩn bị tiếp nhận hàng hóa tại Inbound Hub theo đúng lịch trình.</p>
+      <p style="font-size: 13px; color: #64748b; margin-top: 20px;">
+        💡 <em>Vui lòng kiểm tra kỹ các lưu ý điều hành và số điện thoại tài xế để phối hợp giao nhận thông suốt tại Inbound Hub.</em>
+      </p>
     </div>
+
     <div class="footer">
-      Hệ thống Quản lý Vận tải Spider Express TMS &bull; Thông báo tự động
+      <strong>Spider Express Logistics TMS</strong> &bull; Hệ thống quản lý vận tải trung tâm<br>
+      Trụ sở chính: TP. Huế &bull; Hotline điều hành: 1900-SPIDER &bull; Email tự động phát sinh từ hệ thống
     </div>
   </div>
 </body>
 </html>
+
