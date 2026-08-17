@@ -17,4 +17,3 @@ export class RoleEntity extends EntityRelationalHelper {
   @Column({ nullable: true, type: 'text' })
   description?: string | null;
 }
-

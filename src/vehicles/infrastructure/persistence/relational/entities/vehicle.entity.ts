@@ -1,9 +1,4 @@
-import {
-  Column,
-  Entity,
-  Index,
-  PrimaryGeneratedColumn,
-} from 'typeorm';
+import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 
 @Entity({
@@ -38,4 +33,3 @@ export class VehicleEntity extends AbstractBaseEntity {
   @Column({ type: Number, nullable: true })
   assignedDriverId: number | null;
 }
-

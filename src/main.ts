@@ -35,7 +35,13 @@ async function bootstrap() {
     origin: corsOrigins.includes('*') ? true : corsOrigins,
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: ['Content-Type', 'Accept', 'Authorization', 'X-Requested-With', 'x-custom-lang'],
+    allowedHeaders: [
+      'Content-Type',
+      'Accept',
+      'Authorization',
+      'X-Requested-With',
+      'x-custom-lang',
+    ],
   });
 
   app.enableShutdownHooks();

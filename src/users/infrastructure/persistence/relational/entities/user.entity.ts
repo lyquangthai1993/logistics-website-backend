@@ -60,4 +60,3 @@ export class UserEntity extends AbstractBaseEntity {
   })
   status?: StatusEntity;
 }
-

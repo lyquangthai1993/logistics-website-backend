@@ -31,7 +31,10 @@ export class DriversService {
     return driver;
   }
 
-  async update(id: number, updateDriverDto: UpdateDriverDto): Promise<DriverEntity> {
+  async update(
+    id: number,
+    updateDriverDto: UpdateDriverDto,
+  ): Promise<DriverEntity> {
     const driver = await this.findOne(id);
     Object.assign(driver, updateDriverDto);
     return this.driverRepository.save(driver);

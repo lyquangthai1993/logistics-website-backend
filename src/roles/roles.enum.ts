@@ -4,4 +4,3 @@ export enum RoleEnum {
   'FLEET_MANAGER' = 3,
   'WAREHOUSE_MANAGER' = 4,
 }
-

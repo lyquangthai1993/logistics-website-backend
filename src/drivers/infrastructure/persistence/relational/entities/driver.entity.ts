@@ -1,9 +1,4 @@
-import {
-  Column,
-  Entity,
-  Index,
-  PrimaryGeneratedColumn,
-} from 'typeorm';
+import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 
 @Entity({
@@ -32,4 +27,3 @@ export class DriverEntity extends AbstractBaseEntity {
   @Column({ type: String, nullable: false, default: 'AVAILABLE' })
   status: string;
 }
-

@@ -1,8 +1,4 @@
-import {
-  CreateDateColumn,
-  DeleteDateColumn,
-  UpdateDateColumn,
-} from 'typeorm';
+import { CreateDateColumn, DeleteDateColumn, UpdateDateColumn } from 'typeorm';
 import { EntityRelationalHelper } from './relational-entity-helper';
 
 /**

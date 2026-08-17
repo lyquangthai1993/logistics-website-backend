@@ -44,3 +44,18 @@ lerna-debug.log*
 
 # Claude Code runtime state
 .claude/scheduled_tasks.lock
+
+# MCP (Model Context Protocol) config files – may contain API keys
+mcp.json
+mcp_config.json
+mcp_config.yaml
+mcp_config.yml
+.mcp/
+claude_desktop_config.json
+.cursor/mcp.json
+.cursor/mcp.yaml
+.gemini/mcp*.json
+windsurf_mcp.json
+codeium_mcp.json
+.codeium/
+copilot-mcp.json

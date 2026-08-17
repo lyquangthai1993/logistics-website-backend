@@ -24,4 +24,3 @@ export class SessionEntity extends AbstractBaseEntity {
   @Column()
   hash: string;
 }
-

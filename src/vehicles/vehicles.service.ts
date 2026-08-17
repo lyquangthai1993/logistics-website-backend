@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { VehicleEntity } from './infrastructure/persistence/relational/entities/vehicle.entity';
@@ -17,7 +21,9 @@ export class VehiclesService {
       where: { licensePlate: createVehicleDto.licensePlate },
     });
     if (existing) {
-      throw new ConflictException(`Vehicle with license plate ${createVehicleDto.licensePlate} already exists`);
+      throw new ConflictException(
+        `Vehicle with license plate ${createVehicleDto.licensePlate} already exists`,
+      );
     }
 
     const vehicle = this.vehicleRepository.create(createVehicleDto);
@@ -38,7 +44,10 @@ export class VehiclesService {
     return vehicle;
   }
 
-  async update(id: number, updateVehicleDto: UpdateVehicleDto): Promise<VehicleEntity> {
+  async update(
+    id: number,
+    updateVehicleDto: UpdateVehicleDto,
+  ): Promise<VehicleEntity> {
     const vehicle = await this.findOne(id);
 
     if (
@@ -49,7 +58,9 @@ export class VehiclesService {
         where: { licensePlate: updateVehicleDto.licensePlate },
       });
       if (existing) {
-        throw new ConflictException(`Vehicle with license plate ${updateVehicleDto.licensePlate} already exists`);
+        throw new ConflictException(
+          `Vehicle with license plate ${updateVehicleDto.licensePlate} already exists`,
+        );
       }
     }
 
