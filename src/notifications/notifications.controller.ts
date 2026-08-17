@@ -1,7 +1,9 @@
 import {
+  Body,
   Controller,
   Get,
   Patch,
+  Post,
   Param,
   Query,
   ParseIntPipe,
@@ -10,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
+import { CreateNotificationDto } from './dto/create-notification.dto';
 import { QueryNotificationDto } from './dto/query-notification.dto';
 import { AuthGuard } from '@nestjs/passport';
 
@@ -22,6 +25,12 @@ import { AuthGuard } from '@nestjs/passport';
 })
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
+
+  @Post()
+  @ApiOperation({ summary: 'Tạo notification mới (dùng cho admin/internal trigger)' })
+  create(@Body() dto: CreateNotificationDto) {
+    return this.notificationsService.create(dto);
+  }
 
   @Get()
   @ApiOperation({ summary: 'Lấy danh sách notification của user hiện tại (phân trang)' })
