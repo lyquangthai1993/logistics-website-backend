@@ -1,8 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsEnum, IsOptional, IsString, IsUrl } from 'class-validator';
+import { IsEmail, IsEnum, IsNumber, IsOptional, IsString, IsUrl } from 'class-validator';
 import { FleetNotificationType } from '../interfaces/logistics-mail-data.interface';
 
 export class SendFleetNotificationDto {
+  @ApiPropertyOptional({
+    example: 10,
+    description: 'ID của user nhận in-app notification (để push WebSocket)',
+  })
+  @IsOptional()
+  @IsNumber()
+  userId?: number;
   @ApiProperty({
     example: 'lyquangthai1993+419@gmail.com',
     description: 'Email người nhận (Quản lý đội xe / Tài xế)',

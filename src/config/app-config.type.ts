@@ -4,7 +4,7 @@ export type AppConfig = {
   workingDirectory: string;
   frontendDomain?: string;
   backendDomain: string;
-  corsOrigins: string[];
+  corsOrigins: (string | RegExp)[];
   port: number;
   apiPrefix: string;
   fallbackLanguage: string;

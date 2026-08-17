@@ -68,8 +68,17 @@ export default registerAs<AppConfig>('app', () => {
       '*'
     )
       .split(',')
-      .map((origin) => origin.trim())
-      .filter((origin) => origin.length > 0),
+      .map((origin) => origin.trim().replace(/\/$/, ''))
+      .filter((origin) => origin.length > 0)
+      .map((origin) => {
+        if (origin === '*' || !origin.includes('*')) {
+          return origin;
+        }
+        const escaped = origin
+          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          .replace(/\\\*/g, '.*');
+        return new RegExp(`^${escaped}$`);
+      }),
     port: process.env.APP_PORT
       ? parseInt(process.env.APP_PORT, 10)
       : process.env.PORT

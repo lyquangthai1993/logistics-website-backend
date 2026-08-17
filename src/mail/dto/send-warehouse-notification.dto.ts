@@ -10,6 +10,13 @@ import {
 import { WarehouseNotificationType } from '../interfaces/logistics-mail-data.interface';
 
 export class SendWarehouseNotificationDto {
+  @ApiPropertyOptional({
+    example: 10,
+    description: 'ID của user nhận in-app notification (để push WebSocket)',
+  })
+  @IsOptional()
+  @IsNumber()
+  userId?: number;
   @ApiProperty({
     example: 'lyquangthai1993+832@gmail.com',
     description: 'Email người nhận thông báo kho',

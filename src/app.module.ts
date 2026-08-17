@@ -3,6 +3,7 @@ import { UsersModule } from './users/users.module';
 import { VehiclesModule } from './vehicles/vehicles.module';
 import { DriversModule } from './drivers/drivers.module';
 import { FilesModule } from './files/files.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { AuthModule } from './auth/auth.module';
 import databaseConfig from './database/config/database.config';
 import authConfig from './auth/config/auth.config';
@@ -96,6 +97,7 @@ const infrastructureDatabaseModule = (databaseConfig() as DatabaseConfig)
     HomeModule,
     VehiclesModule,
     DriversModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

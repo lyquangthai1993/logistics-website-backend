@@ -7,12 +7,14 @@ import { MaybeType } from '../utils/types/maybe.type';
 import { MailerService } from '../mailer/mailer.service';
 import path from 'path';
 import { AllConfigType } from '../config/config.type';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class MailService {
   constructor(
     private readonly mailerService: MailerService,
     private readonly configService: ConfigService<AllConfigType>,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async userSignUp(mailData: MailData<{ hash: string }>): Promise<void> {
@@ -170,7 +172,7 @@ export class MailService {
   async sendWarehouseNotification(
     mailData: MailData<
       import('./interfaces/logistics-mail-data.interface').WarehouseNotificationData
-    >,
+    > & { userId?: number },
   ): Promise<void> {
     const templatePath = path.join(
       this.configService.getOrThrow('app.workingDirectory', { infer: true }),
@@ -180,22 +182,33 @@ export class MailService {
       'warehouse-notification.hbs',
     );
 
-    await this.mailerService.sendMail({
-      to: mailData.to,
-      subject: mailData.data.title,
-      text: `${mailData.data.title} - Hub: ${mailData.data.hubName}`,
-      templatePath,
-      context: {
-        ...mailData.data,
-        app_name: this.configService.get('app.name', { infer: true }),
-      },
-    });
+    // Chạy song song: email + in-app notification (fire-and-forget, không transaction)
+    await Promise.all([
+      this.mailerService.sendMail({
+        to: mailData.to,
+        subject: mailData.data.title,
+        text: `${mailData.data.title} - Hub: ${mailData.data.hubName}`,
+        templatePath,
+        context: {
+          ...mailData.data,
+          app_name: this.configService.get('app.name', { infer: true }),
+        },
+      }),
+      mailData.userId
+        ? this.notificationsService.create({
+            userId: mailData.userId,
+            title: mailData.data.title,
+            body: `Hub: ${mailData.data.hubName}`,
+            type: 'WAREHOUSE',
+          })
+        : Promise.resolve(),
+    ]);
   }
 
   async sendFleetNotification(
     mailData: MailData<
       import('./interfaces/logistics-mail-data.interface').FleetNotificationData
-    >,
+    > & { userId?: number },
   ): Promise<void> {
     const templatePath = path.join(
       this.configService.getOrThrow('app.workingDirectory', { infer: true }),
@@ -205,22 +218,33 @@ export class MailService {
       'fleet-notification.hbs',
     );
 
-    await this.mailerService.sendMail({
-      to: mailData.to,
-      subject: mailData.data.title,
-      text: `${mailData.data.title} - Xe: ${mailData.data.vehiclePlate} (${mailData.data.tripCode})`,
-      templatePath,
-      context: {
-        ...mailData.data,
-        app_name: this.configService.get('app.name', { infer: true }),
-      },
-    });
+    // Chạy song song: email + in-app notification (fire-and-forget, không transaction)
+    await Promise.all([
+      this.mailerService.sendMail({
+        to: mailData.to,
+        subject: mailData.data.title,
+        text: `${mailData.data.title} - Xe: ${mailData.data.vehiclePlate} (${mailData.data.tripCode})`,
+        templatePath,
+        context: {
+          ...mailData.data,
+          app_name: this.configService.get('app.name', { infer: true }),
+        },
+      }),
+      mailData.userId
+        ? this.notificationsService.create({
+            userId: mailData.userId,
+            title: mailData.data.title,
+            body: `Xe: ${mailData.data.vehiclePlate} - Chuyến: ${mailData.data.tripCode}`,
+            type: 'FLEET',
+          })
+        : Promise.resolve(),
+    ]);
   }
 
   async sendDispatcherNotification(
     mailData: MailData<
       import('./interfaces/logistics-mail-data.interface').DispatcherNotificationData
-    >,
+    > & { userId?: number },
   ): Promise<void> {
     const templatePath = path.join(
       this.configService.getOrThrow('app.workingDirectory', { infer: true }),
@@ -230,16 +254,27 @@ export class MailService {
       'dispatcher-notification.hbs',
     );
 
-    await this.mailerService.sendMail({
-      to: mailData.to,
-      subject: mailData.data.title,
-      text: `${mailData.data.title} - Mã đơn: ${mailData.data.orderCode}`,
-      templatePath,
-      context: {
-        ...mailData.data,
-        app_name: this.configService.get('app.name', { infer: true }),
-      },
-    });
+    // Chạy song song: email + in-app notification (fire-and-forget, không transaction)
+    await Promise.all([
+      this.mailerService.sendMail({
+        to: mailData.to,
+        subject: mailData.data.title,
+        text: `${mailData.data.title} - Mã đơn: ${mailData.data.orderCode}`,
+        templatePath,
+        context: {
+          ...mailData.data,
+          app_name: this.configService.get('app.name', { infer: true }),
+        },
+      }),
+      mailData.userId
+        ? this.notificationsService.create({
+            userId: mailData.userId,
+            title: mailData.data.title,
+            body: `Mã đơn: ${mailData.data.orderCode}`,
+            type: 'DISPATCHER',
+          })
+        : Promise.resolve(),
+    ]);
   }
 
   async sendGenericNotification(
