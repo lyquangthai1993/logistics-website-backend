@@ -251,6 +251,12 @@
 
       <table class="metrics-grid">
         <tr>
+          {{#if totalQuantity}}
+          <td>
+            <div class="metric-label">Số Lượng Kiện/Hàng</div>
+            <div class="metric-val">{{totalQuantity}} kiện</div>
+          </td>
+          {{/if}}
           <td>
             <div class="metric-label">Tổng Khối Lượng</div>
             <div class="metric-val">{{totalWeight}} kg</div>

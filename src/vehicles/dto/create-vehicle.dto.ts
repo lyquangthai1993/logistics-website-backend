@@ -32,6 +32,11 @@ export class CreateVehicleDto {
   @IsString()
   currentHub?: string;
 
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional()
+  @IsNumber()
+  hubId?: number;
+
   @ApiPropertyOptional({ example: 'AVAILABLE' })
   @IsOptional()
   @IsString()

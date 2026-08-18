@@ -444,6 +444,7 @@ export class OrdersService {
               route,
               originHub: order.originHub ?? undefined,
               destinationHub: order.destinationHub ?? undefined,
+              totalQuantity: order.totalQuantity ?? undefined,
               totalWeight: order.totalWeight,
               totalVolume: order.totalVolume,
               isExternalVehicleNeeded: order.isExternalVehicleNeeded ?? false,
@@ -536,6 +537,7 @@ export class OrdersService {
               route,
               originHub: order.originHub ?? undefined,
               destinationHub: order.destinationHub ?? undefined,
+              totalQuantity: order.totalQuantity ?? undefined,
               totalWeight: order.totalWeight,
               totalVolume: order.totalVolume,
               reason: finalReason,
@@ -559,4 +561,3 @@ export class OrdersService {
     this.logger.log(`[7] sendOrderNoVehicleNotifications DONE`);
   }
 }
-

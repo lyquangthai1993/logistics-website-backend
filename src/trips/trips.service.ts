@@ -255,6 +255,7 @@ export class TripsService {
             externalProvider,
             driverName,
             driverPhone,
+            totalQuantity: trip.order?.totalQuantity,
             weightAllocated: trip.weightAllocated,
             volumeAllocated: trip.volumeAllocated,
             pickupDate: trip.pickupDate || undefined,

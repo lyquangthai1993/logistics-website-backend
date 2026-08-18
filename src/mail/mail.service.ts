@@ -169,6 +169,19 @@ export class MailService {
     });
   }
 
+  private formatActionUrl(actionUrl?: string): string | undefined {
+    if (!actionUrl) return undefined;
+    if (actionUrl.startsWith('http://') || actionUrl.startsWith('https://')) {
+      return actionUrl;
+    }
+    const frontendDomain =
+      this.configService.get('app.frontendDomain', { infer: true }) ||
+      'http://localhost:3000';
+    const cleanDomain = frontendDomain.replace(/\/+$/, '');
+    const cleanPath = actionUrl.startsWith('/') ? actionUrl : `/${actionUrl}`;
+    return `${cleanDomain}${cleanPath}`;
+  }
+
   async sendWarehouseNotification(
     mailData: MailData<
       import('./interfaces/logistics-mail-data.interface').WarehouseNotificationData
@@ -191,6 +204,7 @@ export class MailService {
         templatePath,
         context: {
           ...mailData.data,
+          actionUrl: this.formatActionUrl(mailData.data.actionUrl),
           app_name: this.configService.get('app.name', { infer: true }),
         },
       }),
@@ -227,6 +241,7 @@ export class MailService {
         templatePath,
         context: {
           ...mailData.data,
+          actionUrl: this.formatActionUrl(mailData.data.actionUrl),
           app_name: this.configService.get('app.name', { infer: true }),
         },
       }),
@@ -263,6 +278,7 @@ export class MailService {
         templatePath,
         context: {
           ...mailData.data,
+          actionUrl: this.formatActionUrl(mailData.data.actionUrl),
           app_name: this.configService.get('app.name', { infer: true }),
         },
       }),
@@ -297,6 +313,7 @@ export class MailService {
       templatePath,
       context: {
         ...mailData.data,
+        actionUrl: this.formatActionUrl(mailData.data.actionUrl),
         app_name: this.configService.get('app.name', { infer: true }),
       },
     });
@@ -326,6 +343,7 @@ export class MailService {
       templatePath,
       context: {
         ...mailData.data,
+        actionUrl: this.formatActionUrl(mailData.data.actionUrl),
         app_name: this.configService.get('app.name', { infer: true }),
       },
     });
@@ -360,6 +378,7 @@ export class MailService {
       templatePath,
       context: {
         ...mailData.data,
+        actionUrl: this.formatActionUrl(mailData.data.actionUrl),
         title: subject,
         app_name: this.configService.get('app.name', { infer: true }),
       },
@@ -392,10 +411,12 @@ export class MailService {
       templatePath,
       context: {
         ...mailData.data,
+        actionUrl: this.formatActionUrl(mailData.data.actionUrl),
         title: subject,
         app_name: this.configService.get('app.name', { infer: true }),
       },
     });
   }
 }
+
 

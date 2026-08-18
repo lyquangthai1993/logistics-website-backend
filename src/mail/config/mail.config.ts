@@ -48,6 +48,11 @@ class EnvironmentVariablesValidator {
   @Transform(({ value }) => value === 'true')
   @IsBoolean()
   MAIL_REQUIRE_TLS: boolean;
+
+  @Transform(({ value }) => value === 'true')
+  @IsBoolean()
+  @IsOptional()
+  MAIL_SIMULATE?: boolean;
 }
 
 export default registerAs<MailConfig>('mail', () => {
@@ -63,5 +68,6 @@ export default registerAs<MailConfig>('mail', () => {
     ignoreTLS: process.env.MAIL_IGNORE_TLS === 'true',
     secure: process.env.MAIL_SECURE === 'true',
     requireTLS: process.env.MAIL_REQUIRE_TLS === 'true',
+    simulate: process.env.MAIL_SIMULATE === 'true',
   };
 });

@@ -44,6 +44,15 @@ export class MailerService {
       })(context);
     }
 
+    // Check if simulation mode is enabled via MAIL_SIMULATE=true
+    const isSimulate = this.configService.get('mail.simulate', { infer: true });
+    if (isSimulate) {
+      this.logger.log(
+        `[MAIL SIMULATION ACTIVE] Email to "${mailOptions.to}" ("${mailOptions.subject}") rendered and simulated successfully without calling external SMTP.`,
+      );
+      return;
+    }
+
     try {
       await this.transporter.sendMail({
         ...mailOptions,
@@ -63,7 +72,7 @@ export class MailerService {
         err.stack,
       );
 
-      // In local development mode without active SMTP server (e.g. ENOTFOUND maildev),
+      // In local development mode without active SMTP server (e.g. ENOTFOUND maildev or rate limit exceeded),
       // simulate success and log warning so API does not crash with 500 error.
       const nodeEnv = this.configService.get('app.nodeEnv', { infer: true });
       if (nodeEnv === 'development' || !nodeEnv) {

@@ -4,6 +4,7 @@ import {
   Index,
   OneToMany,
   PrimaryGeneratedColumn,
+  type Relation,
 } from 'typeorm';
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 import { TripEntity } from '../../../../../trips/infrastructure/persistence/relational/entities/trip.entity';
@@ -56,6 +57,6 @@ export class OrderEntity extends AbstractBaseEntity {
   @Column({ type: 'text', nullable: true })
   notes: string | null;
 
-  @OneToMany(() => TripEntity, (trip) => trip.order)
-  trips: TripEntity[];
+  @OneToMany('TripEntity', (trip: TripEntity) => trip.order)
+  trips: Relation<TripEntity[]>;
 }

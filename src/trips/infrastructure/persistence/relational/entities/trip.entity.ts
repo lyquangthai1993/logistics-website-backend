@@ -5,6 +5,7 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
+  type Relation,
 } from 'typeorm';
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 import { OrderEntity } from '../../../../../orders/infrastructure/persistence/relational/entities/order.entity';
@@ -22,11 +23,11 @@ export class TripEntity extends AbstractBaseEntity {
   @Column({ type: Number, nullable: false })
   orderId: number;
 
-  @ManyToOne(() => OrderEntity, (order) => order.trips, {
+  @ManyToOne('OrderEntity', (order: OrderEntity) => order.trips, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'orderId' })
-  order: OrderEntity;
+  order: Relation<OrderEntity>;
 
   @Column({ type: Number, nullable: true })
   vehicleId: number | null;
@@ -36,7 +37,7 @@ export class TripEntity extends AbstractBaseEntity {
     onDelete: 'SET NULL',
   })
   @JoinColumn({ name: 'vehicleId' })
-  vehicle: VehicleEntity | null;
+  vehicle: Relation<VehicleEntity> | null;
 
   @Column({ type: Number, nullable: true })
   driverId: number | null;
@@ -46,7 +47,7 @@ export class TripEntity extends AbstractBaseEntity {
     onDelete: 'SET NULL',
   })
   @JoinColumn({ name: 'driverId' })
-  driver: DriverEntity | null;
+  driver: Relation<DriverEntity> | null;
 
   @Index()
   @Column({ type: String, nullable: false, default: 'PENDING' })

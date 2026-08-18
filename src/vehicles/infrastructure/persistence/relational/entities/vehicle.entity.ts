@@ -1,5 +1,14 @@
-import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  type Relation,
+} from 'typeorm';
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
+import { HubEntity } from '../../../../../hubs/infrastructure/persistence/relational/entities/hub.entity';
 
 @Entity({
   name: 'vehicle',
@@ -26,6 +35,17 @@ export class VehicleEntity extends AbstractBaseEntity {
 
   @Column({ type: String, nullable: true })
   currentHub: string | null;
+
+  @Index()
+  @Column({ type: Number, nullable: true })
+  hubId: number | null;
+
+  @ManyToOne(() => HubEntity, (hub) => hub.vehicles, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'hubId' })
+  hub: Relation<HubEntity> | null;
 
   @Column({ type: String, nullable: false, default: 'AVAILABLE' })
   status: string;

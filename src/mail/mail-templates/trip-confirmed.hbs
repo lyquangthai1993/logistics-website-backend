@@ -319,6 +319,12 @@
           <td class="label">Hub đích (Kho nhận):</td>
           <td class="value"><span style="color: #0284c7; font-weight: 700;">{{destinationHub}}</span></td>
         </tr>
+        {{#if totalQuantity}}
+        <tr>
+          <td class="label">Số lượng hàng / kiện:</td>
+          <td class="value"><strong>{{totalQuantity}} kiện</strong></td>
+        </tr>
+        {{/if}}
         <tr>
           <td class="label">Khối lượng / Thể tích:</td>
           <td class="value"><strong>{{weightAllocated}} kg</strong> / <strong>{{volumeAllocated}} m³</strong></td>

@@ -88,6 +88,7 @@ export interface TripConfirmedNotificationData {
   externalProvider?: string;
   driverName?: string;
   driverPhone?: string;
+  totalQuantity?: number | null;
   weightAllocated: number;
   volumeAllocated: number;
   pickupDate?: string;
@@ -97,6 +98,7 @@ export interface TripConfirmedNotificationData {
   orderNotes?: string;
   externalNote?: string;
   tripNotes?: string;
+  actionUrl?: string;
 }
 
 export interface OrderPendingFleetNotificationData {
@@ -105,6 +107,7 @@ export interface OrderPendingFleetNotificationData {
   route: string;                // e.g., "Andromeda → Centaurus"
   originHub?: string;           // e.g., "Andromeda (Hà Nội)"
   destinationHub?: string;      // e.g., "Centaurus (TP.HCM)"
+  totalQuantity?: number | null; // e.g., 50 (kiện)
   totalWeight: number;          // kg
   totalVolume: number;          // m³
   isExternalVehicleNeeded?: boolean;
@@ -120,6 +123,7 @@ export interface OrderNoVehicleNotificationData {
   route: string;                // e.g., "Andromeda → Centaurus"
   originHub?: string;           // e.g., "Andromeda (Hà Nội)"
   destinationHub?: string;      // e.g., "Centaurus (TP.HCM)"
+  totalQuantity?: number | null; // e.g., 50 (kiện)
   totalWeight: number;          // kg
   totalVolume: number;          // m³
   reason: string;               // Lý do hết xe từ Đội xe
@@ -127,4 +131,5 @@ export interface OrderNoVehicleNotificationData {
   notes?: string;               // Ghi chú đơn
   actionUrl?: string;           // Link tới /dashboard/orders/:id
 }
+
 
