@@ -6,6 +6,7 @@ import { MailData } from './interfaces/mail-data.interface';
 import { MaybeType } from '../utils/types/maybe.type';
 import { MailerService } from '../mailer/mailer.service';
 import path from 'path';
+import fs from 'fs';
 import { AllConfigType } from '../config/config.type';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -16,6 +17,38 @@ export class MailService {
     private readonly configService: ConfigService<AllConfigType>,
     private readonly notificationsService: NotificationsService,
   ) {}
+
+  /**
+   * Helper method to resolve email template path reliably across
+   * development (ts-node / src), compiled production (dist / node), and Docker environments.
+   */
+  private getTemplatePath(fileName: string): string {
+    const workingDir =
+      this.configService.get('app.workingDirectory', { infer: true }) ||
+      process.cwd();
+
+    const candidates = [
+      // 1. Next to current compiled/source directory (__dirname/mail-templates/...)
+      path.join(__dirname, 'mail-templates', fileName),
+      // 2. In dist relative to workingDirectory
+      path.join(workingDir, 'dist', 'mail', 'mail-templates', fileName),
+      // 3. In dist relative to process.cwd()
+      path.join(process.cwd(), 'dist', 'mail', 'mail-templates', fileName),
+      // 4. In src relative to workingDirectory
+      path.join(workingDir, 'src', 'mail', 'mail-templates', fileName),
+      // 5. In src relative to process.cwd()
+      path.join(process.cwd(), 'src', 'mail', 'mail-templates', fileName),
+    ];
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    // Default fallback to candidate 1 if not found on disk
+    return candidates[0];
+  }
 
   async userSignUp(mailData: MailData<{ hash: string }>): Promise<void> {
     const i18n = I18nContext.current();
@@ -44,15 +77,7 @@ export class MailService {
       to: mailData.to,
       subject: emailConfirmTitle,
       text: `${url.toString()} ${emailConfirmTitle}`,
-      templatePath: path.join(
-        this.configService.getOrThrow('app.workingDirectory', {
-          infer: true,
-        }),
-        'src',
-        'mail',
-        'mail-templates',
-        'activation.hbs',
-      ),
+      templatePath: this.getTemplatePath('activation.hbs'),
       context: {
         title: emailConfirmTitle,
         url: url.toString(),
@@ -97,15 +122,7 @@ export class MailService {
       to: mailData.to,
       subject: resetPasswordTitle,
       text: `${url.toString()} ${resetPasswordTitle}`,
-      templatePath: path.join(
-        this.configService.getOrThrow('app.workingDirectory', {
-          infer: true,
-        }),
-        'src',
-        'mail',
-        'mail-templates',
-        'reset-password.hbs',
-      ),
+      templatePath: this.getTemplatePath('reset-password.hbs'),
       context: {
         title: resetPasswordTitle,
         url: url.toString(),
@@ -148,15 +165,7 @@ export class MailService {
       to: mailData.to,
       subject: emailConfirmTitle,
       text: `${url.toString()} ${emailConfirmTitle}`,
-      templatePath: path.join(
-        this.configService.getOrThrow('app.workingDirectory', {
-          infer: true,
-        }),
-        'src',
-        'mail',
-        'mail-templates',
-        'confirm-new-email.hbs',
-      ),
+      templatePath: this.getTemplatePath('confirm-new-email.hbs'),
       context: {
         title: emailConfirmTitle,
         url: url.toString(),
@@ -187,13 +196,7 @@ export class MailService {
       import('./interfaces/logistics-mail-data.interface').WarehouseNotificationData
     > & { userId?: number },
   ): Promise<void> {
-    const templatePath = path.join(
-      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
-      'src',
-      'mail',
-      'mail-templates',
-      'warehouse-notification.hbs',
-    );
+    const templatePath = this.getTemplatePath('warehouse-notification.hbs');
 
     // Chạy song song: email + in-app notification (fire-and-forget, không transaction)
     await Promise.all([
@@ -224,13 +227,7 @@ export class MailService {
       import('./interfaces/logistics-mail-data.interface').FleetNotificationData
     > & { userId?: number },
   ): Promise<void> {
-    const templatePath = path.join(
-      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
-      'src',
-      'mail',
-      'mail-templates',
-      'fleet-notification.hbs',
-    );
+    const templatePath = this.getTemplatePath('fleet-notification.hbs');
 
     // Chạy song song: email + in-app notification (fire-and-forget, không transaction)
     await Promise.all([
@@ -261,13 +258,7 @@ export class MailService {
       import('./interfaces/logistics-mail-data.interface').DispatcherNotificationData
     > & { userId?: number },
   ): Promise<void> {
-    const templatePath = path.join(
-      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
-      'src',
-      'mail',
-      'mail-templates',
-      'dispatcher-notification.hbs',
-    );
+    const templatePath = this.getTemplatePath('dispatcher-notification.hbs');
 
     // Chạy song song: email + in-app notification (fire-and-forget, không transaction)
     await Promise.all([
@@ -298,13 +289,7 @@ export class MailService {
       import('./interfaces/logistics-mail-data.interface').GenericNotificationData
     >,
   ): Promise<void> {
-    const templatePath = path.join(
-      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
-      'src',
-      'mail',
-      'mail-templates',
-      'generic-notification.hbs',
-    );
+    const templatePath = this.getTemplatePath('generic-notification.hbs');
 
     await this.mailerService.sendMail({
       to: mailData.to,
@@ -324,13 +309,7 @@ export class MailService {
       import('./interfaces/logistics-mail-data.interface').TripConfirmedNotificationData
     >,
   ): Promise<void> {
-    const templatePath = path.join(
-      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
-      'src',
-      'mail',
-      'mail-templates',
-      'trip-confirmed.hbs',
-    );
+    const templatePath = this.getTemplatePath('trip-confirmed.hbs');
 
     const subject = mailData.data.isExternal
       ? `🚨 [XE THUÊ NGOÀI] Xác nhận chuyến xe cho đơn hàng ${mailData.data.orderCode}`
@@ -359,13 +338,7 @@ export class MailService {
       import('./interfaces/logistics-mail-data.interface').OrderPendingFleetNotificationData
     >,
   ): Promise<void> {
-    const templatePath = path.join(
-      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
-      'src',
-      'mail',
-      'mail-templates',
-      'order-pending-fleet.hbs',
-    );
+    const templatePath = this.getTemplatePath('order-pending-fleet.hbs');
 
     const subject = mailData.data.isExternalVehicleNeeded
       ? `🚨 [XE NGOÀI] Đơn hàng ${mailData.data.orderCode} cần phân công xe thuê ngoài`
@@ -394,13 +367,7 @@ export class MailService {
       import('./interfaces/logistics-mail-data.interface').OrderNoVehicleNotificationData
     >,
   ): Promise<void> {
-    const templatePath = path.join(
-      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
-      'src',
-      'mail',
-      'mail-templates',
-      'order-no-vehicle.hbs',
-    );
+    const templatePath = this.getTemplatePath('order-no-vehicle.hbs');
 
     const subject = `⚠️ [HẾT XE] Đơn hàng ${mailData.data.orderCode} - Đội xe báo không có xe nội bộ`;
 

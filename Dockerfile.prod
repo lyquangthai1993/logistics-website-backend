@@ -24,6 +24,9 @@ COPY --from=builder /app/dist ./dist
 # Copy i18n translation files
 COPY --from=builder /app/src/i18n ./src/i18n
 
+# Copy mail templates files
+COPY --from=builder /app/src/mail/mail-templates ./src/mail/mail-templates
+
 # Copy and prepare startup script
 COPY startup.prod.sh ./startup.prod.sh
 RUN chmod +x ./startup.prod.sh
