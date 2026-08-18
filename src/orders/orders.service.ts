@@ -109,7 +109,7 @@ export class OrdersService {
     if (query?.search && query.search.trim()) {
       const search = `%${query.search.trim()}%`;
       qb.andWhere(
-        '(order.orderCode ILIKE :search OR order.route ILIKE :search OR order.goodsDescription ILIKE :search)',
+        '(order.orderCode ILIKE :search OR order.route ILIKE :search OR order.originHub ILIKE :search OR order.destinationHub ILIKE :search OR order.goodsDescription ILIKE :search)',
         { search },
       );
     }
