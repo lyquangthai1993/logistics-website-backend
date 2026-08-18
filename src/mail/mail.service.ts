@@ -330,4 +330,72 @@ export class MailService {
       },
     });
   }
+
+  /**
+   * Gửi email thông báo cho Fleet Manager / Super Admin khi có đơn hàng mới
+   * chuyển sang trạng thái PENDING_FLEET (Dispatcher vừa submit).
+   * Chỉ gửi email — in-app notification được tạo riêng bởi OrdersService.
+   */
+  async sendOrderPendingFleetNotification(
+    mailData: MailData<
+      import('./interfaces/logistics-mail-data.interface').OrderPendingFleetNotificationData
+    >,
+  ): Promise<void> {
+    const templatePath = path.join(
+      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
+      'src',
+      'mail',
+      'mail-templates',
+      'order-pending-fleet.hbs',
+    );
+
+    const subject = mailData.data.isExternalVehicleNeeded
+      ? `🚨 [XE NGOÀI] Đơn hàng ${mailData.data.orderCode} cần phân công xe thuê ngoài`
+      : `📦 [Điều vận] Đơn hàng ${mailData.data.orderCode} cần phân công xe`;
+
+    await this.mailerService.sendMail({
+      to: mailData.to,
+      subject,
+      text: `${subject} - Tuyến: ${mailData.data.route} | KL: ${mailData.data.totalWeight} kg | ${mailData.data.totalVolume} m³`,
+      templatePath,
+      context: {
+        ...mailData.data,
+        title: subject,
+        app_name: this.configService.get('app.name', { infer: true }),
+      },
+    });
+  }
+
+  /**
+   * Gửi email thông báo cho Dispatcher & Super Admin khi Đội xe báo hết xe
+   * (order chuyển sang trạng thái NO_VEHICLE).
+   */
+  async sendOrderNoVehicleNotification(
+    mailData: MailData<
+      import('./interfaces/logistics-mail-data.interface').OrderNoVehicleNotificationData
+    >,
+  ): Promise<void> {
+    const templatePath = path.join(
+      this.configService.getOrThrow('app.workingDirectory', { infer: true }),
+      'src',
+      'mail',
+      'mail-templates',
+      'order-no-vehicle.hbs',
+    );
+
+    const subject = `⚠️ [HẾT XE] Đơn hàng ${mailData.data.orderCode} - Đội xe báo không có xe nội bộ`;
+
+    await this.mailerService.sendMail({
+      to: mailData.to,
+      subject,
+      text: `${subject} - Lý do: ${mailData.data.reason} | Tuyến: ${mailData.data.route}`,
+      templatePath,
+      context: {
+        ...mailData.data,
+        title: subject,
+        app_name: this.configService.get('app.name', { infer: true }),
+      },
+    });
+  }
 }
+

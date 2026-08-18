@@ -32,6 +32,15 @@ export class CreateOrderDto {
   @IsString()
   destinationHub?: string;
 
+  @ApiPropertyOptional({
+    example: 3000,
+    description: 'Tổng số lượng kiện/cái (không bắt buộc, để trống nếu là hàng xá/lô gom chung)',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  totalQuantity?: number | null;
+
   @ApiProperty({ example: 18500, description: 'Tổng khối lượng (kg)' })
   @IsNotEmpty()
   @IsNumber()

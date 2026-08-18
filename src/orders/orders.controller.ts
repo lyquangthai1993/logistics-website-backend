@@ -23,10 +23,11 @@ import { AuthGuard } from '@nestjs/passport';
 import { Roles } from '../roles/roles.decorator';
 import { RoleEnum } from '../roles/roles.enum';
 import { RolesGuard } from '../roles/roles.guard';
-import { OrdersService } from './orders.service';
+import { OrdersService, PaginatedResult, OrderStatsResult } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { QueryOrderDto } from './dto/query-order.dto';
+import { QueryOrderStatsDto } from './dto/query-order-stats.dto';
 import { OrderEntity } from './infrastructure/persistence/relational/entities/order.entity';
 
 @ApiBearerAuth()
@@ -54,12 +55,65 @@ export class OrdersController {
   }
 
   @ApiOkResponse({
-    type: [OrderEntity],
+    description: 'Danh sách đơn hàng có phân trang',
+    schema: {
+      properties: {
+        data: { type: 'array', items: { $ref: '#/components/schemas/OrderEntity' } },
+        meta: {
+          type: 'object',
+          properties: {
+            total: { type: 'number' },
+            page: { type: 'number' },
+            limit: { type: 'number' },
+            totalPages: { type: 'number' },
+          },
+        },
+      },
+    },
   })
   @Get()
   @HttpCode(HttpStatus.OK)
-  findAll(@Query() query: QueryOrderDto): Promise<OrderEntity[]> {
+  findAll(@Query() query: QueryOrderDto): Promise<PaginatedResult<OrderEntity>> {
     return this.ordersService.findAll(query);
+  }
+
+  @ApiOkResponse({
+    description: 'Thống kê đơn hàng theo khoảng thời gian (default: tháng hiện tại)',
+    schema: {
+      properties: {
+        total: { type: 'number' },
+        pending: { type: 'number' },
+        assigned: { type: 'number' },
+        inTransit: { type: 'number' },
+        delivered: { type: 'number' },
+        noVehicle: { type: 'number' },
+        cancelled: { type: 'number' },
+        fromDate: { type: 'string', example: '2026-08-01' },
+        toDate: { type: 'string', example: '2026-08-31' },
+      },
+    },
+  })
+  @Get('stats')
+  @HttpCode(HttpStatus.OK)
+  getStats(@Query() query: QueryOrderStatsDto): Promise<OrderStatsResult> {
+    return this.ordersService.getStats(query);
+  }
+
+  @ApiOkResponse({
+    description: 'Sinh mã đơn hàng tạm thời theo format [PREFIX][MMYY]-[Số]',
+    schema: {
+      properties: {
+        orderCode: { type: 'string', example: 'NDA0826-001' },
+      },
+    },
+  })
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.DISPATCHER)
+  @Get('generate-code')
+  @HttpCode(HttpStatus.OK)
+  generateCode(
+    @Query('prefix') prefix?: string,
+  ): Promise<{ orderCode: string }> {
+    return this.ordersService.generateOrderCode(prefix);
   }
 
   @ApiOkResponse({

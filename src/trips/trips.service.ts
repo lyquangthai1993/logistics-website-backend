@@ -10,9 +10,36 @@ import { CreateTripDto } from './dto/create-trip.dto';
 import { CreateSplitTripsDto } from './dto/create-split-trips.dto';
 import { UpdateTripDto } from './dto/update-trip.dto';
 import { QueryTripDto } from './dto/query-trip.dto';
+import { QueryTripStatsDto } from './dto/query-trip-stats.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { RoleEnum } from '../roles/roles.enum';
+
+export interface PaginatedResult<T> {
+  data: T[];
+  meta: {
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  };
+}
+
+export interface TripStatsResult {
+  tripsTotal: number;
+  tripsPending: number;
+  tripsConfirmed: number;
+  tripsInTransit: number;
+  tripsCompleted: number;
+  tripsCancelled: number;
+  ordersAwaitingFleet: number; // PENDING_FLEET (realtime — không filter ngày)
+  ordersNoVehicle: number;      // NO_VEHICLE (realtime)
+  fromDate: string;
+  toDate: string;
+}
+
+
+
 
 @Injectable()
 export class TripsService {
@@ -243,7 +270,11 @@ export class TripsService {
     }
   }
 
-  async findAll(query?: QueryTripDto): Promise<TripEntity[]> {
+  async findAll(query?: QueryTripDto): Promise<PaginatedResult<TripEntity>> {
+    const page = query?.page ?? 1;
+    const limit = query?.limit ?? 20;
+    const skip = (page - 1) * limit;
+
     const qb = this.tripRepository
       .createQueryBuilder('trip')
       .leftJoinAndSelect('trip.order', 'order')
@@ -267,7 +298,88 @@ export class TripsService {
       );
     }
 
-    return qb.getMany();
+    if (query?.search && query.search.trim()) {
+      const search = `%${query.search.trim()}%`;
+      qb.andWhere(
+        '(order.orderCode ILIKE :search OR vehicle.licensePlate ILIKE :search OR driver.fullName ILIKE :search OR trip.notes ILIKE :search)',
+        { search },
+      );
+    }
+
+    if (query?.fromDate) {
+      const from = new Date(`${query.fromDate}T00:00:00`);
+      qb.andWhere('trip.createdAt >= :fromDate', {
+        fromDate: from.toISOString(),
+      });
+    }
+
+    if (query?.toDate) {
+      const to = new Date(`${query.toDate}T23:59:59.999`);
+      qb.andWhere('trip.createdAt <= :toDate', {
+        toDate: to.toISOString(),
+      });
+    }
+
+    qb.skip(skip).take(limit);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+
+  async getStats(query?: QueryTripStatsDto): Promise<TripStatsResult> {
+    const now = new Date();
+    const defaultFrom = new Date(now.getFullYear(), now.getMonth(), 1);
+    const defaultTo = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+    const from = query?.fromDate ? new Date(`${query.fromDate}T00:00:00`) : defaultFrom;
+    const to = query?.toDate ? new Date(`${query.toDate}T23:59:59.999`) : defaultTo;
+
+    // Trips stats theo khoảng ngày (createdAt)
+    const tripRows: Array<{ status: string; count: string }> = await this.tripRepository.query(
+      `SELECT status, COUNT(*)::int AS count
+       FROM "trip"
+       WHERE "deletedAt" IS NULL
+         AND "createdAt" >= $1
+         AND "createdAt" <= $2
+       GROUP BY status`,
+      [from.toISOString(), to.toISOString()],
+    );
+
+    const tripMap: Record<string, number> = {};
+    let tripsTotal = 0;
+    for (const row of tripRows) {
+      tripMap[row.status] = Number(row.count);
+      tripsTotal += Number(row.count);
+    }
+
+    // Realtime: pending orders count (KHÔNG filter ngày — đây là trạng thái active hiện tại)
+    const [pendingFleetCount, noVehicleCount] = await Promise.all([
+      this.orderRepository.count({ where: { status: 'PENDING_FLEET' } }),
+      this.orderRepository.count({ where: { status: 'NO_VEHICLE' } }),
+    ]);
+
+    return {
+      tripsTotal,
+      tripsPending: tripMap['PENDING'] ?? 0,
+      tripsConfirmed: tripMap['CONFIRMED'] ?? 0,
+      tripsInTransit: tripMap['IN_TRANSIT'] ?? 0,
+      tripsCompleted: tripMap['COMPLETED'] ?? 0,
+      tripsCancelled: tripMap['CANCELLED'] ?? 0,
+      ordersAwaitingFleet: pendingFleetCount,
+      ordersNoVehicle: noVehicleCount,
+      fromDate: from.toISOString().split('T')[0],
+      toDate: to.toISOString().split('T')[0],
+    };
   }
 
   async findOne(id: number): Promise<TripEntity> {

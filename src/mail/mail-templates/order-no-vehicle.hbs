@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{title}}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f1f5f9;
+      margin: 0;
+      padding: 20px;
+      color: #1e293b;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      border: 1px solid #e2e8f0;
+    }
+    .header {
+      background: linear-gradient(135deg, #991b1b 0%, #dc2626 100%);
+      color: #ffffff;
+      padding: 24px;
+      text-align: left;
+    }
+    .header .brand {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: #fecaca;
+      margin-bottom: 6px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .badge-no-vehicle {
+      display: inline-block;
+      background-color: #fee2e2;
+      color: #991b1b;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 999px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 10px;
+      border: 1px solid #fca5a5;
+    }
+    .content {
+      padding: 24px;
+    }
+    .greeting {
+      font-size: 15px;
+      font-weight: 500;
+      margin-bottom: 16px;
+    }
+    .order-card {
+      background: linear-gradient(135deg, #fff1f2 0%, #fff5f5 100%);
+      border: 1px solid #fecdd3;
+      border-left: 5px solid #e11d48;
+      border-radius: 8px;
+      padding: 18px 20px;
+      margin-bottom: 20px;
+    }
+    .order-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #9f1239;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .order-code {
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-size: 22px;
+      font-weight: 800;
+      color: #881337;
+      letter-spacing: 1px;
+    }
+    .route-display {
+      font-size: 16px;
+      font-weight: 600;
+      color: #9f1239;
+      margin-top: 8px;
+    }
+    .reason-box {
+      background-color: #fef2f2;
+      border: 2px solid #fca5a5;
+      border-left: 6px solid #dc2626;
+      border-radius: 8px;
+      padding: 16px 20px;
+      font-size: 14px;
+      color: #991b1b;
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
+    .reason-title {
+      font-weight: 700;
+      font-size: 15px;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+    }
+    .data-table th, .data-table td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid #f1f5f9;
+      font-size: 14px;
+    }
+    .data-table th {
+      color: #64748b;
+      font-weight: 600;
+      width: 38%;
+      background-color: #fafafa;
+    }
+    .data-table td {
+      color: #0f172a;
+      font-weight: 500;
+    }
+    .metrics-grid {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+    }
+    .metrics-grid td {
+      width: 50%;
+      padding: 14px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      vertical-align: top;
+    }
+    .metric-label {
+      font-size: 12px;
+      color: #64748b;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .metric-val {
+      font-size: 18px;
+      font-weight: 700;
+      color: #dc2626;
+      margin-top: 4px;
+    }
+    .action-guide {
+      background-color: #fffbeb;
+      border: 1px solid #fde68a;
+      border-left: 5px solid #d97706;
+      border-radius: 8px;
+      padding: 16px 20px;
+      font-size: 14px;
+      color: #92400e;
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
+    .btn-container {
+      text-align: center;
+      margin: 24px 0 12px 0;
+    }
+    .btn {
+      display: inline-block;
+      background-color: #dc2626;
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 12px 28px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 14px;
+      box-shadow: 0 2px 4px rgba(220, 38, 38, 0.3);
+    }
+    .footer {
+      background-color: #f8fafc;
+      padding: 16px 24px;
+      text-align: center;
+      font-size: 12px;
+      color: #94a3b8;
+      border-top: 1px solid #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="brand">Spider Express · Điều Vận</div>
+      <h1>⚠️ ĐỘI XE BÁO HẾT XE KHẢ DỤNG</h1>
+      <span class="badge-no-vehicle">Trạng thái: Không có xe (NO_VEHICLE)</span>
+    </div>
+
+    <div class="content">
+      <p class="greeting">Xin chào {{#if recipientName}}{{recipientName}}{{else}}Điều Phối Viên{{/if}},</p>
+
+      <p style="font-size:14px; color:#475569; margin-bottom:20px;">
+        Quản lý Đội xe vừa báo cáo <strong>không có phương tiện nội bộ khả dụng</strong> để đáp ứng đơn hàng dưới đây. Đơn hàng đã được chuyển hoàn về cho Điều phối viên để sắp xếp phương án thuê xe ngoài (External Vehicle).
+      </p>
+
+      <div class="order-card">
+        <div class="order-label">Mã Lệnh Điều Vận</div>
+        <div class="order-code">{{orderCode}}</div>
+        <div class="route-display">🗺️ {{route}}</div>
+      </div>
+
+      <div class="reason-box">
+        <div class="reason-title">🚨 Lý do từ Đội xe:</div>
+        <div>{{reason}}</div>
+      </div>
+
+      <table class="data-table">
+        <tr>
+          <th>Kho xuất phát:</th>
+          <td><strong>{{originHub}}</strong></td>
+        </tr>
+        <tr>
+          <th>Kho đích:</th>
+          <td><strong>{{destinationHub}}</strong></td>
+        </tr>
+        {{#if goodsDescription}}
+        <tr>
+          <th>Mô tả hàng hóa:</th>
+          <td>{{goodsDescription}}</td>
+        </tr>
+        {{/if}}
+        <tr>
+          <th>Trạng thái đơn:</th>
+          <td><span style="font-weight:700; color:#dc2626;">❌ Không có xe nội bộ</span></td>
+        </tr>
+      </table>
+
+      <table class="metrics-grid">
+        <tr>
+          <td>
+            <div class="metric-label">Tổng Khối Lượng</div>
+            <div class="metric-val">{{totalWeight}} kg</div>
+          </td>
+          <td>
+            <div class="metric-label">Tổng Thể Tích</div>
+            <div class="metric-val">{{totalVolume}} m³</div>
+          </td>
+        </tr>
+      </table>
+
+      <div class="action-guide">
+        <strong>💡 Hướng dẫn xử lý tiếp theo:</strong><br>
+        1. Liên hệ các đối tác vận tải / nhà xe ngoài để thỏa thuận xe và chi phí.<br>
+        2. Nhấn vào nút bên dưới để chuyển đơn sang chế độ <strong>Thuê xe ngoài</strong>, nhập thông tin nhà xe và gửi lại Đội xe xử lý.
+      </div>
+
+      {{#if actionUrl}}
+      <div class="btn-container">
+        <a href="{{actionUrl}}" target="_blank" class="btn">Xử Lý Thuê Xe Ngoài →</a>
+      </div>
+      {{/if}}
+    </div>
+
+    <div class="footer">
+      Spider Express Logistics TMS &bull; Hệ thống điều vận nội bộ<br>
+      Trụ sở chính: TP. Huế | Hotline hỗ trợ: 1900-SPIDER
+    </div>
+  </div>
+</body>
+</html>

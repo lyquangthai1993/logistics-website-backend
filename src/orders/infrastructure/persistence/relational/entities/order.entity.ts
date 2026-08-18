@@ -32,6 +32,9 @@ export class OrderEntity extends AbstractBaseEntity {
   @Column({ type: String, nullable: true })
   destinationHub: string | null;
 
+  @Column({ type: 'int', nullable: true })
+  totalQuantity: number | null;
+
   @Column({ type: 'float', nullable: false, default: 0 })
   totalWeight: number;
 

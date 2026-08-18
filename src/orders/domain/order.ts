@@ -5,6 +5,7 @@ export class Order {
   route?: string | null;
   originHub?: string | null;
   destinationHub?: string | null;
+  totalQuantity?: number | null;
   totalWeight: number;
   totalVolume: number;
   goodsDescription?: string | null;

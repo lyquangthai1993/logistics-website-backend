@@ -98,3 +98,33 @@ export interface TripConfirmedNotificationData {
   externalNote?: string;
   tripNotes?: string;
 }
+
+export interface OrderPendingFleetNotificationData {
+  recipientName?: string;
+  orderCode: string;            // e.g., "NDA2608-0126"
+  route: string;                // e.g., "Andromeda → Centaurus"
+  originHub?: string;           // e.g., "Andromeda (Hà Nội)"
+  destinationHub?: string;      // e.g., "Centaurus (TP.HCM)"
+  totalWeight: number;          // kg
+  totalVolume: number;          // m³
+  isExternalVehicleNeeded?: boolean;
+  externalNote?: string;
+  goodsDescription?: string;
+  notes?: string;               // Dispatcher notes
+  actionUrl?: string;           // Link tới /dashboard/trips
+}
+
+export interface OrderNoVehicleNotificationData {
+  recipientName?: string;
+  orderCode: string;            // e.g., "NDA2608-0126"
+  route: string;                // e.g., "Andromeda → Centaurus"
+  originHub?: string;           // e.g., "Andromeda (Hà Nội)"
+  destinationHub?: string;      // e.g., "Centaurus (TP.HCM)"
+  totalWeight: number;          // kg
+  totalVolume: number;          // m³
+  reason: string;               // Lý do hết xe từ Đội xe
+  goodsDescription?: string;
+  notes?: string;               // Ghi chú đơn
+  actionUrl?: string;           // Link tới /dashboard/orders/:id
+}
+
