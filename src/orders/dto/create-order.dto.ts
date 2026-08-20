@@ -1,9 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
+  IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsPositive,
   IsString,
   Min,
 } from 'class-validator';
@@ -27,10 +29,28 @@ export class CreateOrderDto {
   @IsString()
   originHub?: string;
 
+  @ApiPropertyOptional({
+    example: 1,
+    description: 'ID của Hub nguồn (ưu tiên hơn originHub string — dùng từ Phase 1)',
+  })
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  originHubId?: number;
+
   @ApiPropertyOptional({ example: 'Centaurus Hub (TP.HCM)' })
   @IsOptional()
   @IsString()
   destinationHub?: string;
+
+  @ApiPropertyOptional({
+    example: 2,
+    description: 'ID của Hub đích (ưu tiên hơn destinationHub string — dùng từ Phase 1)',
+  })
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  destinationHubId?: number;
 
   @ApiPropertyOptional({
     example: 3000,

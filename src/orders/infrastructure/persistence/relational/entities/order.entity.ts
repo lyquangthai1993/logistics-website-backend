@@ -2,12 +2,15 @@ import {
   Column,
   Entity,
   Index,
+  JoinColumn,
+  ManyToOne,
   OneToMany,
   PrimaryGeneratedColumn,
   type Relation,
 } from 'typeorm';
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 import { TripEntity } from '../../../../../trips/infrastructure/persistence/relational/entities/trip.entity';
+import { HubEntity } from '../../../../../hubs/infrastructure/persistence/relational/entities/hub.entity';
 
 @Entity({
   name: 'order',
@@ -56,6 +59,22 @@ export class OrderEntity extends AbstractBaseEntity {
 
   @Column({ type: 'text', nullable: true })
   notes: string | null;
+
+  // ── Hub FK (Phase 1: nullable, backward-compat with VARCHAR originHub/destinationHub) ──
+
+  @Column({ type: 'int', nullable: true })
+  originHubId: number | null;
+
+  @ManyToOne(() => HubEntity, { nullable: true, eager: false, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'originHubId' })
+  originHubEntity: Relation<HubEntity> | null;
+
+  @Column({ type: 'int', nullable: true })
+  destinationHubId: number | null;
+
+  @ManyToOne(() => HubEntity, { nullable: true, eager: false, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'destinationHubId' })
+  destinationHubEntity: Relation<HubEntity> | null;
 
   @OneToMany('TripEntity', (trip: TripEntity) => trip.order)
   trips: Relation<TripEntity[]>;
