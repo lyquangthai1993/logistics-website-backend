@@ -3,6 +3,8 @@ import {
   Injectable,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { CreateUserDto } from './dto/create-user.dto';
 import { NullableType } from '../utils/types/nullable.type';
 import { FilterUserDto, SortUserDto } from './dto/query-user.dto';
@@ -18,12 +20,15 @@ import { FileType } from '../files/domain/file';
 import { Role } from '../roles/domain/role';
 import { Status } from '../statuses/domain/status';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
 
 @Injectable()
 export class UsersService {
   constructor(
     private readonly usersRepository: UserRepository,
     private readonly filesService: FilesService,
+    @InjectRepository(HubEntity)
+    private readonly hubRepository: Repository<HubEntity>,
   ) {}
 
   async create(createUserDto: CreateUserDto): Promise<User> {
@@ -130,6 +135,25 @@ export class UsersService {
       };
     }
 
+    let hub: { id: number } | null | undefined = undefined;
+
+    if (createUserDto.hub?.id) {
+      const hubObject = await this.hubRepository.findOne({
+        where: { id: createUserDto.hub.id },
+      });
+      if (!hubObject) {
+        throw new UnprocessableEntityException({
+          status: HttpStatus.UNPROCESSABLE_ENTITY,
+          errors: {
+            hub: 'hubNotExists',
+          },
+        });
+      }
+      hub = { id: createUserDto.hub.id };
+    } else if (createUserDto.hub === null) {
+      hub = null;
+    }
+
     return this.usersRepository.create({
       // Do not remove comment below.
       // <creating-property-payload />
@@ -141,6 +165,7 @@ export class UsersService {
       photo: photo,
       role: role,
       status: status,
+      hub: hub,
       provider: createUserDto.provider ?? AuthProvidersEnum.email,
       socialId: createUserDto.socialId,
     });
@@ -314,6 +339,25 @@ export class UsersService {
       };
     }
 
+    let hub: { id: number } | null | undefined = undefined;
+
+    if (updateUserDto.hub?.id) {
+      const hubObject = await this.hubRepository.findOne({
+        where: { id: updateUserDto.hub.id },
+      });
+      if (!hubObject) {
+        throw new UnprocessableEntityException({
+          status: HttpStatus.UNPROCESSABLE_ENTITY,
+          errors: {
+            hub: 'hubNotExists',
+          },
+        });
+      }
+      hub = { id: updateUserDto.hub.id };
+    } else if (updateUserDto.hub === null) {
+      hub = null;
+    }
+
     return this.usersRepository.update(id, {
       // Do not remove comment below.
       // <updating-property-payload />
@@ -325,6 +369,7 @@ export class UsersService {
       photo,
       role,
       status,
+      hub,
       provider: updateUserDto.provider,
       socialId: updateUserDto.socialId,
     });
