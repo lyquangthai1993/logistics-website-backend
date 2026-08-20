@@ -21,4 +21,5 @@ export interface ApiErrorResponse {
   errors?: Record<string, string | string[]> | string[] | null;
   timestamp: string;
   path: string;
+  stack?: string;
 }

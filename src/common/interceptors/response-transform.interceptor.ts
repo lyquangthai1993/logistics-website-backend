@@ -77,6 +77,30 @@ export class ResponseTransformInterceptor<T>
           };
         }
 
+        // Handle custom paginated object with top-level total: { data: [...], total, page, limit }
+        if (
+          resData &&
+          typeof resData === 'object' &&
+          'data' in resData &&
+          Array.isArray(resData.data) &&
+          ('total' in resData || 'totalPages' in resData)
+        ) {
+          const { data: items, total, page, limit, totalPages, ...rest } = resData as any;
+          return {
+            statusCode,
+            message: 'Success',
+            data: items,
+            meta: {
+              total,
+              page,
+              limit,
+              totalPages,
+              ...rest,
+            },
+            timestamp,
+          };
+        }
+
         // Handle empty or primitive responses
         if (resData === undefined || resData === null) {
           return {

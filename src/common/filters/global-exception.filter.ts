@@ -21,6 +21,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Lỗi máy chủ nội bộ (Internal server error)';
     let errors: Record<string, any> | string[] | null = null;
+    let stack: string | undefined = undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -47,15 +48,31 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           message = exception.message || 'HTTP Error';
         }
       }
+
+      // Log server errors (5xx) with stack trace
+      if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+        stack = exception.stack;
+        this.logger.error(
+          `[${request?.method}] ${request?.url} - Status ${status}: ${message}`,
+          exception.stack,
+        );
+      }
     } else if (exception instanceof Error) {
+      stack = exception.stack;
       this.logger.error(
-        `Unhandled Exception on ${request?.method} ${request?.url}: ${exception.message}`,
+        `[${request?.method}] ${request?.url} - Unhandled Exception: ${exception.message}`,
         exception.stack,
       );
       if (process.env.NODE_ENV !== 'production') {
         message = exception.message || 'Internal server error';
       }
+    } else {
+      this.logger.error(
+        `[${request?.method}] ${request?.url} - Unknown Exception: ${JSON.stringify(exception)}`,
+      );
     }
+
+    const isDev = process.env.NODE_ENV !== 'production';
 
     const errorResponse: ApiErrorResponse = {
       statusCode: status,
@@ -63,6 +80,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       errors,
       timestamp: new Date().toISOString(),
       path: request?.url || '',
+      ...(isDev && stack ? { stack } : {}),
     };
 
     response.status(status).json(errorResponse);

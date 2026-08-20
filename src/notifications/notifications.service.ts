@@ -65,10 +65,12 @@ export class NotificationsService {
     query: QueryNotificationDto = {},
   ): Promise<{
     data: Notification[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
+    meta: {
+      total: number;
+      page: number;
+      limit: number;
+      totalPages: number;
+    };
   }> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -102,10 +104,12 @@ export class NotificationsService {
 
     return {
       data: data as unknown as Notification[],
-      total,
-      page,
-      limit,
-      totalPages,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages,
+      },
     };
   }
 
