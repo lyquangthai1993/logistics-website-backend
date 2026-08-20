@@ -10,6 +10,7 @@ import {
 import { RoleEntity } from '../../../../../roles/infrastructure/persistence/relational/entities/role.entity';
 import { StatusEntity } from '../../../../../statuses/infrastructure/persistence/relational/entities/status.entity';
 import { FileEntity } from '../../../../../files/infrastructure/persistence/relational/entities/file.entity';
+import { HubEntity } from '../../../../../hubs/infrastructure/persistence/relational/entities/hub.entity';
 
 import { AuthProvidersEnum } from '../../../../../auth/auth-providers.enum';
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
@@ -63,4 +64,14 @@ export class UserEntity extends AbstractBaseEntity {
     eager: true,
   })
   status?: StatusEntity;
+
+  @Column({ type: Number, nullable: true })
+  hubId?: number | null;
+
+  @ManyToOne(() => HubEntity, {
+    eager: true,
+    nullable: true,
+  })
+  @JoinColumn({ name: 'hubId' })
+  hub?: HubEntity | null;
 }
