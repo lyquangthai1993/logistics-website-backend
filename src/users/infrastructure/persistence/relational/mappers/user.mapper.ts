@@ -2,6 +2,7 @@ import { FileEntity } from '../../../../../files/infrastructure/persistence/rela
 import { FileMapper } from '../../../../../files/infrastructure/persistence/relational/mappers/file.mapper';
 import { RoleEntity } from '../../../../../roles/infrastructure/persistence/relational/entities/role.entity';
 import { StatusEntity } from '../../../../../statuses/infrastructure/persistence/relational/entities/status.entity';
+import { HubEntity } from '../../../../../hubs/infrastructure/persistence/relational/entities/hub.entity';
 import { User } from '../../../../domain/user';
 import { UserEntity } from '../entities/user.entity';
 
@@ -21,6 +22,16 @@ export class UserMapper {
     }
     domainEntity.role = raw.role;
     domainEntity.status = raw.status;
+    if (raw.hub) {
+      domainEntity.hub = {
+        id: raw.hub.id,
+        code: raw.hub.code,
+        name: raw.hub.name,
+        city: raw.hub.city,
+      };
+    } else {
+      domainEntity.hub = raw.hub ?? null;
+    }
     domainEntity.createdAt = raw.createdAt;
     domainEntity.updatedAt = raw.updatedAt;
     domainEntity.deletedAt = raw.deletedAt;
@@ -52,6 +63,15 @@ export class UserMapper {
       status.id = Number(domainEntity.status.id);
     }
 
+    let hub: HubEntity | undefined | null = undefined;
+
+    if (domainEntity.hub) {
+      hub = new HubEntity();
+      hub.id = Number(domainEntity.hub.id);
+    } else if (domainEntity.hub === null) {
+      hub = null;
+    }
+
     const persistenceEntity = new UserEntity();
     if (domainEntity.id && typeof domainEntity.id === 'number') {
       persistenceEntity.id = domainEntity.id;
@@ -66,6 +86,7 @@ export class UserMapper {
     persistenceEntity.photo = photo;
     persistenceEntity.role = role;
     persistenceEntity.status = status;
+    persistenceEntity.hub = hub;
     persistenceEntity.createdAt = domainEntity.createdAt;
     persistenceEntity.updatedAt = domainEntity.updatedAt;
     persistenceEntity.deletedAt = domainEntity.deletedAt;

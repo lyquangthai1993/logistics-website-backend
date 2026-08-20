@@ -2,6 +2,7 @@ import {
   // common
   Module,
 } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { UsersController } from './users.controller';
 
@@ -11,6 +12,7 @@ import { RelationalUserPersistenceModule } from './infrastructure/persistence/re
 import { DatabaseConfig } from '../database/config/database-config.type';
 import databaseConfig from '../database/config/database.config';
 import { FilesModule } from '../files/files.module';
+import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
 
 // <database-block>
 const infrastructurePersistenceModule = (databaseConfig() as DatabaseConfig)
@@ -24,6 +26,7 @@ const infrastructurePersistenceModule = (databaseConfig() as DatabaseConfig)
     // import modules, etc.
     infrastructurePersistenceModule,
     FilesModule,
+    TypeOrmModule.forFeature([HubEntity]),
   ],
   controllers: [UsersController],
   providers: [UsersService],
