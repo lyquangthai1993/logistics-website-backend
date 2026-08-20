@@ -51,6 +51,16 @@ export class MailerService {
     templatePath?: string;
     context?: Record<string, unknown>;
   }): Promise<void> {
+    const startTime = Date.now();
+    const recipientStr = Array.isArray(mailOptions.to)
+      ? mailOptions.to.join(', ')
+      : String(mailOptions.to ?? 'unknown');
+    const subject = mailOptions.subject || '(no subject)';
+
+    this.logger.log(
+      `📧 [Mailer] START sendMail request → To: "${recipientStr}" | Subject: "${subject}"${templatePath ? ` | Template: ${templatePath.split(/[/\\]/).pop()}` : ''}`,
+    );
+
     let html: string | undefined;
     if (templatePath) {
       const template = await fs.readFile(templatePath, 'utf-8');
@@ -62,8 +72,9 @@ export class MailerService {
     // Check if simulation mode is enabled via MAIL_SIMULATE=true
     const isSimulate = this.configService.get('mail.simulate', { infer: true });
     if (isSimulate) {
+      const elapsed = Date.now() - startTime;
       this.logger.log(
-        `[MAIL SIMULATION ACTIVE] Email to "${mailOptions.to}" ("${mailOptions.subject}") rendered and simulated successfully without calling external provider.`,
+        `🧪 [Mailer] [SIMULATION ACTIVE] Rendered template in ${elapsed}ms for "${recipientStr}" ("${subject}"). Skipping external API call.`,
       );
       return;
     }
@@ -78,30 +89,33 @@ export class MailerService {
       ? (mailOptions.from as string)
       : `"${defaultName}" <${defaultEmail}>`;
     const finalHtml = (mailOptions.html as string) || html || '';
-    const subject = mailOptions.subject || '';
 
     // 1. Gửi qua Resend API nếu có cấu hình RESEND_API_KEY
     if (this.resendClient) {
+      const to = Array.isArray(mailOptions.to)
+        ? (mailOptions.to as string[])
+        : typeof mailOptions.to === 'string'
+          ? [mailOptions.to]
+          : mailOptions.to
+            ? [String(mailOptions.to)]
+            : [];
+
+      // ------------------------------------------------------------------------------------------------
+      // TẠM THỜI: Hardcode 'onboarding@resend.dev' để gửi test qua Resend khi chưa verify custom domain.
+      //
+      // TODO: Khi đã verify domain riêng (ví dụ: spiderexpress.vn) trên dashboard https://resend.com/domains:
+      //       Thay thế dòng này bằng biến cấu hình thực sự từ environment:
+      //       const resendFrom = mailOptions.from
+      //         ? (mailOptions.from as string)
+      //         : `"${defaultName}" <${defaultEmail}>`; // e.g. "Spider Express Logistics" <no-reply@spiderexpress.vn>
+      // ------------------------------------------------------------------------------------------------
+      const resendFrom = 'onboarding@resend.dev';
+
+      this.logger.log(
+        `🚀 [Mailer] [Resend API] Dispatching email via HTTPS port 443 → From: "${resendFrom}" | To: [${to.join(', ')}] | Subject: "${subject}" | ContentSize: ${finalHtml.length} bytes`,
+      );
+
       try {
-        const to = Array.isArray(mailOptions.to)
-          ? (mailOptions.to as string[])
-          : typeof mailOptions.to === 'string'
-            ? [mailOptions.to]
-            : mailOptions.to
-              ? [String(mailOptions.to)]
-              : [];
-
-        // ------------------------------------------------------------------------------------------------
-        // TẠM THỜI: Hardcode 'onboarding@resend.dev' để gửi test qua Resend khi chưa verify custom domain.
-        //
-        // TODO: Khi đã verify domain riêng (ví dụ: spiderexpress.vn) trên dashboard https://resend.com/domains:
-        //       Thay thế dòng này bằng biến cấu hình thực sự từ environment:
-        //       const resendFrom = mailOptions.from
-        //         ? (mailOptions.from as string)
-        //         : `"${defaultName}" <${defaultEmail}>`; // e.g. "Spider Express Logistics" <no-reply@spiderexpress.vn>
-        // ------------------------------------------------------------------------------------------------
-        const resendFrom = 'onboarding@resend.dev';
-
         const { data, error } = await this.resendClient.emails.send({
           from: resendFrom,
           to,
@@ -110,42 +124,56 @@ export class MailerService {
           text: (mailOptions.text as string) || undefined,
         });
 
+        const elapsed = Date.now() - startTime;
+
         if (error) {
           throw new Error(`Resend API Error: ${error.name} - ${error.message}`);
         }
 
         this.logger.log(
-          `[Resend] Email sent successfully to ${to.join(', ')} from ${resendFrom} (id: ${data?.id})`,
+          `✅ [Mailer] [Resend API] SUCCESS in ${elapsed}ms | MessageId: "${data?.id}" | To: [${to.join(', ')}] | From: "${resendFrom}"`,
         );
         return;
       } catch (error) {
+        const elapsed = Date.now() - startTime;
         const err = error as Error;
         this.logger.error(
-          `Failed to send email via Resend to ${mailOptions.to}: ${err.message}`,
+          `❌ [Mailer] [Resend API] FAILED in ${elapsed}ms to ${recipientStr}: ${err.message}`,
           err.stack,
         );
-        this.handleFallbackOrThrow(error, mailOptions.to);
+        this.handleFallbackOrThrow(error, recipientStr);
         return;
       }
     }
 
     // 2. Fallback gửi qua Nodemailer SMTP nếu có cấu hình SMTP Host
     if (this.transporter) {
+      const mailHost = this.configService.get('mail.host', { infer: true });
+      const mailPort = this.configService.get('mail.port', { infer: true });
+
+      this.logger.log(
+        `🚀 [Mailer] [SMTP] Dispatching email via SMTP (${mailHost}:${mailPort}) → From: "${from}" | To: "${recipientStr}" | Subject: "${subject}"`,
+      );
+
       try {
         await this.transporter.sendMail({
           ...mailOptions,
           from,
           html: finalHtml,
         });
-        this.logger.log(`[SMTP] Email sent successfully to ${mailOptions.to}`);
+        const elapsed = Date.now() - startTime;
+        this.logger.log(
+          `✅ [Mailer] [SMTP] SUCCESS in ${elapsed}ms | Delivered to "${recipientStr}"`,
+        );
         return;
       } catch (error) {
+        const elapsed = Date.now() - startTime;
         const err = error as Error;
         this.logger.error(
-          `Failed to send email via SMTP to ${mailOptions.to}: ${err.message}`,
+          `❌ [Mailer] [SMTP] FAILED in ${elapsed}ms to ${recipientStr}: ${err.message}`,
           err.stack,
         );
-        this.handleFallbackOrThrow(error, mailOptions.to);
+        this.handleFallbackOrThrow(error, recipientStr);
         return;
       }
     }
@@ -153,8 +181,9 @@ export class MailerService {
     // 3. Nếu không có Resend và không có SMTP Host
     const nodeEnv = this.configService.get('app.nodeEnv', { infer: true });
     if (nodeEnv === 'development' || !nodeEnv) {
+      const elapsed = Date.now() - startTime;
       this.logger.warn(
-        `[DEV SIMULATION] No email provider configured (missing RESEND_API_KEY or MAIL_HOST). Email to ${mailOptions.to} was rendered and processed locally.`,
+        `⚠️ [Mailer] [DEV SIMULATION] No active provider configured (missing RESEND_API_KEY or MAIL_HOST). Processed in ${elapsed}ms for "${recipientStr}".`,
       );
       return;
     }
@@ -168,10 +197,11 @@ export class MailerService {
     const nodeEnv = this.configService.get('app.nodeEnv', { infer: true });
     if (nodeEnv === 'development' || !nodeEnv) {
       this.logger.warn(
-        `[DEV SIMULATION] Email to ${recipient} delivery failed, but proceeding in development mode. Configure RESEND_API_KEY or MAIL_HOST in .env.`,
+        `⚠️ [Mailer] [DEV SIMULATION] Email delivery failed for "${recipient}", proceeding gracefully without throwing in development mode. Check RESEND_API_KEY or domain settings.`,
       );
       return;
     }
     throw error;
   }
 }
+
