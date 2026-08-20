@@ -119,25 +119,29 @@
       width: 100%;
       border-collapse: collapse;
       margin-bottom: 20px;
+      table-layout: fixed;
     }
     .metrics-grid td {
-      width: 50%;
-      padding: 14px;
+      padding: 12px 14px;
       background: #f8fafc;
       border: 1px solid #e2e8f0;
       vertical-align: top;
+      box-sizing: border-box;
     }
     .metric-label {
-      font-size: 12px;
+      font-size: 11px;
       color: #64748b;
       text-transform: uppercase;
-      font-weight: 600;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
     }
     .metric-val {
-      font-size: 18px;
-      font-weight: 700;
+      font-size: 16px;
+      font-weight: 800;
       color: #059669;
       margin-top: 4px;
+      white-space: nowrap;
     }
     .alert-external {
       background-color: #fff1f2;
@@ -249,22 +253,31 @@
         </tr>
       </table>
 
-      <table class="metrics-grid">
+      <table class="metrics-grid" width="100%" cellpadding="0" cellspacing="0" style="table-layout: fixed; width: 100%; border-collapse: collapse; margin-bottom: 20px;">
         <tr>
           {{#if totalQuantity}}
-          <td>
-            <div class="metric-label">Số Lượng Kiện/Hàng</div>
-            <div class="metric-val">{{totalQuantity}} kiện</div>
+          <td style="width: 33.33%; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; vertical-align: top;">
+            <div class="metric-label" style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;">Số Lượng Kiện/Hàng</div>
+            <div class="metric-val" style="font-size: 16px; font-weight: 800; color: #059669; margin-top: 4px; white-space: nowrap;">{{totalQuantity}} kiện</div>
+          </td>
+          <td style="width: 33.33%; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; vertical-align: top;">
+            <div class="metric-label" style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;">Tổng Khối Lượng</div>
+            <div class="metric-val" style="font-size: 16px; font-weight: 800; color: #059669; margin-top: 4px; white-space: nowrap;">{{totalWeight}} kg</div>
+          </td>
+          <td style="width: 33.33%; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; vertical-align: top;">
+            <div class="metric-label" style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;">Tổng Thể Tích</div>
+            <div class="metric-val" style="font-size: 16px; font-weight: 800; color: #059669; margin-top: 4px; white-space: nowrap;">{{totalVolume}} m³</div>
+          </td>
+          {{else}}
+          <td style="width: 50%; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; vertical-align: top;">
+            <div class="metric-label" style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;">Tổng Khối Lượng</div>
+            <div class="metric-val" style="font-size: 16px; font-weight: 800; color: #059669; margin-top: 4px; white-space: nowrap;">{{totalWeight}} kg</div>
+          </td>
+          <td style="width: 50%; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; vertical-align: top;">
+            <div class="metric-label" style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;">Tổng Thể Tích</div>
+            <div class="metric-val" style="font-size: 16px; font-weight: 800; color: #059669; margin-top: 4px; white-space: nowrap;">{{totalVolume}} m³</div>
           </td>
           {{/if}}
-          <td>
-            <div class="metric-label">Tổng Khối Lượng</div>
-            <div class="metric-val">{{totalWeight}} kg</div>
-          </td>
-          <td>
-            <div class="metric-label">Tổng Thể Tích</div>
-            <div class="metric-val">{{totalVolume}} m³</div>
-          </td>
         </tr>
       </table>
 

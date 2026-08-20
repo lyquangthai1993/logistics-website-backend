@@ -135,34 +135,37 @@
       width: 100%;
       border-collapse: collapse;
       margin-bottom: 20px;
+      table-layout: fixed;
     }
     .metrics-grid td {
-      width: 50%;
-      padding: 14px;
+      padding: 12px 14px;
       background: #f8fafc;
       border: 1px solid #e2e8f0;
       vertical-align: top;
+      box-sizing: border-box;
     }
     .metric-label {
-      font-size: 12px;
+      font-size: 11px;
       color: #64748b;
       text-transform: uppercase;
-      font-weight: 600;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
     }
     .metric-val {
-      font-size: 18px;
-      font-weight: 700;
+      font-size: 16px;
+      font-weight: 800;
       color: #dc2626;
       margin-top: 4px;
+      white-space: nowrap;
     }
     .action-guide {
-      background-color: #fffbeb;
-      border: 1px solid #fde68a;
-      border-left: 5px solid #d97706;
+      background-color: #eff6ff;
+      border: 1px solid #bfdbfe;
       border-radius: 8px;
       padding: 16px 20px;
       font-size: 14px;
-      color: #92400e;
+      color: #1e40af;
       margin-bottom: 20px;
       line-height: 1.6;
     }
@@ -195,15 +198,14 @@
   <div class="container">
     <div class="header">
       <div class="brand">Spider Express · Điều Vận</div>
-      <h1>⚠️ ĐỘI XE BÁO HẾT XE KHẢ DỤNG</h1>
-      <span class="badge-no-vehicle">Trạng thái: Không có xe (NO_VEHICLE)</span>
+      <h1>⚠️ ĐƠN HÀNG KHÔNG CÓ XE NỘI BỘ</h1>
     </div>
 
     <div class="content">
-      <p class="greeting">Xin chào {{#if recipientName}}{{recipientName}}{{else}}Điều Phối Viên{{/if}},</p>
+      <p class="greeting">Xin chào {{#if recipientName}}{{recipientName}}{{else}}Người Điều Phối (Dispatcher){{/if}},</p>
 
       <p style="font-size:14px; color:#475569; margin-bottom:20px;">
-        Quản lý Đội xe vừa báo cáo <strong>không có phương tiện nội bộ khả dụng</strong> để đáp ứng đơn hàng dưới đây. Đơn hàng đã được chuyển hoàn về cho Điều phối viên để sắp xếp phương án thuê xe ngoài (External Vehicle).
+        Đội xe vừa cập nhật trạng thái đơn hàng: <strong>Không có xe nội bộ phù hợp</strong> để đáp ứng yêu cầu vận chuyển của đơn hàng này.
       </p>
 
       <div class="order-card">
@@ -238,22 +240,31 @@
         </tr>
       </table>
 
-      <table class="metrics-grid">
+      <table class="metrics-grid" width="100%" cellpadding="0" cellspacing="0" style="table-layout: fixed; width: 100%; border-collapse: collapse; margin-bottom: 20px;">
         <tr>
           {{#if totalQuantity}}
-          <td>
-            <div class="metric-label">Số Lượng Kiện/Hàng</div>
-            <div class="metric-val">{{totalQuantity}} kiện</div>
+          <td style="width: 33.33%; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; vertical-align: top;">
+            <div class="metric-label" style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;">Số Lượng Kiện/Hàng</div>
+            <div class="metric-val" style="font-size: 16px; font-weight: 800; color: #dc2626; margin-top: 4px; white-space: nowrap;">{{totalQuantity}} kiện</div>
+          </td>
+          <td style="width: 33.33%; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; vertical-align: top;">
+            <div class="metric-label" style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;">Tổng Khối Lượng</div>
+            <div class="metric-val" style="font-size: 16px; font-weight: 800; color: #dc2626; margin-top: 4px; white-space: nowrap;">{{totalWeight}} kg</div>
+          </td>
+          <td style="width: 33.33%; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; vertical-align: top;">
+            <div class="metric-label" style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;">Tổng Thể Tích</div>
+            <div class="metric-val" style="font-size: 16px; font-weight: 800; color: #dc2626; margin-top: 4px; white-space: nowrap;">{{totalVolume}} m³</div>
+          </td>
+          {{else}}
+          <td style="width: 50%; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; vertical-align: top;">
+            <div class="metric-label" style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;">Tổng Khối Lượng</div>
+            <div class="metric-val" style="font-size: 16px; font-weight: 800; color: #dc2626; margin-top: 4px; white-space: nowrap;">{{totalWeight}} kg</div>
+          </td>
+          <td style="width: 50%; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; vertical-align: top;">
+            <div class="metric-label" style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap;">Tổng Thể Tích</div>
+            <div class="metric-val" style="font-size: 16px; font-weight: 800; color: #dc2626; margin-top: 4px; white-space: nowrap;">{{totalVolume}} m³</div>
           </td>
           {{/if}}
-          <td>
-            <div class="metric-label">Tổng Khối Lượng</div>
-            <div class="metric-val">{{totalWeight}} kg</div>
-          </td>
-          <td>
-            <div class="metric-label">Tổng Thể Tích</div>
-            <div class="metric-val">{{totalVolume}} m³</div>
-          </td>
         </tr>
       </table>
 
