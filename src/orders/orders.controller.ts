@@ -23,7 +23,11 @@ import { AuthGuard } from '@nestjs/passport';
 import { Roles } from '../roles/roles.decorator';
 import { RoleEnum } from '../roles/roles.enum';
 import { RolesGuard } from '../roles/roles.guard';
-import { OrdersService, PaginatedResult, OrderStatsResult } from './orders.service';
+import {
+  OrdersService,
+  PaginatedResult,
+  OrderStatsResult,
+} from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { QueryOrderDto } from './dto/query-order.dto';
@@ -58,7 +62,10 @@ export class OrdersController {
     description: 'Danh sách đơn hàng có phân trang',
     schema: {
       properties: {
-        data: { type: 'array', items: { $ref: '#/components/schemas/OrderEntity' } },
+        data: {
+          type: 'array',
+          items: { $ref: '#/components/schemas/OrderEntity' },
+        },
         meta: {
           type: 'object',
           properties: {
@@ -73,12 +80,15 @@ export class OrdersController {
   })
   @Get()
   @HttpCode(HttpStatus.OK)
-  findAll(@Query() query: QueryOrderDto): Promise<PaginatedResult<OrderEntity>> {
+  findAll(
+    @Query() query: QueryOrderDto,
+  ): Promise<PaginatedResult<OrderEntity>> {
     return this.ordersService.findAll(query);
   }
 
   @ApiOkResponse({
-    description: 'Thống kê đơn hàng theo khoảng thời gian (default: tháng hiện tại)',
+    description:
+      'Thống kê đơn hàng theo khoảng thời gian (default: tháng hiện tại)',
     schema: {
       properties: {
         total: { type: 'number' },

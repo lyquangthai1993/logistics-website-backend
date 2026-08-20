@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateHubTableAndRelateVehicle1786938700000
-  implements MigrationInterface
-{
+export class CreateHubTableAndRelateVehicle1786938700000 implements MigrationInterface {
   name = 'CreateHubTableAndRelateVehicle1786938700000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -24,9 +22,7 @@ export class CreateHubTableAndRelateVehicle1786938700000
       )
     `);
 
-    await queryRunner.query(
-      `CREATE INDEX "IDX_hub_code" ON "hub" ("code")`,
-    );
+    await queryRunner.query(`CREATE INDEX "IDX_hub_code" ON "hub" ("code")`);
     await queryRunner.query(
       `CREATE INDEX "IDX_hub_isActive" ON "hub" ("isActive")`,
     );
@@ -54,9 +50,7 @@ export class CreateHubTableAndRelateVehicle1786938700000
     await queryRunner.query(
       `ALTER TABLE "vehicle" DROP CONSTRAINT IF EXISTS "FK_vehicle_hub"`,
     );
-    await queryRunner.query(
-      `DROP INDEX IF EXISTS "IDX_vehicle_hubId"`,
-    );
+    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_vehicle_hubId"`);
     await queryRunner.query(`
       ALTER TABLE "vehicle"
         DROP COLUMN IF EXISTS "hubId"

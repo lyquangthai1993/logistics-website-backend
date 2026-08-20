@@ -385,5 +385,3 @@ export class MailService {
     });
   }
 }
-
-

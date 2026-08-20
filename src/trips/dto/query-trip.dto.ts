@@ -3,14 +3,20 @@ import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class QueryTripDto {
-  @ApiPropertyOptional({ description: 'Trang hiện tại (bắt đầu từ 1)', default: 1 })
+  @ApiPropertyOptional({
+    description: 'Trang hiện tại (bắt đầu từ 1)',
+    default: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   page?: number = 1;
 
-  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
+  @ApiPropertyOptional({
+    description: 'Số bản ghi mỗi trang (tối đa 100)',
+    default: 20,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -48,4 +54,3 @@ export class QueryTripDto {
   @IsString()
   toDate?: string;
 }
-

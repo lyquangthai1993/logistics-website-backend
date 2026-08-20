@@ -33,13 +33,10 @@ export interface TripStatsResult {
   tripsCompleted: number;
   tripsCancelled: number;
   ordersAwaitingFleet: number; // PENDING_FLEET (realtime — không filter ngày)
-  ordersNoVehicle: number;      // NO_VEHICLE (realtime)
+  ordersNoVehicle: number; // NO_VEHICLE (realtime)
   fromDate: string;
   toDate: string;
 }
-
-
-
 
 @Injectable()
 export class TripsService {
@@ -336,25 +333,37 @@ export class TripsService {
     };
   }
 
-
   async getStats(query?: QueryTripStatsDto): Promise<TripStatsResult> {
     const now = new Date();
     const defaultFrom = new Date(now.getFullYear(), now.getMonth(), 1);
-    const defaultTo = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const defaultTo = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      23,
+      59,
+      59,
+      999,
+    );
 
-    const from = query?.fromDate ? new Date(`${query.fromDate}T00:00:00`) : defaultFrom;
-    const to = query?.toDate ? new Date(`${query.toDate}T23:59:59.999`) : defaultTo;
+    const from = query?.fromDate
+      ? new Date(`${query.fromDate}T00:00:00`)
+      : defaultFrom;
+    const to = query?.toDate
+      ? new Date(`${query.toDate}T23:59:59.999`)
+      : defaultTo;
 
     // Trips stats theo khoảng ngày (createdAt)
-    const tripRows: Array<{ status: string; count: string }> = await this.tripRepository.query(
-      `SELECT status, COUNT(*)::int AS count
+    const tripRows: Array<{ status: string; count: string }> =
+      await this.tripRepository.query(
+        `SELECT status, COUNT(*)::int AS count
        FROM "trip"
        WHERE "deletedAt" IS NULL
          AND "createdAt" >= $1
          AND "createdAt" <= $2
        GROUP BY status`,
-      [from.toISOString(), to.toISOString()],
-    );
+        [from.toISOString(), to.toISOString()],
+      );
 
     const tripMap: Record<string, number> = {};
     let tripsTotal = 0;

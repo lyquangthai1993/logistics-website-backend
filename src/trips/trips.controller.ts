@@ -23,7 +23,11 @@ import { AuthGuard } from '@nestjs/passport';
 import { Roles } from '../roles/roles.decorator';
 import { RoleEnum } from '../roles/roles.enum';
 import { RolesGuard } from '../roles/roles.guard';
-import { TripsService, PaginatedResult, TripStatsResult } from './trips.service';
+import {
+  TripsService,
+  PaginatedResult,
+  TripStatsResult,
+} from './trips.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { CreateSplitTripsDto } from './dto/create-split-trips.dto';
 import { UpdateTripDto } from './dto/update-trip.dto';
@@ -128,7 +132,6 @@ export class TripsController {
   findOne(@Param('id') id: string): Promise<TripEntity> {
     return this.tripsService.findOne(+id);
   }
-
 
   @ApiOkResponse({
     type: TripEntity,

@@ -3,7 +3,8 @@ import { IsDateString, IsOptional } from 'class-validator';
 
 export class QueryTripStatsDto {
   @ApiPropertyOptional({
-    description: 'Ngày bắt đầu thống kê (ISO date). Mặc định: đầu tháng hiện tại.',
+    description:
+      'Ngày bắt đầu thống kê (ISO date). Mặc định: đầu tháng hiện tại.',
     example: '2026-08-01',
   })
   @IsOptional()
@@ -18,4 +19,3 @@ export class QueryTripStatsDto {
   @IsDateString()
   toDate?: string;
 }
-

@@ -18,41 +18,55 @@ class EnvironmentVariablesValidator {
   @Min(0)
   @Max(65535)
   @IsOptional()
-  MAIL_PORT: number;
-
-  @IsString()
-  MAIL_HOST: string;
+  MAIL_PORT?: number;
 
   @IsString()
   @IsOptional()
-  MAIL_USER: string;
+  MAIL_HOST?: string;
 
   @IsString()
   @IsOptional()
-  MAIL_PASSWORD: string;
+  MAIL_USER?: string;
+
+  @IsString()
+  @IsOptional()
+  MAIL_PASSWORD?: string;
 
   @IsEmail()
-  MAIL_DEFAULT_EMAIL: string;
+  @IsOptional()
+  MAIL_DEFAULT_EMAIL?: string;
 
   @IsString()
-  MAIL_DEFAULT_NAME: string;
+  @IsOptional()
+  MAIL_DEFAULT_NAME?: string;
 
   @Transform(({ value }) => value === 'true')
   @IsBoolean()
-  MAIL_IGNORE_TLS: boolean;
+  @IsOptional()
+  MAIL_IGNORE_TLS?: boolean;
 
   @Transform(({ value }) => value === 'true')
   @IsBoolean()
-  MAIL_SECURE: boolean;
+  @IsOptional()
+  MAIL_SECURE?: boolean;
 
   @Transform(({ value }) => value === 'true')
   @IsBoolean()
-  MAIL_REQUIRE_TLS: boolean;
+  @IsOptional()
+  MAIL_REQUIRE_TLS?: boolean;
 
   @Transform(({ value }) => value === 'true')
   @IsBoolean()
   @IsOptional()
   MAIL_SIMULATE?: boolean;
+
+  @IsString()
+  @IsOptional()
+  MAIL_RESEND_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
+  RESEND_API_KEY?: string;
 }
 
 export default registerAs<MailConfig>('mail', () => {
@@ -63,11 +77,12 @@ export default registerAs<MailConfig>('mail', () => {
     host: process.env.MAIL_HOST,
     user: process.env.MAIL_USER,
     password: process.env.MAIL_PASSWORD,
-    defaultEmail: process.env.MAIL_DEFAULT_EMAIL,
-    defaultName: process.env.MAIL_DEFAULT_NAME,
+    defaultEmail: process.env.MAIL_DEFAULT_EMAIL || 'onboarding@resend.dev',
+    defaultName: process.env.MAIL_DEFAULT_NAME || 'Spider Express Logistics',
     ignoreTLS: process.env.MAIL_IGNORE_TLS === 'true',
     secure: process.env.MAIL_SECURE === 'true',
     requireTLS: process.env.MAIL_REQUIRE_TLS === 'true',
     simulate: process.env.MAIL_SIMULATE === 'true',
+    resendApiKey: process.env.MAIL_RESEND_API_KEY || process.env.RESEND_API_KEY,
   };
 });

@@ -1,6 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type, Transform } from 'class-transformer';
-import { IsBoolean, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class QueryHubDto {
   @ApiPropertyOptional({ default: 1, minimum: 1 })
@@ -18,7 +25,9 @@ export class QueryHubDto {
   @IsOptional()
   limit?: number = 10;
 
-  @ApiPropertyOptional({ description: 'Tìm kiếm theo mã kho, tên kho, thành phố, địa chỉ, quản lý' })
+  @ApiPropertyOptional({
+    description: 'Tìm kiếm theo mã kho, tên kho, thành phố, địa chỉ, quản lý',
+  })
   @IsOptional()
   @IsString()
   search?: string;

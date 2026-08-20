@@ -30,6 +30,11 @@ SECRET_ACCESS_KEY=
 AWS_S3_REGION=
 AWS_DEFAULT_S3_BUCKET=
 
+# Resend API (Recommended for production & avoid SMTP IPv6 network issues)
+RESEND_API_KEY=
+MAIL_RESEND_API_KEY=
+
+# SMTP Mail Settings (Fallback if not using Resend API)
 MAIL_HOST=maildev
 MAIL_PORT=1025
 MAIL_USER=
@@ -37,10 +42,11 @@ MAIL_PASSWORD=
 MAIL_IGNORE_TLS=true
 MAIL_SECURE=false
 MAIL_REQUIRE_TLS=false
-MAIL_DEFAULT_EMAIL=noreply@example.com
-MAIL_DEFAULT_NAME=Api
+MAIL_DEFAULT_EMAIL=onboarding@resend.dev
+MAIL_DEFAULT_NAME="Spider Express Logistics"
 MAIL_CLIENT_PORT=1080
 MAIL_SIMULATE=false
+
 
 AUTH_JWT_SECRET=secret
 AUTH_JWT_TOKEN_EXPIRES_IN=15m

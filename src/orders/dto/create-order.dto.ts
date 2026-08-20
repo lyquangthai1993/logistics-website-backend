@@ -34,7 +34,8 @@ export class CreateOrderDto {
 
   @ApiPropertyOptional({
     example: 3000,
-    description: 'Tổng số lượng kiện/cái (không bắt buộc, để trống nếu là hàng xá/lô gom chung)',
+    description:
+      'Tổng số lượng kiện/cái (không bắt buộc, để trống nếu là hàng xá/lô gom chung)',
   })
   @IsOptional()
   @IsNumber()

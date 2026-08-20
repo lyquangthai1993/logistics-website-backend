@@ -76,7 +76,8 @@ export class HubsController {
 
   @ApiOkResponse({
     type: [HubEntity],
-    description: 'Danh sách gọn nhẹ các chi nhánh kho đang hoạt động (dùng cho dropdown/select)',
+    description:
+      'Danh sách gọn nhẹ các chi nhánh kho đang hoạt động (dùng cho dropdown/select)',
   })
   @Get('active')
   @HttpCode(HttpStatus.OK)
