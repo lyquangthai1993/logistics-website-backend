@@ -210,14 +210,28 @@ export class OrdersService {
     };
   }
 
-  async findOne(id: number): Promise<OrderEntity> {
-    const order = await this.orderRepository.findOne({
-      where: { id },
-      relations: ['trips', 'trips.vehicle', 'trips.driver'],
-    });
+  async findOne(idOrCode: number | string): Promise<OrderEntity> {
+    let order: OrderEntity | null = null;
+
+    if (
+      typeof idOrCode === 'number' ||
+      (!isNaN(Number(idOrCode)) && Number.isInteger(Number(idOrCode)))
+    ) {
+      order = await this.orderRepository.findOne({
+        where: { id: Number(idOrCode) },
+        relations: ['trips', 'trips.vehicle', 'trips.driver'],
+      });
+    }
+
+    if (!order && typeof idOrCode === 'string' && idOrCode.trim()) {
+      order = await this.orderRepository.findOne({
+        where: { orderCode: idOrCode.trim() },
+        relations: ['trips', 'trips.vehicle', 'trips.driver'],
+      });
+    }
 
     if (!order) {
-      throw new NotFoundException(`Order with ID ${id} not found`);
+      throw new NotFoundException(`Order with ID or code '${idOrCode}' not found`);
     }
 
     return order;

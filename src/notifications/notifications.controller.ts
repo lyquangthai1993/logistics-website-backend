@@ -15,6 +15,7 @@ import { NotificationsService } from './notifications.service';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { QueryNotificationDto } from './dto/query-notification.dto';
 import { AuthGuard } from '@nestjs/passport';
+import { SilentResponse } from '../common/decorators/silent-response.decorator';
 
 @ApiTags('Notifications')
 @ApiBearerAuth()
@@ -61,7 +62,8 @@ export class NotificationsController {
   }
 
   @Patch(':id/read')
-  @ApiOperation({ summary: 'Đánh dấu 1 notification là đã đọc' })
+  @SilentResponse()
+  @ApiOperation({ summary: 'Đánh dấu 1 notification là đã đọc (background silent action)' })
   markAsRead(
     @Param('id', ParseIntPipe) id: number,
     @Request() req: { user: { id: number } },

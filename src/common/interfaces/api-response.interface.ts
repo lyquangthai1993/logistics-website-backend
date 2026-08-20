@@ -12,6 +12,7 @@ export interface ApiResponse<T = any> {
   message: string;
   data: T;
   meta?: PaginatedMeta;
+  silent?: boolean;
   timestamp: string;
 }
 

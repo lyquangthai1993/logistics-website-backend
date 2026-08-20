@@ -4,16 +4,21 @@ import {
   ExecutionContext,
   CallHandler,
   HttpStatus,
+  Optional,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { Response, Request } from 'express';
 import { ApiResponse } from '../interfaces/api-response.interface';
+import { SILENT_RESPONSE_KEY } from '../decorators/silent-response.decorator';
 
 @Injectable()
 export class ResponseTransformInterceptor<T>
   implements NestInterceptor<T, ApiResponse<T> | T>
 {
+  constructor(@Optional() private readonly reflector?: Reflector) {}
+
   intercept(
     context: ExecutionContext,
     next: CallHandler,
@@ -21,6 +26,14 @@ export class ResponseTransformInterceptor<T>
     const http = context.switchToHttp();
     const response = http.getResponse<Response>();
     const request = http.getRequest<Request>();
+
+    // Check if handler or controller is decorated with @SilentResponse()
+    const isSilent = this.reflector
+      ? this.reflector.getAllAndOverride<boolean>(SILENT_RESPONSE_KEY, [
+          context.getHandler(),
+          context.getClass(),
+        ]) ?? false
+      : false;
 
     // Skip wrapping for Swagger docs, health checks or download endpoints
     const url = request?.url || '';
@@ -53,6 +66,7 @@ export class ResponseTransformInterceptor<T>
           return {
             statusCode,
             message: 'Success',
+            ...(isSilent ? { silent: true } : {}),
             data: resData.data,
             meta: resData.meta,
             timestamp,
@@ -69,6 +83,7 @@ export class ResponseTransformInterceptor<T>
           return {
             statusCode,
             message: 'Success',
+            ...(isSilent ? { silent: true } : {}),
             data: resData.data,
             meta: {
               hasNextPage: resData.hasNextPage,
@@ -89,6 +104,7 @@ export class ResponseTransformInterceptor<T>
           return {
             statusCode,
             message: 'Success',
+            ...(isSilent ? { silent: true } : {}),
             data: items,
             meta: {
               total,
@@ -106,6 +122,7 @@ export class ResponseTransformInterceptor<T>
           return {
             statusCode,
             message: 'Success',
+            ...(isSilent ? { silent: true } : {}),
             data: null as unknown as T,
             timestamp,
           };
@@ -115,6 +132,7 @@ export class ResponseTransformInterceptor<T>
         return {
           statusCode,
           message: 'Success',
+          ...(isSilent ? { silent: true } : {}),
           data: resData,
           timestamp,
         };

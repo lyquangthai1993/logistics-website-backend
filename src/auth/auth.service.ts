@@ -576,6 +576,7 @@ export class AuthService {
 
     return new UnprocessableEntityException({
       status: HttpStatus.UNPROCESSABLE_ENTITY,
+      message: 'Tài khoản hoặc mật khẩu không chính xác. Vui lòng thử lại.',
       errors: uniformErrors
         ? {
             email: 'incorrectEmailOrPassword',

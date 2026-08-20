@@ -66,7 +66,7 @@ async function bootstrap() {
     // ResolvePromisesInterceptor is used to resolve promises in responses because class-transformer can't do it
     // https://github.com/typestack/class-transformer/issues/549
     new ResolvePromisesInterceptor(),
-    new ResponseTransformInterceptor(),
+    new ResponseTransformInterceptor(app.get(Reflector)),
     new ClassSerializerInterceptor(app.get(Reflector)),
   );
 

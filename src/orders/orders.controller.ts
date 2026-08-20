@@ -133,11 +133,12 @@ export class OrdersController {
   @HttpCode(HttpStatus.OK)
   @ApiParam({
     name: 'id',
-    type: Number,
+    type: String,
+    description: 'ID đơn hàng (số) hoặc Mã đơn hàng (orderCode)',
     required: true,
   })
   findOne(@Param('id') id: string): Promise<OrderEntity> {
-    return this.ordersService.findOne(+id);
+    return this.ordersService.findOne(id);
   }
 
   @ApiOkResponse({
