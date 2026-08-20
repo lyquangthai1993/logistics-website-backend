@@ -8,34 +8,44 @@ import {
   IsOptional,
   IsBoolean,
   IsEmail,
+  ValidateIf,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import validateConfig from '../../utils/validate-config';
 import { MailConfig } from './mail-config.type';
 
 class EnvironmentVariablesValidator {
+  @Transform(({ value }) =>
+    value !== undefined && value !== '' ? parseInt(value, 10) : undefined,
+  )
   @IsInt()
   @Min(0)
   @Max(65535)
   @IsOptional()
   MAIL_PORT?: number;
 
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsString()
   @IsOptional()
   MAIL_HOST?: string;
 
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsString()
   @IsOptional()
   MAIL_USER?: string;
 
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsString()
   @IsOptional()
   MAIL_PASSWORD?: string;
 
+  @Transform(({ value }) => (value ? String(value).trim() : undefined))
+  @ValidateIf((e) => !!e.MAIL_DEFAULT_EMAIL)
   @IsEmail()
   @IsOptional()
   MAIL_DEFAULT_EMAIL?: string;
 
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsString()
   @IsOptional()
   MAIL_DEFAULT_NAME?: string;
@@ -60,10 +70,12 @@ class EnvironmentVariablesValidator {
   @IsOptional()
   MAIL_SIMULATE?: boolean;
 
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsString()
   @IsOptional()
   MAIL_RESEND_API_KEY?: string;
 
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsString()
   @IsOptional()
   RESEND_API_KEY?: string;
