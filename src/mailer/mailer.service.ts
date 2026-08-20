@@ -91,22 +91,16 @@ export class MailerService {
               ? [String(mailOptions.to)]
               : [];
 
-        // Resend yêu cầu sender domain phải được verify (ví dụ: spiderexpress.vn).
-        // Nếu chưa verify domain hoặc MAIL_DEFAULT_EMAIL là @gmail.com/@yahoo... (chuyển từ SMTP cũ),
-        // tự động chuyển sang 'onboarding@resend.dev' để đảm bảo Resend gửi thành công ngay lập tức.
-        let resendFrom = from;
-        if (
-          !resendFrom ||
-          resendFrom.includes('@gmail.com') ||
-          resendFrom.includes('@yahoo.com') ||
-          resendFrom.includes('@hotmail.com') ||
-          resendFrom.includes('@outlook.com') ||
-          resendFrom.includes('@example.com')
-        ) {
-          resendFrom = defaultName
-            ? `"${defaultName}" <onboarding@resend.dev>`
-            : 'onboarding@resend.dev';
-        }
+        // ------------------------------------------------------------------------------------------------
+        // TẠM THỜI: Hardcode 'onboarding@resend.dev' để gửi test qua Resend khi chưa verify custom domain.
+        //
+        // TODO: Khi đã verify domain riêng (ví dụ: spiderexpress.vn) trên dashboard https://resend.com/domains:
+        //       Thay thế dòng này bằng biến cấu hình thực sự từ environment:
+        //       const resendFrom = mailOptions.from
+        //         ? (mailOptions.from as string)
+        //         : `"${defaultName}" <${defaultEmail}>`; // e.g. "Spider Express Logistics" <no-reply@spiderexpress.vn>
+        // ------------------------------------------------------------------------------------------------
+        const resendFrom = 'onboarding@resend.dev';
 
         const { data, error } = await this.resendClient.emails.send({
           from: resendFrom,

@@ -63,7 +63,7 @@ describe('MailerService', () => {
 
       expect(mockResendSend).toHaveBeenCalledWith(
         expect.objectContaining({
-          from: '"Spider TMS" <onboarding@resend.dev>',
+          from: 'onboarding@resend.dev',
           to: ['recipient@example.com'],
           subject: 'Test Subject',
           html: '<p>Test content</p>',
