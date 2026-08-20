@@ -40,10 +40,10 @@ export class NotificationsController {
     summary: 'Lấy danh sách notification của user hiện tại (phân trang & bộ lọc)',
   })
   findAll(
-    @Request() req: { user: { id: number } },
+    @Request() req: { user: { id: number | string } },
     @Query() query: QueryNotificationDto,
   ) {
-    const userId = req.user.id;
+    const userId = Number(req.user.id);
     return this.notificationsService.findAllByUser(userId, query);
   }
 
@@ -51,14 +51,14 @@ export class NotificationsController {
   @ApiOperation({
     summary: 'Thống kê số lượng notification theo nghiệp vụ và trạng thái',
   })
-  getStats(@Request() req: { user: { id: number } }) {
-    return this.notificationsService.getStats(req.user.id);
+  getStats(@Request() req: { user: { id: number | string } }) {
+    return this.notificationsService.getStats(Number(req.user.id));
   }
 
   @Get('unread-count')
   @ApiOperation({ summary: 'Đếm số notification chưa đọc' })
-  countUnread(@Request() req: { user: { id: number } }) {
-    return this.notificationsService.countUnread(req.user.id);
+  countUnread(@Request() req: { user: { id: number | string } }) {
+    return this.notificationsService.countUnread(Number(req.user.id));
   }
 
   @Patch(':id/read')
@@ -66,14 +66,14 @@ export class NotificationsController {
   @ApiOperation({ summary: 'Đánh dấu 1 notification là đã đọc (background silent action)' })
   markAsRead(
     @Param('id', ParseIntPipe) id: number,
-    @Request() req: { user: { id: number } },
+    @Request() req: { user: { id: number | string } },
   ) {
-    return this.notificationsService.markAsRead(id, req.user.id);
+    return this.notificationsService.markAsRead(id, Number(req.user.id));
   }
 
   @Patch('read-all')
   @ApiOperation({ summary: 'Đánh dấu tất cả notification là đã đọc' })
-  markAllAsRead(@Request() req: { user: { id: number } }) {
-    return this.notificationsService.markAllAsRead(req.user.id);
+  markAllAsRead(@Request() req: { user: { id: number | string } }) {
+    return this.notificationsService.markAllAsRead(Number(req.user.id));
   }
 }

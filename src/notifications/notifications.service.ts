@@ -41,7 +41,7 @@ export class NotificationsService {
 
   async create(dto: CreateNotificationDto): Promise<Notification> {
     const entity = this.notificationRepo.create({
-      userId: dto.userId,
+      userId: Number(dto.userId),
       title: dto.title,
       body: dto.body,
       type: dto.type ?? 'GENERIC',
@@ -72,12 +72,13 @@ export class NotificationsService {
       totalPages: number;
     };
   }> {
+    const numericUserId = Number(userId);
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
     const queryBuilder = this.notificationRepo
       .createQueryBuilder('n')
-      .where('n.userId = :userId', { userId });
+      .where('n.userId = :userId', { userId: numericUserId });
 
     if (query.type) {
       queryBuilder.andWhere('n.type = :type', { type: query.type });
@@ -114,6 +115,7 @@ export class NotificationsService {
   }
 
   async getStats(userId: number): Promise<NotificationStatsResult> {
+    const numericUserId = Number(userId);
     const raw = await this.notificationRepo
       .createQueryBuilder('n')
       .select('COUNT(*)::int', 'total')
@@ -127,7 +129,7 @@ export class NotificationsService {
       .addSelect('COUNT(CASE WHEN n.type = :fleet AND n.isRead = false THEN 1 END)::int', 'unreadFleet')
       .addSelect('COUNT(CASE WHEN n.type = :warehouse AND n.isRead = false THEN 1 END)::int', 'unreadWarehouse')
       .addSelect('COUNT(CASE WHEN n.type = :generic AND n.isRead = false THEN 1 END)::int', 'unreadGeneric')
-      .where('n.userId = :userId', { userId })
+      .where('n.userId = :userId', { userId: numericUserId })
       .setParameters({
         dispatcher: 'DISPATCHER',
         fleet: 'FLEET',
@@ -156,18 +158,23 @@ export class NotificationsService {
   }
 
   async countUnread(userId: number): Promise<number> {
+    const numericUserId = Number(userId);
     return this.notificationRepo.count({
-      where: { userId, isRead: false },
+      where: { userId: numericUserId, isRead: false },
     });
   }
 
   async markAsRead(id: number, userId: number): Promise<Notification> {
+    const numericUserId = Number(userId);
+    const numericId = Number(id);
+
     const notification = await this.notificationRepo.findOne({
-      where: { id, userId },
+      where: { id: numericId, userId: numericUserId },
     });
     if (!notification) {
       throw new NotFoundException(`Notification #${id} not found`);
     }
+
     notification.isRead = true;
     return this.notificationRepo.save(
       notification,
@@ -175,11 +182,11 @@ export class NotificationsService {
   }
 
   async markAllAsRead(userId: number): Promise<{ affected: number }> {
+    const numericUserId = Number(userId);
     const result = await this.notificationRepo.update(
-      { userId, isRead: false },
+      { userId: numericUserId, isRead: false },
       { isRead: true },
     );
     return { affected: result.affected ?? 0 };
   }
 }
-
