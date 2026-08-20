@@ -36,18 +36,22 @@ export class NotificationsController {
 
   @Get()
   @ApiOperation({
-    summary: 'Lấy danh sách notification của user hiện tại (phân trang)',
+    summary: 'Lấy danh sách notification của user hiện tại (phân trang & bộ lọc)',
   })
   findAll(
     @Request() req: { user: { id: number } },
     @Query() query: QueryNotificationDto,
   ) {
     const userId = req.user.id;
-    return this.notificationsService.findAllByUser(
-      userId,
-      query.page,
-      query.limit,
-    );
+    return this.notificationsService.findAllByUser(userId, query);
+  }
+
+  @Get('stats')
+  @ApiOperation({
+    summary: 'Thống kê số lượng notification theo nghiệp vụ và trạng thái',
+  })
+  getStats(@Request() req: { user: { id: number } }) {
+    return this.notificationsService.getStats(req.user.id);
   }
 
   @Get('unread-count')

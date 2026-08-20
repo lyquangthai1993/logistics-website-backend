@@ -15,12 +15,12 @@ export class JwtRefreshStrategy extends PassportStrategy(
   constructor(configService: ConfigService<AllConfigType>) {
     super({
       jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
         (request: Request) => {
           return (
             request?.cookies?.refreshToken || request?.cookies?.refresh_token
           );
         },
-        ExtractJwt.fromAuthHeaderAsBearerToken(),
       ]),
       secretOrKey: configService.getOrThrow('auth.refreshSecret', {
         infer: true,
