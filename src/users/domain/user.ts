@@ -76,7 +76,8 @@ export class User {
   status?: Status;
 
   @ApiProperty({
-    description: 'Hub assigned to this user (applicable for WAREHOUSE_MANAGER role)',
+    description:
+      'Hub assigned to this user (applicable for WAREHOUSE_MANAGER role)',
     example: { id: 1, code: 'HAN-01', name: 'Kho Hà Nội' },
     nullable: true,
     required: false,

@@ -34,9 +34,7 @@ export class RecreateSessionTable1786938900000 implements MigrationInterface {
     await queryRunner.query(
       `ALTER TABLE "session" DROP CONSTRAINT IF EXISTS "FK_session_user"`,
     );
-    await queryRunner.query(
-      `DROP INDEX IF EXISTS "IDX_session_userId"`,
-    );
+    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_session_userId"`);
     await queryRunner.query(`DROP TABLE IF EXISTS "session"`);
   }
 }

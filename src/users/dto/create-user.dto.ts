@@ -78,4 +78,3 @@ export class CreateUserDto {
   @Type(() => HubReferenceDto)
   hub?: HubReferenceDto | null;
 }
-

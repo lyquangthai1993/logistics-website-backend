@@ -14,9 +14,10 @@ import { ApiResponse } from '../interfaces/api-response.interface';
 import { SILENT_RESPONSE_KEY } from '../decorators/silent-response.decorator';
 
 @Injectable()
-export class ResponseTransformInterceptor<T>
-  implements NestInterceptor<T, ApiResponse<T> | T>
-{
+export class ResponseTransformInterceptor<T> implements NestInterceptor<
+  T,
+  ApiResponse<T> | T
+> {
   constructor(@Optional() private readonly reflector?: Reflector) {}
 
   intercept(
@@ -29,10 +30,10 @@ export class ResponseTransformInterceptor<T>
 
     // Check if handler or controller is decorated with @SilentResponse()
     const isSilent = this.reflector
-      ? this.reflector.getAllAndOverride<boolean>(SILENT_RESPONSE_KEY, [
+      ? (this.reflector.getAllAndOverride<boolean>(SILENT_RESPONSE_KEY, [
           context.getHandler(),
           context.getClass(),
-        ]) ?? false
+        ]) ?? false)
       : false;
 
     // Skip wrapping for Swagger docs, health checks or download endpoints
@@ -100,7 +101,14 @@ export class ResponseTransformInterceptor<T>
           Array.isArray(resData.data) &&
           ('total' in resData || 'totalPages' in resData)
         ) {
-          const { data: items, total, page, limit, totalPages, ...rest } = resData as any;
+          const {
+            data: items,
+            total,
+            page,
+            limit,
+            totalPages,
+            ...rest
+          } = resData as any;
           return {
             statusCode,
             message: 'Success',

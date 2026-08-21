@@ -89,10 +89,9 @@ export class NotificationsService {
     }
 
     if (query.search && query.search.trim()) {
-      queryBuilder.andWhere(
-        '(n.title ILIKE :search OR n.body ILIKE :search)',
-        { search: `%${query.search.trim()}%` },
-      );
+      queryBuilder.andWhere('(n.title ILIKE :search OR n.body ILIKE :search)', {
+        search: `%${query.search.trim()}%`,
+      });
     }
 
     queryBuilder
@@ -121,14 +120,38 @@ export class NotificationsService {
       .select('COUNT(*)::int', 'total')
       .addSelect('COUNT(CASE WHEN n.isRead = false THEN 1 END)::int', 'unread')
       .addSelect('COUNT(CASE WHEN n.isRead = true THEN 1 END)::int', 'read')
-      .addSelect('COUNT(CASE WHEN n.type = :dispatcher THEN 1 END)::int', 'typeDispatcher')
-      .addSelect('COUNT(CASE WHEN n.type = :fleet THEN 1 END)::int', 'typeFleet')
-      .addSelect('COUNT(CASE WHEN n.type = :warehouse THEN 1 END)::int', 'typeWarehouse')
-      .addSelect('COUNT(CASE WHEN n.type = :generic THEN 1 END)::int', 'typeGeneric')
-      .addSelect('COUNT(CASE WHEN n.type = :dispatcher AND n.isRead = false THEN 1 END)::int', 'unreadDispatcher')
-      .addSelect('COUNT(CASE WHEN n.type = :fleet AND n.isRead = false THEN 1 END)::int', 'unreadFleet')
-      .addSelect('COUNT(CASE WHEN n.type = :warehouse AND n.isRead = false THEN 1 END)::int', 'unreadWarehouse')
-      .addSelect('COUNT(CASE WHEN n.type = :generic AND n.isRead = false THEN 1 END)::int', 'unreadGeneric')
+      .addSelect(
+        'COUNT(CASE WHEN n.type = :dispatcher THEN 1 END)::int',
+        'typeDispatcher',
+      )
+      .addSelect(
+        'COUNT(CASE WHEN n.type = :fleet THEN 1 END)::int',
+        'typeFleet',
+      )
+      .addSelect(
+        'COUNT(CASE WHEN n.type = :warehouse THEN 1 END)::int',
+        'typeWarehouse',
+      )
+      .addSelect(
+        'COUNT(CASE WHEN n.type = :generic THEN 1 END)::int',
+        'typeGeneric',
+      )
+      .addSelect(
+        'COUNT(CASE WHEN n.type = :dispatcher AND n.isRead = false THEN 1 END)::int',
+        'unreadDispatcher',
+      )
+      .addSelect(
+        'COUNT(CASE WHEN n.type = :fleet AND n.isRead = false THEN 1 END)::int',
+        'unreadFleet',
+      )
+      .addSelect(
+        'COUNT(CASE WHEN n.type = :warehouse AND n.isRead = false THEN 1 END)::int',
+        'unreadWarehouse',
+      )
+      .addSelect(
+        'COUNT(CASE WHEN n.type = :generic AND n.isRead = false THEN 1 END)::int',
+        'unreadGeneric',
+      )
       .where('n.userId = :userId', { userId: numericUserId })
       .setParameters({
         dispatcher: 'DISPATCHER',

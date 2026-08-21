@@ -31,7 +31,8 @@ export class CreateOrderDto {
 
   @ApiPropertyOptional({
     example: 1,
-    description: 'ID của Hub nguồn (ưu tiên hơn originHub string — dùng từ Phase 1)',
+    description:
+      'ID của Hub nguồn (ưu tiên hơn originHub string — dùng từ Phase 1)',
   })
   @IsOptional()
   @IsInt()
@@ -45,7 +46,8 @@ export class CreateOrderDto {
 
   @ApiPropertyOptional({
     example: 2,
-    description: 'ID của Hub đích (ưu tiên hơn destinationHub string — dùng từ Phase 1)',
+    description:
+      'ID của Hub đích (ưu tiên hơn destinationHub string — dùng từ Phase 1)',
   })
   @IsOptional()
   @IsInt()

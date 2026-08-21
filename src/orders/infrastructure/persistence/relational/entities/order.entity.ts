@@ -65,14 +65,22 @@ export class OrderEntity extends AbstractBaseEntity {
   @Column({ type: 'int', nullable: true })
   originHubId: number | null;
 
-  @ManyToOne(() => HubEntity, { nullable: true, eager: false, onDelete: 'SET NULL' })
+  @ManyToOne(() => HubEntity, {
+    nullable: true,
+    eager: false,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'originHubId' })
   originHubEntity: Relation<HubEntity> | null;
 
   @Column({ type: 'int', nullable: true })
   destinationHubId: number | null;
 
-  @ManyToOne(() => HubEntity, { nullable: true, eager: false, onDelete: 'SET NULL' })
+  @ManyToOne(() => HubEntity, {
+    nullable: true,
+    eager: false,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'destinationHubId' })
   destinationHubEntity: Relation<HubEntity> | null;
 

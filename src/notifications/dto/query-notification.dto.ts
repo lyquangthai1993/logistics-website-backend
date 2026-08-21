@@ -1,6 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type, Transform } from 'class-transformer';
-import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 import { NotificationType } from '../domain/notification';
 
 export class QueryNotificationDto {
@@ -18,7 +25,9 @@ export class QueryNotificationDto {
   @Min(1)
   limit?: number = 20;
 
-  @ApiPropertyOptional({ enum: ['DISPATCHER', 'FLEET', 'WAREHOUSE', 'GENERIC'] })
+  @ApiPropertyOptional({
+    enum: ['DISPATCHER', 'FLEET', 'WAREHOUSE', 'GENERIC'],
+  })
   @IsOptional()
   @IsEnum(['DISPATCHER', 'FLEET', 'WAREHOUSE', 'GENERIC'])
   type?: NotificationType;
@@ -38,4 +47,3 @@ export class QueryNotificationDto {
   @IsString()
   search?: string;
 }
-

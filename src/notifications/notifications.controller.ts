@@ -37,7 +37,8 @@ export class NotificationsController {
 
   @Get()
   @ApiOperation({
-    summary: 'Lấy danh sách notification của user hiện tại (phân trang & bộ lọc)',
+    summary:
+      'Lấy danh sách notification của user hiện tại (phân trang & bộ lọc)',
   })
   findAll(
     @Request() req: { user: { id: number | string } },
@@ -63,7 +64,9 @@ export class NotificationsController {
 
   @Patch(':id/read')
   @SilentResponse()
-  @ApiOperation({ summary: 'Đánh dấu 1 notification là đã đọc (background silent action)' })
+  @ApiOperation({
+    summary: 'Đánh dấu 1 notification là đã đọc (background silent action)',
+  })
   markAsRead(
     @Param('id', ParseIntPipe) id: number,
     @Request() req: { user: { id: number | string } },

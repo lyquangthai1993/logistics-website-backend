@@ -231,7 +231,9 @@ export class OrdersService {
     }
 
     if (!order) {
-      throw new NotFoundException(`Order with ID or code '${idOrCode}' not found`);
+      throw new NotFoundException(
+        `Order with ID or code '${idOrCode}' not found`,
+      );
     }
 
     return order;

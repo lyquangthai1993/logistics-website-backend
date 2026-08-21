@@ -318,7 +318,10 @@ export class TripsService {
     if (originHubId != null)
       hubIdsToCheck.push({ id: originHubId, label: 'Hub nguồn (origin)' });
     if (destinationHubId != null)
-      hubIdsToCheck.push({ id: destinationHubId, label: 'Hub đích (destination)' });
+      hubIdsToCheck.push({
+        id: destinationHubId,
+        label: 'Hub đích (destination)',
+      });
 
     for (const { id: hubId, label } of hubIdsToCheck) {
       const wmsForHub = await this.userRepository.find({
@@ -333,7 +336,12 @@ export class TripsService {
         this.logger.warn(
           `[Trip #${tripId}][${orderCode}] ${label} (hubId=${hubId}) has no assigned WAREHOUSE_MANAGER. WM notification dropped. Alerting SUPER_ADMINs.`,
         );
-        await this.alertSuperAdminHubUnassigned(hubId, label, tripId, orderCode);
+        await this.alertSuperAdminHubUnassigned(
+          hubId,
+          label,
+          tripId,
+          orderCode,
+        );
       } else {
         for (const wm of wmsForHub) {
           recipientMap.set(wm.id, wm);
