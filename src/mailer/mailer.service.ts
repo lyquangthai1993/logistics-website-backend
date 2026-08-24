@@ -128,16 +128,19 @@ export class MailerService {
         this.logger.log(
           `✅ [Mailer] [Resend API] SUCCESS in ${elapsed}ms | MessageId: "${data?.id}" | To: [${to.join(', ')}] | From: "${resendFrom}"`,
         );
-        return;
       } catch (error) {
         const elapsed = Date.now() - startTime;
         const err = error as Error;
-        this.logger.error(
-          `❌ [Mailer] [Resend API] FAILED in ${elapsed}ms to ${recipientStr}: ${err.message}`,
-          err.stack,
+        this.logger.warn(
+          `⚠️ [Mailer] [Resend API] Failed in ${elapsed}ms for ${recipientStr}: ${err.message}. Checking SMTP fallback...`,
         );
-        this.handleFallbackOrThrow(error, recipientStr);
-        return;
+        if (!this.transporter) {
+          this.handleFallbackOrThrow(error, recipientStr);
+          return;
+        }
+        this.logger.log(
+          `🔄 [Mailer] Resend unavailable or restricted for "${recipientStr}". Executing automatic fallback to SMTP...`,
+        );
       }
     }
 
