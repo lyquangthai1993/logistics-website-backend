@@ -100,16 +100,11 @@ export class MailerService {
             ? [String(mailOptions.to)]
             : [];
 
-      // ------------------------------------------------------------------------------------------------
-      // TẠM THỜI: Hardcode 'onboarding@resend.dev' để gửi test qua Resend khi chưa verify custom domain.
-      //
-      // TODO: Khi đã verify domain riêng (ví dụ: spiderexpress.vn) trên dashboard https://resend.com/domains:
-      //       Thay thế dòng này bằng biến cấu hình thực sự từ environment:
-      //       const resendFrom = mailOptions.from
-      //         ? (mailOptions.from as string)
-      //         : `"${defaultName}" <${defaultEmail}>`; // e.g. "Spider Express Logistics" <no-reply@spiderexpress.vn>
-      // ------------------------------------------------------------------------------------------------
-      const resendFrom = 'onboarding@resend.dev';
+      const resendFrom = mailOptions.from
+        ? (mailOptions.from as string)
+        : defaultEmail && defaultEmail !== 'onboarding@resend.dev'
+          ? `"${defaultName}" <${defaultEmail}>`
+          : 'onboarding@resend.dev';
 
       this.logger.log(
         `🚀 [Mailer] [Resend API] Dispatching email via HTTPS port 443 → From: "${resendFrom}" | To: [${to.join(', ')}] | Subject: "${subject}" | ContentSize: ${finalHtml.length} bytes`,
