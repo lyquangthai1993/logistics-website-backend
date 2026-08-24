@@ -47,6 +47,11 @@ async function bootstrap() {
       'Authorization',
       'X-Requested-With',
       'x-custom-lang',
+      'sentry-trace',
+      'baggage',
+      'Cache-Control',
+      'Pragma',
+      'X-Refresh-Token',
     ],
   });
 

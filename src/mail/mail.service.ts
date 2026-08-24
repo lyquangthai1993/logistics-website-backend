@@ -113,27 +113,28 @@ export class MailService {
     const url = new URL(
       this.configService.getOrThrow('app.frontendDomain', {
         infer: true,
-      }) + '/password-change',
+      }) + '/auth/reset-password',
     );
     url.searchParams.set('hash', mailData.data.hash);
     url.searchParams.set('expires', mailData.data.tokenExpires.toString());
 
+    const appName = 'SPIDER EXPRESS LOGISTICS TMS';
+    const emailSubject = '[Spider Express TMS] Khôi phục mật khẩu tài khoản / Reset Password';
+
     await this.mailerService.sendMail({
       to: mailData.to,
-      subject: resetPasswordTitle,
-      text: `${url.toString()} ${resetPasswordTitle}`,
+      subject: emailSubject,
+      text: `${emailSubject} - ${url.toString()}`,
       templatePath: this.getTemplatePath('reset-password.hbs'),
       context: {
-        title: resetPasswordTitle,
+        title: emailSubject,
         url: url.toString(),
-        actionTitle: resetPasswordTitle,
-        app_name: this.configService.get('app.name', {
-          infer: true,
-        }),
-        text1,
-        text2,
-        text3,
-        text4,
+        actionTitle: 'ĐẶT LẠI MẬT KHẨU NGAY',
+        app_name: appName,
+        userEmail: mailData.to,
+        expiresInMinutes: 15,
+        supportHotline: '1900-SPIDER',
+        supportEmail: 'it-support@spiderexpress.vn',
       },
     });
   }

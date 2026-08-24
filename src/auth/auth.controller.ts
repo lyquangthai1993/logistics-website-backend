@@ -86,20 +86,30 @@ export class AuthController {
   }
 
   @Post('forgot/password')
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   async forgotPassword(
     @Body() forgotPasswordDto: AuthForgotPasswordDto,
-  ): Promise<void> {
-    return this.service.forgotPassword(forgotPasswordDto.email);
+  ) {
+    await this.service.forgotPassword(forgotPasswordDto.email);
+    return {
+      statusCode: 200,
+      message:
+        'Yêu cầu khôi phục mật khẩu đã được gửi thành công. Vui lòng kiểm tra hộp thư email.',
+    };
   }
 
   @Post('reset/password')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  resetPassword(@Body() resetPasswordDto: AuthResetPasswordDto): Promise<void> {
-    return this.service.resetPassword(
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(@Body() resetPasswordDto: AuthResetPasswordDto) {
+    await this.service.resetPassword(
       resetPasswordDto.hash,
       resetPasswordDto.password,
     );
+    return {
+      statusCode: 200,
+      message:
+        'Đặt lại mật khẩu thành công. Bạn có thể đăng nhập bằng mật khẩu mới.',
+    };
   }
 
   @ApiBearerAuth()

@@ -320,19 +320,10 @@ export class AuthService {
     const user = await this.usersService.findByEmail(email);
 
     if (!user) {
-      const uniformErrors = this.configService.getOrThrow(
-        'auth.uniformErrors',
-        { infer: true },
-      );
-
-      // With uniform errors enabled we do not reveal whether the email is
-      // registered: respond exactly like the success case and skip the mail.
-      if (uniformErrors) {
-        return;
-      }
-
       throw new UnprocessableEntityException({
         status: HttpStatus.UNPROCESSABLE_ENTITY,
+        message:
+          'Địa chỉ Email này chưa được đăng ký trong hệ thống. Vui lòng kiểm tra lại.',
         errors: {
           email: 'emailNotExists',
         },
