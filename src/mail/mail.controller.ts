@@ -35,7 +35,7 @@ export class MailController {
   @ApiOperation({
     summary: 'Kiểm tra gửi email hệ thống (Yêu cầu JWT Bearer Token)',
     description:
-      'Gửi email thử nghiệm qua Resend API (hoặc SMTP fallback) để kiểm tra kết nối và cấu hình mail service.',
+      'Gửi email thử nghiệm qua SMTP Relay để kiểm tra kết nối và cấu hình mail service.',
   })
   @ApiResponse({
     status: 200,
@@ -67,7 +67,7 @@ export class MailController {
     const title = dto.subject || 'Thông báo thử nghiệm gửi email - Spider TMS';
     const message =
       dto.message ||
-      'Đây là email thử nghiệm được gửi từ hệ thống Spider TMS qua Resend API.';
+      'Đây là email thử nghiệm được gửi từ hệ thống Spider TMS qua SMTP Relay.';
 
     await this.mailService.sendGenericNotification({
       to,

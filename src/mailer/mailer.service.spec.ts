@@ -1,20 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { MailerService } from './mailer.service';
 import { ConfigService } from '@nestjs/config';
+import nodemailer from 'nodemailer';
 
-// Mock the Resend class
-const mockResendSend = jest.fn();
-jest.mock('resend', () => {
-  return {
-    Resend: jest.fn().mockImplementation(() => {
-      return {
-        emails: {
-          send: mockResendSend,
-        },
-      };
-    }),
-  };
-});
+// Mock nodemailer
+const mockSendMail = jest.fn();
+jest.mock('nodemailer', () => ({
+  createTransport: jest.fn().mockReturnValue({
+    sendMail: (...args: unknown[]) => mockSendMail(...args),
+  }),
+}));
 
 describe('MailerService', () => {
   let service: MailerService;
@@ -23,17 +18,17 @@ describe('MailerService', () => {
     jest.clearAllMocks();
   });
 
-  describe('with Resend API Key configured', () => {
+  describe('with SMTP configured', () => {
     beforeEach(async () => {
-      mockResendSend.mockResolvedValue({
-        data: { id: 'msg_12345' },
-        error: null,
-      });
+      mockSendMail.mockResolvedValue({ messageId: 'msg_12345' });
 
       const mockConfigService = {
         get: jest.fn().mockImplementation((key: string) => {
-          if (key === 'mail.resendApiKey') return 're_test_api_key';
-          if (key === 'mail.defaultEmail') return 'onboarding@resend.dev';
+          if (key === 'mail.host') return 'in-v3.mailjet.com';
+          if (key === 'mail.port') return 587;
+          if (key === 'mail.user') return 'test_user';
+          if (key === 'mail.password') return 'test_pass';
+          if (key === 'mail.defaultEmail') return 'no-reply@spiderexpress.com';
           if (key === 'mail.defaultName') return 'Spider TMS';
           if (key === 'mail.simulate') return false;
           if (key === 'app.nodeEnv') return 'development';
@@ -54,17 +49,17 @@ describe('MailerService', () => {
       service = module.get<MailerService>(MailerService);
     });
 
-    it('should send email via Resend successfully', async () => {
+    it('should send email via SMTP successfully', async () => {
       await service.sendMail({
         to: 'recipient@example.com',
         subject: 'Test Subject',
         html: '<p>Test content</p>',
       });
 
-      expect(mockResendSend).toHaveBeenCalledWith(
+      expect(mockSendMail).toHaveBeenCalledWith(
         expect.objectContaining({
-          from: 'onboarding@resend.dev',
-          to: ['recipient@example.com'],
+          from: '"Spider TMS" <no-reply@spiderexpress.com>',
+          to: 'recipient@example.com',
           subject: 'Test Subject',
           html: '<p>Test content</p>',
         }),
@@ -77,7 +72,7 @@ describe('MailerService', () => {
       const mockConfigService = {
         get: jest.fn().mockImplementation((key: string) => {
           if (key === 'mail.simulate') return true;
-          if (key === 'mail.resendApiKey') return 're_test_key';
+          if (key === 'mail.host') return 'in-v3.mailjet.com';
           return undefined;
         }),
       };
@@ -102,7 +97,7 @@ describe('MailerService', () => {
         html: '<p>Simulated</p>',
       });
 
-      expect(mockResendSend).not.toHaveBeenCalled();
+      expect(mockSendMail).not.toHaveBeenCalled();
     });
   });
 });

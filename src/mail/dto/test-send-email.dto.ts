@@ -20,7 +20,7 @@ export class TestSendEmailDto {
 
   @ApiPropertyOptional({
     example:
-      'Hệ thống Spider TMS đã chuyển sang tích hợp Resend API thành công!',
+      'Hệ thống Spider TMS đã cấu hình gửi mail thành công!',
     description: 'Nội dung thông điệp kiểm tra (tùy chọn)',
   })
   @IsOptional()

@@ -3,26 +3,14 @@ import fs from 'node:fs/promises';
 import { ConfigService } from '@nestjs/config';
 import nodemailer from 'nodemailer';
 import Handlebars from 'handlebars';
-import { Resend } from 'resend';
 import { AllConfigType } from '../config/config.type';
 
 @Injectable()
 export class MailerService {
   private readonly logger = new Logger(MailerService.name);
   private readonly transporter?: nodemailer.Transporter;
-  private readonly resendClient?: Resend;
 
   constructor(private readonly configService: ConfigService<AllConfigType>) {
-    const resendApiKey = this.configService.get('mail.resendApiKey', {
-      infer: true,
-    });
-    if (resendApiKey) {
-      this.resendClient = new Resend(resendApiKey);
-      this.logger.log(
-        'Resend client initialized for transactional email delivery.',
-      );
-    }
-
     const mailHost = this.configService.get('mail.host', { infer: true });
     if (mailHost) {
       this.transporter = nodemailer.createTransport({
@@ -40,6 +28,9 @@ export class MailerService {
               }
             : undefined,
       });
+      this.logger.log(
+        `SMTP Transporter initialized for ${mailHost}:${configService.get('mail.port', { infer: true })}`,
+      );
     }
   }
 
@@ -74,7 +65,7 @@ export class MailerService {
     if (isSimulate) {
       const elapsed = Date.now() - startTime;
       this.logger.log(
-        `🧪 [Mailer] [SIMULATION ACTIVE] Rendered template in ${elapsed}ms for "${recipientStr}" ("${subject}"). Skipping external API call.`,
+        `🧪 [Mailer] [SIMULATION ACTIVE] Rendered template in ${elapsed}ms for "${recipientStr}" ("${subject}"). Skipping external call.`,
       );
       return;
     }
@@ -84,67 +75,13 @@ export class MailerService {
       'Spider Express Logistics';
     const defaultEmail =
       this.configService.get('mail.defaultEmail', { infer: true }) ||
-      'onboarding@resend.dev';
+      'no-reply@spiderexpress.com';
     const from = mailOptions.from
       ? (mailOptions.from as string)
       : `"${defaultName}" <${defaultEmail}>`;
     const finalHtml = (mailOptions.html as string) || html || '';
 
-    // 1. Gửi qua Resend API nếu có cấu hình RESEND_API_KEY
-    if (this.resendClient) {
-      const to = Array.isArray(mailOptions.to)
-        ? (mailOptions.to as string[])
-        : typeof mailOptions.to === 'string'
-          ? [mailOptions.to]
-          : mailOptions.to
-            ? [String(mailOptions.to)]
-            : [];
-
-      const resendFrom = mailOptions.from
-        ? (mailOptions.from as string)
-        : defaultEmail && defaultEmail !== 'onboarding@resend.dev'
-          ? `"${defaultName}" <${defaultEmail}>`
-          : 'onboarding@resend.dev';
-
-      this.logger.log(
-        `🚀 [Mailer] [Resend API] Dispatching email via HTTPS port 443 → From: "${resendFrom}" | To: [${to.join(', ')}] | Subject: "${subject}" | ContentSize: ${finalHtml.length} bytes`,
-      );
-
-      try {
-        const { data, error } = await this.resendClient.emails.send({
-          from: resendFrom,
-          to,
-          subject,
-          html: finalHtml,
-          text: (mailOptions.text as string) || undefined,
-        });
-
-        const elapsed = Date.now() - startTime;
-
-        if (error) {
-          throw new Error(`Resend API Error: ${error.name} - ${error.message}`);
-        }
-
-        this.logger.log(
-          `✅ [Mailer] [Resend API] SUCCESS in ${elapsed}ms | MessageId: "${data?.id}" | To: [${to.join(', ')}] | From: "${resendFrom}"`,
-        );
-      } catch (error) {
-        const elapsed = Date.now() - startTime;
-        const err = error as Error;
-        this.logger.warn(
-          `⚠️ [Mailer] [Resend API] Failed in ${elapsed}ms for ${recipientStr}: ${err.message}. Checking SMTP fallback...`,
-        );
-        if (!this.transporter) {
-          this.handleFallbackOrThrow(error, recipientStr);
-          return;
-        }
-        this.logger.log(
-          `🔄 [Mailer] Resend unavailable or restricted for "${recipientStr}". Executing automatic fallback to SMTP...`,
-        );
-      }
-    }
-
-    // 2. Fallback gửi qua Nodemailer SMTP nếu có cấu hình SMTP Host
+    // Gửi trực tiếp qua Nodemailer SMTP
     if (this.transporter) {
       const mailHost = this.configService.get('mail.host', { infer: true });
       const mailPort = this.configService.get('mail.port', { infer: true });
@@ -176,18 +113,18 @@ export class MailerService {
       }
     }
 
-    // 3. Nếu không có Resend và không có SMTP Host
+    // Nếu không có cấu hình SMTP Host
     const nodeEnv = this.configService.get('app.nodeEnv', { infer: true });
     if (nodeEnv === 'development' || !nodeEnv) {
       const elapsed = Date.now() - startTime;
       this.logger.warn(
-        `⚠️ [Mailer] [DEV SIMULATION] No active provider configured (missing RESEND_API_KEY or MAIL_HOST). Processed in ${elapsed}ms for "${recipientStr}".`,
+        `⚠️ [Mailer] [DEV SIMULATION] No active SMTP provider configured (missing MAIL_HOST). Processed in ${elapsed}ms for "${recipientStr}".`,
       );
       return;
     }
 
     throw new Error(
-      'No email provider configured. Please set RESEND_API_KEY or MAIL_HOST in environment variables.',
+      'No email provider configured. Please set MAIL_HOST in environment variables.',
     );
   }
 
@@ -195,7 +132,7 @@ export class MailerService {
     const nodeEnv = this.configService.get('app.nodeEnv', { infer: true });
     if (nodeEnv === 'development' || !nodeEnv) {
       this.logger.warn(
-        `⚠️ [Mailer] [DEV SIMULATION] Email delivery failed for "${recipient}", proceeding gracefully without throwing in development mode. Check RESEND_API_KEY or domain settings.`,
+        `⚠️ [Mailer] [DEV SIMULATION] Email delivery failed for "${recipient}", proceeding gracefully without throwing in development mode. Check SMTP credentials or network settings.`,
       );
       return;
     }

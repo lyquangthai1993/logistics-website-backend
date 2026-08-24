@@ -9,5 +9,4 @@ export type MailConfig = {
   secure: boolean;
   requireTLS: boolean;
   simulate?: boolean;
-  resendApiKey?: string;
 };
