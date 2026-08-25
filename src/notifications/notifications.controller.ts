@@ -13,6 +13,7 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { CreateNotificationDto } from './dto/create-notification.dto';
+import { SendTestNotificationDto } from './dto/send-test-notification.dto';
 import { QueryNotificationDto } from './dto/query-notification.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { SilentResponse } from '../common/decorators/silent-response.decorator';
@@ -33,6 +34,20 @@ export class NotificationsController {
   })
   create(@Body() dto: CreateNotificationDto) {
     return this.notificationsService.create(dto);
+  }
+
+  @Post('send-test')
+  @ApiOperation({
+    summary: 'Gửi notification thử nghiệm trực tiếp qua WebSocket (Swagger UI & E2E Test)',
+    description: 'Nhận vào userId, title và message, tự động lưu DB và bắn Socket.IO real-time tới client đang mở',
+  })
+  sendTestNotification(@Body() dto: SendTestNotificationDto) {
+    return this.notificationsService.create({
+      userId: dto.userId,
+      title: dto.title,
+      body: dto.message,
+      type: 'GENERIC',
+    });
   }
 
   @Get()

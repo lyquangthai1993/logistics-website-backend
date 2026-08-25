@@ -4,6 +4,9 @@ import {
   OnGatewayConnection,
   OnGatewayDisconnect,
   OnGatewayInit,
+  SubscribeMessage,
+  MessageBody,
+  ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
@@ -99,6 +102,34 @@ export class NotificationsGateway
         `WS disconnected: userId=${userId} socketId=${client.id}`,
       );
     }
+  }
+
+  /**
+   * Trực tiếp nhận message qua Socket và phát real-time tới target user.
+   */
+  @SubscribeMessage('notification:send-message')
+  handleSendMessage(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    payload: { targetUserId: number; title: string; message: string },
+  ): void {
+    const senderUserId = client.data?.userId as number | undefined;
+    this.logger.log(
+      `WS message received from userId=${senderUserId} for targetUserId=${payload.targetUserId}`,
+    );
+
+    const notificationPayload = {
+      id: Date.now(),
+      title: payload.title,
+      body: payload.message,
+      type: 'GENERIC',
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.server
+      .to(`user:${payload.targetUserId}`)
+      .emit('notification:new', notificationPayload);
   }
 
   /**
