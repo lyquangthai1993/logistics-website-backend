@@ -69,6 +69,16 @@ class EnvironmentVariablesValidator {
   @IsBoolean()
   @IsOptional()
   MAIL_SIMULATE?: boolean;
+
+  @Transform(({ value }) => (value === '' ? undefined : value))
+  @IsString()
+  @IsOptional()
+  RESEND_API_KEY?: string;
+
+  @Transform(({ value }) => (value === '' ? undefined : value))
+  @IsString()
+  @IsOptional()
+  MAIL_RESEND_API_KEY?: string;
 }
 
 export default registerAs<MailConfig>('mail', () => {
@@ -79,12 +89,12 @@ export default registerAs<MailConfig>('mail', () => {
     host: process.env.MAIL_HOST,
     user: process.env.MAIL_USER,
     password: process.env.MAIL_PASSWORD,
-    defaultEmail:
-      process.env.MAIL_DEFAULT_EMAIL || 'no-reply@spiderexpress.com',
+    defaultEmail: process.env.MAIL_DEFAULT_EMAIL || 'onboarding@resend.dev',
     defaultName: process.env.MAIL_DEFAULT_NAME || 'Spider Express Logistics',
     ignoreTLS: process.env.MAIL_IGNORE_TLS === 'true',
     secure: process.env.MAIL_SECURE === 'true',
     requireTLS: process.env.MAIL_REQUIRE_TLS === 'true',
     simulate: process.env.MAIL_SIMULATE === 'true',
+    resendApiKey: process.env.RESEND_API_KEY || process.env.MAIL_RESEND_API_KEY,
   };
 });

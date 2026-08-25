@@ -1,7 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { I18nContext } from 'nestjs-i18n';
 import { MailData } from './interfaces/mail-data.interface';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 
 import { MaybeType } from '../utils/types/maybe.type';
 import { MailerService } from '../mailer/mailer.service';
@@ -12,10 +14,13 @@ import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class MailService {
+  private readonly logger = new Logger(MailService.name);
+
   constructor(
     private readonly mailerService: MailerService,
     private readonly configService: ConfigService<AllConfigType>,
     private readonly notificationsService: NotificationsService,
+    @Optional() @InjectQueue('mail') private readonly mailQueue?: Queue,
   ) {}
 
   /**
@@ -105,7 +110,7 @@ export class MailService {
     const emailSubject =
       '[Spider Express TMS] Khôi phục mật khẩu tài khoản / Reset Password';
 
-    await this.mailerService.sendMail({
+    const mailPayload = {
       to: mailData.to,
       subject: emailSubject,
       text: `${emailSubject} - ${url.toString()}`,
@@ -120,7 +125,28 @@ export class MailService {
         supportHotline: '1900-SPIDER',
         supportEmail: 'it-support@spiderexpress.vn',
       },
-    });
+    };
+
+    if (this.mailQueue) {
+      try {
+        await this.mailQueue.add('forgot-password', mailPayload, {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 },
+          removeOnComplete: 100,
+          removeOnFail: 50,
+        });
+        this.logger.log(
+          `📥 [MailQueue] Enqueued forgot-password email to "${mailData.to}" via BullMQ`,
+        );
+        return;
+      } catch (queueErr) {
+        this.logger.warn(
+          `⚠️ [MailQueue] Could not enqueue to Redis (${queueErr.message}). Falling back to direct SMTP.`,
+        );
+      }
+    }
+
+    await this.mailerService.sendMail(mailPayload);
   }
 
   async confirmNewEmail(mailData: MailData<{ hash: string }>): Promise<void> {

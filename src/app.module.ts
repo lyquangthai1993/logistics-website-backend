@@ -16,9 +16,11 @@ import fileConfig from './files/config/file.config';
 import facebookConfig from './auth-facebook/config/facebook.config';
 import googleConfig from './auth-google/config/google.config';
 import appleConfig from './auth-apple/config/apple.config';
+import redisConfig from './config/redis.config';
 import path from 'path';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BullModule } from '@nestjs/bullmq';
 import { AuthAppleModule } from './auth-apple/auth-apple.module';
 import { AuthFacebookModule } from './auth-facebook/auth-facebook.module';
 import { AuthGoogleModule } from './auth-google/auth-google.module';
@@ -63,8 +65,48 @@ const infrastructureDatabaseModule = (databaseConfig() as DatabaseConfig)
         facebookConfig,
         googleConfig,
         appleConfig,
+        redisConfig,
       ],
       envFilePath: ['.env'],
+    }),
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (configService: ConfigService<AllConfigType>) => {
+        const redisUrl = configService.get('redis.url', { infer: true });
+        const host = configService.get('redis.host', { infer: true });
+        const port = configService.get('redis.port', { infer: true });
+        const password = configService.get('redis.password', { infer: true });
+
+        if (redisUrl) {
+          return {
+            connection: {
+              url: redisUrl,
+              maxRetriesPerRequest: null,
+              enableReadyCheck: false,
+              retryStrategy(times) {
+                if (times > 3) return null;
+                return Math.min(times * 1000, 3000);
+              },
+            },
+          };
+        }
+
+        return {
+          connection: {
+            host: host || 'localhost',
+            port: port || 6379,
+            password: password || undefined,
+            maxRetriesPerRequest: null,
+            enableReadyCheck: false,
+            lazyConnect: true,
+            retryStrategy(times) {
+              if (times > 3) return null;
+              return Math.min(times * 1000, 3000);
+            },
+          },
+        };
+      },
+      inject: [ConfigService],
     }),
     infrastructureDatabaseModule,
     I18nModule.forRootAsync({

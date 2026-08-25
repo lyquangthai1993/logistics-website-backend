@@ -66,4 +66,12 @@ GOOGLE_CLIENT_SECRET=
 
 APPLE_APP_AUDIENCE=[]
 
+# REDIS CONFIGURATION (BullMQ Queue & Background Workers)
+# Format: redis://default:<password>@<host>:<port>
+REDIS_URL=
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+REDIS_ENABLED=false
+
 WORKER_HOST=redis://redis:6379/1
