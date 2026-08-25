@@ -100,9 +100,25 @@ export class MailerService {
       );
 
       try {
-        const recipients = Array.isArray(mailOptions.to)
+        let recipients = Array.isArray(mailOptions.to)
           ? (mailOptions.to as string[])
           : [String(mailOptions.to)];
+
+        // Nếu dùng Resend Sandbox (onboarding@resend.dev), tự động chuẩn hóa Gmail alias (+1, +2, +4...)
+        // về email gốc để vượt qua kiểm tra chuỗi nghiêm ngặt của Resend API sandbox
+        if (from.includes('onboarding@resend.dev')) {
+          recipients = recipients.map((r) => {
+            const match = r.match(/^([^@+]+)\+[^@]+@gmail\.com$/i);
+            if (match) {
+              const baseEmail = `${match[1]}@gmail.com`;
+              this.logger.log(
+                `🔄 [Mailer] [Resend Sandbox] Normalized alias "${r}" → "${baseEmail}"`,
+              );
+              return baseEmail;
+            }
+            return r;
+          });
+        }
 
         const { data, error } = await this.resend.emails.send({
           from,
