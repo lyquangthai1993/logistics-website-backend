@@ -16,11 +16,18 @@ import { CreateNotificationDto } from './dto/create-notification.dto';
 import { SendTestNotificationDto } from './dto/send-test-notification.dto';
 import { QueryNotificationDto } from './dto/query-notification.dto';
 import { AuthGuard } from '@nestjs/passport';
+import { Throttle } from '@nestjs/throttler';
 import { SilentResponse } from '../common/decorators/silent-response.decorator';
 
 @ApiTags('Notifications')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
+@Throttle({
+  default: {
+    limit: process.env.NODE_ENV === 'development' ? 1000 : 300,
+    ttl: 60000,
+  },
+})
 @Controller({
   path: 'notifications',
   version: '1',
