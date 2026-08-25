@@ -93,23 +93,6 @@ export class MailService {
   async forgotPassword(
     mailData: MailData<{ hash: string; tokenExpires: number }>,
   ): Promise<void> {
-    const i18n = I18nContext.current();
-    let resetPasswordTitle: MaybeType<string>;
-    let text1: MaybeType<string>;
-    let text2: MaybeType<string>;
-    let text3: MaybeType<string>;
-    let text4: MaybeType<string>;
-
-    if (i18n) {
-      [resetPasswordTitle, text1, text2, text3, text4] = await Promise.all([
-        i18n.t('common.resetPassword'),
-        i18n.t('reset-password.text1'),
-        i18n.t('reset-password.text2'),
-        i18n.t('reset-password.text3'),
-        i18n.t('reset-password.text4'),
-      ]);
-    }
-
     const url = new URL(
       this.configService.getOrThrow('app.frontendDomain', {
         infer: true,
@@ -119,7 +102,8 @@ export class MailService {
     url.searchParams.set('expires', mailData.data.tokenExpires.toString());
 
     const appName = 'SPIDER EXPRESS LOGISTICS TMS';
-    const emailSubject = '[Spider Express TMS] Khôi phục mật khẩu tài khoản / Reset Password';
+    const emailSubject =
+      '[Spider Express TMS] Khôi phục mật khẩu tài khoản / Reset Password';
 
     await this.mailerService.sendMail({
       to: mailData.to,

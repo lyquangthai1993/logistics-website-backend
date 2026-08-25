@@ -15,6 +15,7 @@ import {
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthEmailLoginDto } from './dto/auth-email-login.dto';
 import { AuthForgotPasswordDto } from './dto/auth-forgot-password.dto';
 import { AuthConfirmEmailDto } from './dto/auth-confirm-email.dto';
@@ -49,6 +50,7 @@ export class AuthController {
   @SerializeOptions({
     groups: ['me'],
   })
+  @Throttle({ auth: { limit: 10, ttl: 60000 } })
   @Post('email/login')
   @ApiOkResponse({
     type: LoginResponseDto,
@@ -63,6 +65,7 @@ export class AuthController {
     return data;
   }
 
+  @Throttle({ auth: { limit: 5, ttl: 60000 } })
   @Post('email/register')
   @HttpCode(HttpStatus.NO_CONTENT)
   async register(@Body() createUserDto: AuthRegisterLoginDto): Promise<void> {
@@ -85,11 +88,10 @@ export class AuthController {
     return this.service.confirmNewEmail(confirmEmailDto.hash);
   }
 
+  @Throttle({ auth: { limit: 5, ttl: 60000 } })
   @Post('forgot/password')
   @HttpCode(HttpStatus.OK)
-  async forgotPassword(
-    @Body() forgotPasswordDto: AuthForgotPasswordDto,
-  ) {
+  async forgotPassword(@Body() forgotPasswordDto: AuthForgotPasswordDto) {
     await this.service.forgotPassword(forgotPasswordDto.email);
     return {
       statusCode: 200,
@@ -98,6 +100,7 @@ export class AuthController {
     };
   }
 
+  @Throttle({ auth: { limit: 5, ttl: 60000 } })
   @Post('reset/password')
   @HttpCode(HttpStatus.OK)
   async resetPassword(@Body() resetPasswordDto: AuthResetPasswordDto) {

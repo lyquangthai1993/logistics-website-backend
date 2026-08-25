@@ -19,8 +19,7 @@ export class TestSendEmailDto {
   subject?: string;
 
   @ApiPropertyOptional({
-    example:
-      'Hệ thống Spider TMS đã cấu hình gửi mail thành công!',
+    example: 'Hệ thống Spider TMS đã cấu hình gửi mail thành công!',
     description: 'Nội dung thông điệp kiểm tra (tùy chọn)',
   })
   @IsOptional()

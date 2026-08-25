@@ -320,6 +320,15 @@ export class AuthService {
     const user = await this.usersService.findByEmail(email);
 
     if (!user) {
+      const uniformErrors = this.configService.get('auth.uniformErrors', {
+        infer: true,
+      });
+
+      if (uniformErrors) {
+        // Return gracefully to prevent account/email enumeration attacks
+        return;
+      }
+
       throw new UnprocessableEntityException({
         status: HttpStatus.UNPROCESSABLE_ENTITY,
         message:

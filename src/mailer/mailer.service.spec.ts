@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { MailerService } from './mailer.service';
 import { ConfigService } from '@nestjs/config';
-import nodemailer from 'nodemailer';
 
 // Mock nodemailer
 const mockSendMail = jest.fn();

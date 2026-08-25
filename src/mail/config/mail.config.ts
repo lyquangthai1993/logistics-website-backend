@@ -79,7 +79,8 @@ export default registerAs<MailConfig>('mail', () => {
     host: process.env.MAIL_HOST,
     user: process.env.MAIL_USER,
     password: process.env.MAIL_PASSWORD,
-    defaultEmail: process.env.MAIL_DEFAULT_EMAIL || 'no-reply@spiderexpress.com',
+    defaultEmail:
+      process.env.MAIL_DEFAULT_EMAIL || 'no-reply@spiderexpress.com',
     defaultName: process.env.MAIL_DEFAULT_NAME || 'Spider Express Logistics',
     ignoreTLS: process.env.MAIL_IGNORE_TLS === 'true',
     secure: process.env.MAIL_SECURE === 'true',
