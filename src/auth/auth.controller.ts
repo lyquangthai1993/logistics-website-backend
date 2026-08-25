@@ -50,7 +50,12 @@ export class AuthController {
   @SerializeOptions({
     groups: ['me'],
   })
-  @Throttle({ auth: { limit: 10, ttl: 60000 } })
+  @Throttle({
+    auth: {
+      limit: process.env.NODE_ENV === 'development' ? 200 : 10,
+      ttl: 60000,
+    },
+  })
   @Post('email/login')
   @ApiOkResponse({
     type: LoginResponseDto,

@@ -157,7 +157,7 @@ const infrastructureDatabaseModule = (databaseConfig() as DatabaseConfig)
       {
         name: 'auth',
         ttl: 60000, // 60 seconds
-        limit: 5, // 5 requests per minute for auth endpoints
+        limit: process.env.NODE_ENV === 'development' ? 200 : 10,
       },
     ]),
   ],
