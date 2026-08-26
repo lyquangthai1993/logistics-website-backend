@@ -146,4 +146,20 @@ describe('MailService', () => {
       );
     });
   });
+
+  describe('getQueueStatus', () => {
+    it('should return disabled status when mailQueue is not injected', async () => {
+      const status = await service.getQueueStatus();
+      expect(status.status).toBe('disabled');
+      expect(status.queue).toBeNull();
+    });
+  });
+
+  describe('cleanQueue', () => {
+    it('should return success=false when mailQueue is not injected', async () => {
+      const result = await service.cleanQueue();
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('not initialized');
+    });
+  });
 });

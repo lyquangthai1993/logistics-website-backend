@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
+import path from 'node:path';
 import { ConfigService } from '@nestjs/config';
 import nodemailer from 'nodemailer';
 import Handlebars from 'handlebars';
@@ -46,6 +48,38 @@ export class MailerService {
     }
   }
 
+  /**
+   * Dynamically resolves template file path across Windows/Linux/Docker environments.
+   * If a serialized job from another OS contains an absolute path that doesn't exist locally,
+   * this safely searches relative to current working directory and dist/src folders.
+   */
+  private resolveTemplatePath(inputPath: string): string {
+    if (fsSync.existsSync(inputPath)) {
+      return inputPath;
+    }
+    const fileName = path.basename(inputPath);
+    const workingDir =
+      this.configService.get('app.workingDirectory', { infer: true }) ||
+      process.cwd();
+
+    const candidates = [
+      path.join(__dirname, '..', 'mail', 'mail-templates', fileName),
+      path.join(workingDir, 'dist', 'mail', 'mail-templates', fileName),
+      path.join(process.cwd(), 'dist', 'mail', 'mail-templates', fileName),
+      path.join(workingDir, 'src', 'mail', 'mail-templates', fileName),
+      path.join(process.cwd(), 'src', 'mail', 'mail-templates', fileName),
+      path.join(__dirname, 'mail-templates', fileName),
+    ];
+
+    for (const candidate of candidates) {
+      if (fsSync.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    return inputPath;
+  }
+
   async sendMail({
     templatePath,
     context,
@@ -66,7 +100,8 @@ export class MailerService {
 
     let html: string | undefined;
     if (templatePath) {
-      const template = await fs.readFile(templatePath, 'utf-8');
+      const resolvedPath = this.resolveTemplatePath(templatePath);
+      const template = await fs.readFile(resolvedPath, 'utf-8');
       html = Handlebars.compile(template, {
         strict: true,
       })(context || {});

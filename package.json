@@ -41,11 +41,11 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:cov": "jest --coverage",
-    "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "env-cmd -- jest --config ./test/jest-e2e.json",
+    "test": "env-cmd -f .env.test -- jest",
+    "test:watch": "env-cmd -f .env.test -- jest --watch",
+    "test:cov": "env-cmd -f .env.test -- jest --coverage",
+    "test:debug": "env-cmd -f .env.test -- node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
+    "test:e2e": "env-cmd -f .env.test -- jest --config ./test/jest-e2e.json --runInBand --forceExit",
     "test:generators:relational": "bash test/generators/run-static.sh relational",
     "test:generators:document": "bash test/generators/run-static.sh document",
     "test:e2e:generators:relational:docker": "bash test/generators/run-crud-relational.sh",
@@ -162,7 +162,8 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "verbose": true
   },
   "engines": {
     "node": ">=16.0.0",

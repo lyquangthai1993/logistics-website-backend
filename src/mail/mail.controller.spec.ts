@@ -9,6 +9,28 @@ describe('MailController', () => {
   beforeEach(async () => {
     const mockMailService = {
       sendGenericNotification: jest.fn().mockResolvedValue(undefined),
+      getQueueStatus: jest.fn().mockResolvedValue({
+        enabled: true,
+        status: 'connected',
+        redis: { host: 'localhost', port: 6379, ping: 'PONG' },
+        queue: {
+          name: 'mail',
+          isPaused: false,
+          waiting: 0,
+          active: 0,
+          completed: 5,
+          failed: 0,
+          delayed: 0,
+        },
+        timestamp: '2026-08-26T02:50:00.000Z',
+      }),
+      cleanQueue: jest.fn().mockResolvedValue({
+        success: true,
+        message:
+          'Đã dọn dẹp hàng đợi BullMQ và làm sạch Redis thành công (10 -> 0 keys)',
+        cleared: { beforeKeys: 10, afterKeys: 0 },
+        timestamp: '2026-08-26T02:50:00.000Z',
+      }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -65,11 +87,32 @@ describe('MailController', () => {
         data: {
           title: 'Thông báo thử nghiệm gửi email - Spider TMS',
           message:
-            'Đây là email thử nghiệm được gửi từ hệ thống Spider TMS qua Resend API.',
+            'Đây là email thử nghiệm được gửi từ hệ thống Spider TMS qua SMTP Relay.',
           actionUrl: '/dashboard',
         },
       });
       expect(result.success).toBe(true);
+    });
+  });
+
+  describe('getQueueStatus', () => {
+    it('should return queue status from mailService.getQueueStatus', async () => {
+      const result = await controller.getQueueStatus();
+
+      expect(service.getQueueStatus).toHaveBeenCalled();
+      expect(result.status).toBe('connected');
+      expect(result.queue?.name).toBe('mail');
+    });
+  });
+
+  describe('cleanQueue', () => {
+    it('should call mailService.cleanQueue and return result', async () => {
+      const result = await controller.cleanQueue();
+
+      expect(service.cleanQueue).toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      expect(result.cleared.beforeKeys).toBe(10);
+      expect(result.cleared.afterKeys).toBe(0);
     });
   });
 });

@@ -86,6 +86,41 @@ describe('HubsService', () => {
       expect(result).toBeDefined();
     });
 
+    it('should successfully create a new hub with randomly generated data', async () => {
+      hubRepo.findOne.mockResolvedValue(null);
+
+      const randomSuffix = Math.random()
+        .toString(36)
+        .substring(2, 7)
+        .toUpperCase();
+      const cities = [
+        'Hải Phòng',
+        'Đà Nẵng',
+        'Cần Thơ',
+        'Bình Dương',
+        'Đồng Nai',
+        'Nha Trang',
+      ];
+      const randomCity = cities[Math.floor(Math.random() * cities.length)];
+      const randomPhone = `09${Math.floor(10000000 + Math.random() * 90000000)}`;
+
+      const randomDto = {
+        code: `HUB-RND-${randomSuffix}`,
+        name: `Kho Vận Tự Động ${randomCity} #${randomSuffix}`,
+        city: randomCity,
+        address: `Số ${Math.floor(Math.random() * 500) + 1} Đường Hậu Cần, ${randomCity}`,
+        contactPhone: randomPhone,
+        managerName: `Trưởng kho ${randomSuffix}`,
+      };
+
+      const result = await service.create(randomDto);
+
+      expect(hubRepo.create).toHaveBeenCalledWith(randomDto);
+      expect(result).toBeDefined();
+      expect(result.code).toBe(randomDto.code);
+      expect(result.name).toBe(randomDto.name);
+    });
+
     it('should throw ConflictException if hub code already exists', async () => {
       hubRepo.findOne.mockResolvedValue(mockHub);
       const dto = {

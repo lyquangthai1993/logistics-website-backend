@@ -37,6 +37,8 @@ lerna-debug.log*
 .data
 /files
 .env
+.env.*
+!.env.example
 .env.production
 /nginx/ssl
 /ormconfig.json

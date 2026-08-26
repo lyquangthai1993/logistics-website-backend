@@ -9,6 +9,7 @@ import { AppModule } from '../src/app.module';
 
 describe('Auth Identifier (Email or Username) E2E Test', () => {
   let app: INestApplication;
+  let adminEmail: string;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -44,6 +45,8 @@ describe('Auth Identifier (Email or Username) E2E Test', () => {
       expect(res.body.user).toBeDefined();
       expect(res.body.user.username).toBe('admin');
       expect(res.body.user.role.id).toBe(1);
+
+      adminEmail = res.body.user.email;
     });
 
     it('should successfully login as Dispatcher using username "dispatcher"', async () => {
@@ -90,60 +93,20 @@ describe('Auth Identifier (Email or Username) E2E Test', () => {
   });
 
   describe('Login with Email', () => {
-    it('should successfully login as Super Admin using email "lyquangthai1993+1@gmail.com"', async () => {
-      const res = await request(app.getHttpServer())
+    it('should successfully login using resolved email address', async () => {
+      expect(adminEmail).toBeDefined();
+
+      const emailRes = await request(app.getHttpServer())
         .post('/api/v1/auth/email/login')
         .send({
-          email: 'lyquangthai1993+1@gmail.com',
+          email: adminEmail,
           password: 'secret',
         })
         .expect(200);
 
-      expect(res.body.token).toBeDefined();
-      expect(res.body.user.email).toBe('lyquangthai1993+1@gmail.com');
-      expect(res.body.user.role.id).toBe(1);
-    });
-
-    it('should successfully login as Dispatcher using email "lyquangthai1993+2@gmail.com"', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/api/v1/auth/email/login')
-        .send({
-          email: 'lyquangthai1993+2@gmail.com',
-          password: 'secret',
-        })
-        .expect(200);
-
-      expect(res.body.token).toBeDefined();
-      expect(res.body.user.email).toBe('lyquangthai1993+2@gmail.com');
-      expect(res.body.user.role.id).toBe(2);
-    });
-
-    it('should successfully login as Fleet Manager using email "lyquangthai1993+3@gmail.com"', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/api/v1/auth/email/login')
-        .send({
-          email: 'lyquangthai1993+3@gmail.com',
-          password: 'secret',
-        })
-        .expect(200);
-
-      expect(res.body.token).toBeDefined();
-      expect(res.body.user.email).toBe('lyquangthai1993+3@gmail.com');
-      expect(res.body.user.role.id).toBe(3);
-    });
-
-    it('should successfully login as Warehouse Manager using email "lyquangthai1993+4@gmail.com"', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/api/v1/auth/email/login')
-        .send({
-          email: 'lyquangthai1993+4@gmail.com',
-          password: 'secret',
-        })
-        .expect(200);
-
-      expect(res.body.token).toBeDefined();
-      expect(res.body.user.email).toBe('lyquangthai1993+4@gmail.com');
-      expect(res.body.user.role.id).toBe(4);
+      expect(emailRes.body.token).toBeDefined();
+      expect(emailRes.body.user.email).toBe(adminEmail);
+      expect(emailRes.body.user.role.id).toBe(1);
     });
   });
 

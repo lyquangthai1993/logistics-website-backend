@@ -395,4 +395,135 @@ export class MailService {
       },
     });
   }
+
+  /**
+   * Lấy thông tin trạng thái kết nối Redis và thống kê hàng đợi BullMQ
+   */
+  async getQueueStatus() {
+    const isRedisEnabled =
+      this.configService.get('redis.enabled', { infer: true }) ?? false;
+    const redisHost = this.configService.get('redis.host', { infer: true });
+    const redisPort = this.configService.get('redis.port', { infer: true });
+
+    if (!this.mailQueue) {
+      return {
+        enabled: isRedisEnabled,
+        status: 'disabled',
+        message: 'Mail queue is not initialized or Redis is disabled.',
+        redis: {
+          host: redisHost,
+          port: redisPort,
+        },
+        queue: null,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
+    try {
+      const isPaused = await this.mailQueue.isPaused();
+      const waiting = await this.mailQueue.getWaitingCount();
+      const active = await this.mailQueue.getActiveCount();
+      const completed = await this.mailQueue.getCompletedCount();
+      const failed = await this.mailQueue.getFailedCount();
+      const delayed = await this.mailQueue.getDelayedCount();
+
+      return {
+        enabled: true,
+        status: 'connected',
+        redis: {
+          host: redisHost,
+          port: redisPort,
+          ping: 'PONG',
+        },
+        queue: {
+          name: 'mail',
+          isPaused,
+          waiting,
+          active,
+          completed,
+          failed,
+          delayed,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      return {
+        enabled: isRedisEnabled,
+        status: 'error',
+        message: (error as Error).message,
+        redis: {
+          host: redisHost,
+          port: redisPort,
+        },
+        memory: null,
+        queue: null,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * Dọn sạch toàn bộ jobs trong hàng đợi BullMQ và giải phóng các keys Redis
+   */
+  async cleanQueue(): Promise<{
+    success: boolean;
+    message: string;
+    cleared: { beforeKeys: number; afterKeys: number };
+    timestamp: string;
+  }> {
+    if (!this.mailQueue) {
+      return {
+        success: false,
+        message: 'Mail queue is not initialized or Redis is disabled.',
+        cleared: { beforeKeys: 0, afterKeys: 0 },
+        timestamp: new Date().toISOString(),
+      };
+    }
+
+    let beforeKeys = 0;
+    let afterKeys = 0;
+
+    try {
+      const client = await (this.mailQueue as any).backend?.client;
+      if (client && client.dbsize) {
+        beforeKeys = await client.dbsize();
+      }
+
+      // Xóa tất cả các trạng thái jobs trong BullMQ
+      await Promise.all([
+        this.mailQueue.clean(0, 10000, 'completed'),
+        this.mailQueue.clean(0, 10000, 'failed'),
+        this.mailQueue.clean(0, 10000, 'delayed'),
+        this.mailQueue.clean(0, 10000, 'wait'),
+      ]);
+      await this.mailQueue.drain(true);
+
+      // Nếu client hỗ trợ flushdb, thực thi dọn triệt để
+      if (client && client.flushdb) {
+        await client.flushdb();
+        afterKeys = await client.dbsize();
+      }
+
+      this.logger.log(
+        `🧹 [MailQueue] Redis cleaned successfully (before: ${beforeKeys}, after: ${afterKeys} keys)`,
+      );
+
+      return {
+        success: true,
+        message: `Đã dọn dẹp hàng đợi BullMQ và làm sạch Redis thành công (${beforeKeys} -> ${afterKeys} keys)`,
+        cleared: { beforeKeys, afterKeys },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      this.logger.error(
+        `❌ [MailQueue] Failed to clean Redis: ${(error as Error).message}`,
+      );
+      return {
+        success: false,
+        message: `Lỗi khi dọn dẹp Redis: ${(error as Error).message}`,
+        cleared: { beforeKeys, afterKeys },
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
 }

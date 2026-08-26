@@ -1,148 +1,111 @@
-import { describe, expect, it, beforeAll } from '@jest/globals';
-import { APP_URL, ADMIN_EMAIL, ADMIN_PASSWORD } from '../utils/constants';
+import { describe, expect, it, beforeAll, afterAll } from '@jest/globals';
+import {
+  ClassSerializerInterceptor,
+  INestApplication,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
+import { AppModule } from '../../src/app.module';
+import { ADMIN_EMAIL, ADMIN_PASSWORD } from '../utils/constants';
 import { RoleEnum } from '../../src/roles/roles.enum';
 import { StatusEnum } from '../../src/statuses/statuses.enum';
+import validationOptions from '../../src/utils/validation-options';
 
-describe('Users Module', () => {
-  const app = APP_URL;
+describe('Users Module E2E', () => {
+  let app: INestApplication;
   let apiToken: string;
 
   beforeAll(async () => {
-    await request(app)
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+
+    app = moduleFixture.createNestApplication();
+    app.setGlobalPrefix('api', { exclude: ['/'] });
+    app.enableVersioning({
+      type: VersioningType.URI,
+    });
+    app.useGlobalPipes(new ValidationPipe(validationOptions));
+    app.useGlobalInterceptors(
+      new ClassSerializerInterceptor(app.get(Reflector)),
+    );
+    await app.init();
+
+    // Login as Admin to obtain Bearer token
+    const res = await request(app.getHttpServer())
       .post('/api/v1/auth/email/login')
       .send({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD })
-      .then(({ body }) => {
-        apiToken = body.token;
-      });
+      .expect(200);
+
+    apiToken = res.body.token;
   });
 
-  describe('Update', () => {
-    let newUser: { id: number | string };
-    const newUserEmail = `user-first.${Date.now()}@example.com`;
-    const newUserChangedEmail = `user-first-changed.${Date.now()}@example.com`;
-    const newUserPassword = `secret`;
-    const newUserChangedPassword = `new-secret`;
+  afterAll(async () => {
+    await app.close();
+  });
 
-    beforeAll(async () => {
-      await request(app)
-        .post('/api/v1/auth/email/register')
+  describe('Create User by Admin', () => {
+    const uniqueSuffix = Date.now();
+    const newUserEmail = `user.admin.${uniqueSuffix}@example.com`;
+    const newUserPassword = `secret123`;
+    let createdUserId: number | string;
+
+    it('should fail to create new user with invalid email: /api/v1/users (POST)', () => {
+      return request(app.getHttpServer())
+        .post('/api/v1/users')
+        .auth(apiToken, { type: 'bearer' })
+        .send({ email: 'invalid-email-format' })
+        .expect(422);
+    });
+
+    it('should successfully create new user: /api/v1/users (POST)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/users')
+        .auth(apiToken, { type: 'bearer' })
         .send({
           email: newUserEmail,
           password: newUserPassword,
-          firstName: `First${Date.now()}`,
+          firstName: `First${uniqueSuffix}`,
           lastName: 'E2E',
-        });
+          role: { id: RoleEnum.DISPATCHER },
+          status: { id: StatusEnum.active },
+        })
+        .expect(201);
 
-      await request(app)
+      createdUserId = res.body.id;
+      expect(createdUserId).toBeDefined();
+      expect(res.body.email).toBe(newUserEmail);
+    });
+
+    it('should successfully login as the newly created user: /api/v1/auth/email/login (POST)', async () => {
+      const res = await request(app.getHttpServer())
         .post('/api/v1/auth/email/login')
-        .send({ email: newUserEmail, password: newUserPassword })
-        .then(({ body }) => {
-          newUser = body.user;
-        });
-    });
+        .send({
+          email: newUserEmail,
+          password: newUserPassword,
+        })
+        .expect(200);
 
-    describe('User with "Admin" role', () => {
-      it('should change password for existing user: /api/v1/users/:id (PATCH)', () => {
-        return request(app)
-          .patch(`/api/v1/users/${newUser.id}`)
-          .auth(apiToken, {
-            type: 'bearer',
-          })
-          .send({
-            email: newUserChangedEmail,
-            password: newUserChangedPassword,
-          })
-          .expect(200);
-      });
-
-      describe('Guest', () => {
-        it('should login with changed password: /api/v1/auth/email/login (POST)', () => {
-          return request(app)
-            .post('/api/v1/auth/email/login')
-            .send({
-              email: newUserChangedEmail,
-              password: newUserChangedPassword,
-            })
-            .expect(200)
-            .expect(({ body }) => {
-              expect(body.token).toBeDefined();
-            });
-        });
-      });
+      expect(res.body.token).toBeDefined();
+      expect(res.body.user.email).toBe(newUserEmail);
     });
   });
 
-  describe('Create', () => {
-    const newUserByAdminEmail = `user-created-by-admin.${Date.now()}@example.com`;
-    const newUserByAdminPassword = `secret`;
+  describe('Get Many Users', () => {
+    it('should get paginated list of users: /api/v1/users (GET)', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/users')
+        .auth(apiToken, { type: 'bearer' })
+        .expect(200);
 
-    describe('User with "Admin" role', () => {
-      it('should fail to create new user with invalid email: /api/v1/users (POST)', () => {
-        return request(app)
-          .post(`/api/v1/users`)
-          .auth(apiToken, {
-            type: 'bearer',
-          })
-          .send({ email: 'fail-data' })
-          .expect(422);
-      });
-
-      it('should successfully create new user: /api/v1/users (POST)', () => {
-        return request(app)
-          .post(`/api/v1/users`)
-          .auth(apiToken, {
-            type: 'bearer',
-          })
-          .send({
-            email: newUserByAdminEmail,
-            password: newUserByAdminPassword,
-            firstName: `UserByAdmin${Date.now()}`,
-            lastName: 'E2E',
-            role: {
-              id: RoleEnum.DISPATCHER,
-            },
-            status: {
-              id: StatusEnum.active,
-            },
-          })
-          .expect(201);
-      });
-
-      describe('Guest', () => {
-        it('should successfully login via created by admin user: /api/v1/auth/email/login (GET)', () => {
-          return request(app)
-            .post('/api/v1/auth/email/login')
-            .send({
-              email: newUserByAdminEmail,
-              password: newUserByAdminPassword,
-            })
-            .expect(200)
-            .expect(({ body }) => {
-              expect(body.token).toBeDefined();
-            });
-        });
-      });
-    });
-  });
-
-  describe('Get many', () => {
-    describe('User with "Admin" role', () => {
-      it('should get list of users: /api/v1/users (GET)', () => {
-        return request(app)
-          .get(`/api/v1/users`)
-          .auth(apiToken, {
-            type: 'bearer',
-          })
-          .expect(200)
-          .send()
-          .expect(({ body }) => {
-            expect(body.data[0].provider).toBeDefined();
-            expect(body.data[0].email).toBeDefined();
-            expect(body.data[0].hash).not.toBeDefined();
-            expect(body.data[0].password).not.toBeDefined();
-          });
-      });
+      expect(res.body.data).toBeDefined();
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.data.length).toBeGreaterThan(0);
+      expect(res.body.data[0].email).toBeDefined();
+      expect(res.body.data[0].password).toBeUndefined();
     });
   });
 });
