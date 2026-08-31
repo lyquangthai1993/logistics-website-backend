@@ -6,12 +6,15 @@ import bcrypt from 'bcryptjs';
 import { RoleEnum } from '../../../../roles/roles.enum';
 import { StatusEnum } from '../../../../statuses/statuses.enum';
 import { UserEntity } from '../../../../users/infrastructure/persistence/relational/entities/user.entity';
+import { HubEntity } from '../../../../hubs/infrastructure/persistence/relational/entities/hub.entity';
 
 @Injectable()
 export class UserSeedService {
   constructor(
     @InjectRepository(UserEntity)
     private readonly repository: Repository<UserEntity>,
+    @InjectRepository(HubEntity)
+    private readonly hubRepository: Repository<HubEntity>,
   ) {}
 
   async run() {
@@ -27,6 +30,7 @@ export class UserSeedService {
         ],
         roleId: RoleEnum.SUPER_ADMIN,
         roleName: 'Super Admin',
+        hubCode: null,
       },
       {
         username: 'dispatcher',
@@ -39,6 +43,7 @@ export class UserSeedService {
         ],
         roleId: RoleEnum.DISPATCHER,
         roleName: 'Dispatcher',
+        hubCode: 'HUB-HAN-01',
       },
       {
         username: 'fleet',
@@ -51,6 +56,7 @@ export class UserSeedService {
         ],
         roleId: RoleEnum.FLEET_MANAGER,
         roleName: 'Fleet Manager',
+        hubCode: 'HUB-DAD-01',
       },
       {
         username: 'warehouse',
@@ -63,6 +69,7 @@ export class UserSeedService {
         ],
         roleId: RoleEnum.WAREHOUSE_MANAGER,
         roleName: 'Warehouse Manager',
+        hubCode: 'HUB-SGN-01',
       },
     ];
 
@@ -70,6 +77,14 @@ export class UserSeedService {
     const password = await bcrypt.hash('secret', salt);
 
     for (const u of seedUsers) {
+      const hub = u.hubCode
+        ? await this.hubRepository.findOne({ where: { code: u.hubCode } })
+        : null;
+
+      if (u.hubCode && !hub) {
+        throw new Error(`Seed hub not found: ${u.hubCode}`);
+      }
+
       // Find existing user by username, new email, or legacy emails
       const searchConditions: Array<{ username?: string; email?: string }> = [
         { username: u.username },
@@ -95,6 +110,7 @@ export class UserSeedService {
           id: StatusEnum.active,
           name: 'Active',
         } as any;
+        user.hubId = hub?.id ?? null;
         await this.repository.save(user);
       } else {
         await this.repository.save(
@@ -112,6 +128,7 @@ export class UserSeedService {
               id: StatusEnum.active,
               name: 'Active',
             },
+            hubId: hub?.id ?? null,
           }),
         );
       }

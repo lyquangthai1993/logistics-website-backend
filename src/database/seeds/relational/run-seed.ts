@@ -13,8 +13,8 @@ const runSeed = async () => {
   // run
   await app.get(RoleSeedService).run();
   await app.get(StatusSeedService).run();
-  await app.get(UserSeedService).run();
   await app.get(HubSeedService).run();
+  await app.get(UserSeedService).run();
   await app.get(VehicleSeedService).run();
   await app.get(DriverSeedService).run();
 
