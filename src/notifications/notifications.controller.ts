@@ -45,8 +45,10 @@ export class NotificationsController {
 
   @Post('send-test')
   @ApiOperation({
-    summary: 'Gửi notification thử nghiệm trực tiếp qua WebSocket (Swagger UI & E2E Test)',
-    description: 'Nhận vào userId, title và message, tự động lưu DB và bắn Socket.IO real-time tới client đang mở',
+    summary:
+      'Gửi notification thử nghiệm trực tiếp qua WebSocket (Swagger UI & E2E Test)',
+    description:
+      'Nhận vào userId, title và message, tự động lưu DB và bắn Socket.IO real-time tới client đang mở',
   })
   sendTestNotification(@Body() dto: SendTestNotificationDto) {
     return this.notificationsService.create({
