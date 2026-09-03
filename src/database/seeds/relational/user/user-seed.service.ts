@@ -59,13 +59,44 @@ export class UserSeedService {
         hubCode: 'HUB-DAD-01',
       },
       {
-        username: 'warehouse',
+        username: 'warehouse_han',
         firstName: 'Quản lý',
-        lastName: 'Kho',
+        lastName: 'Kho Hà Nội',
         email: 'lyquangthai1993+4@gmail.com',
+        legacyUsernames: ['warehouse', 'warehouse_han'],
         legacyEmails: [
           'warehouse@spiderexpress.vn',
           'lyquangthai1993+warehouse@gmail.com',
+          'warehouse_han@spiderexpress.vn',
+          'lyquangthai1993+warehouse_han@gmail.com',
+        ],
+        roleId: RoleEnum.WAREHOUSE_MANAGER,
+        roleName: 'Warehouse Manager',
+        hubCode: 'HUB-HAN-01',
+      },
+      {
+        username: 'warehouse_dad',
+        firstName: 'Quản lý',
+        lastName: 'Kho Đà Nẵng',
+        email: 'lyquangthai1993+5@gmail.com',
+        legacyUsernames: ['warehouse_dad'],
+        legacyEmails: [
+          'warehouse_dad@spiderexpress.vn',
+          'lyquangthai1993+warehouse_dad@gmail.com',
+        ],
+        roleId: RoleEnum.WAREHOUSE_MANAGER,
+        roleName: 'Warehouse Manager',
+        hubCode: 'HUB-DAD-01',
+      },
+      {
+        username: 'warehouse_sgn',
+        firstName: 'Quản lý',
+        lastName: 'Kho Sài Gòn',
+        email: 'lyquangthai1993+6@gmail.com',
+        legacyUsernames: ['warehouse_sgn'],
+        legacyEmails: [
+          'warehouse_sgn@spiderexpress.vn',
+          'lyquangthai1993+warehouse_sgn@gmail.com',
         ],
         roleId: RoleEnum.WAREHOUSE_MANAGER,
         roleName: 'Warehouse Manager',
@@ -85,9 +116,12 @@ export class UserSeedService {
         throw new Error(`Seed hub not found: ${u.hubCode}`);
       }
 
-      // Find existing user by username, new email, or legacy emails
+      // Find existing user by username, legacy usernames, new email, or legacy emails
       const searchConditions: Array<{ username?: string; email?: string }> = [
         { username: u.username },
+        ...((u as any).legacyUsernames || []).map((lu: string) => ({
+          username: lu,
+        })),
         { email: u.email },
         ...u.legacyEmails.map((legacy) => ({ email: legacy })),
       ];
