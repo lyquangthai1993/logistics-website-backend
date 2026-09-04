@@ -12,5 +12,8 @@ AppDataSource.initialize()
   .catch((err) => { console.error('❌ Migration failed:', err); process.exit(1); });
 "
 
+echo "▶ Running database seeds..."
+node dist/database/seeds/relational/run-seed.js || echo "⚠️ Seed skipped or encountered non-fatal error"
+
 echo "▶ Starting NestJS server..."
 exec node dist/main

@@ -21,10 +21,12 @@ export class VehicleSeedService {
       return found ? found.id : null;
     };
 
-    const hanHubId = findHubId('HUB-HAN-01');
+    const hcmHubId = findHubId('HUB-HCM-01');
     const dadHubId = findHubId('HUB-DAD-01');
-    const sgnHubId = findHubId('HUB-SGN-01');
-    const vthHubId = findHubId('HUB-VTH-01');
+    const hynHubId = findHubId('HUB-HYN-01');
+    const boHcmHubId = findHubId('HUB-BO-HCM-01');
+    const boDadHubId = findHubId('HUB-BO-DAD-01');
+    const boHynHubId = findHubId('HUB-BO-HYN-01');
 
     const seedVehicles = [
       {
@@ -33,8 +35,8 @@ export class VehicleSeedService {
         type: 'CONTAINER_40FT',
         maxWeight: 32000,
         maxVolume: 76.5,
-        currentHub: 'Andromeda Hub (Hà Nội)',
-        hubId: hanHubId,
+        currentHub: 'Andromeda Hub - HCM',
+        hubId: hcmHubId,
         status: 'AVAILABLE',
       },
       {
@@ -43,7 +45,7 @@ export class VehicleSeedService {
         type: 'TRUCK_8T',
         maxWeight: 8000,
         maxVolume: 42.0,
-        currentHub: 'Magellan Hub (Đà Nẵng)',
+        currentHub: 'Magellan Hub - Đà Nẵng',
         hubId: dadHubId,
         status: 'IN_USE',
       },
@@ -53,8 +55,8 @@ export class VehicleSeedService {
         type: 'TRUCK_5T',
         maxWeight: 5000,
         maxVolume: 28.5,
-        currentHub: 'Centaurus Hub (TP.HCM)',
-        hubId: sgnHubId,
+        currentHub: 'Polaris Hub - Hưng Yên',
+        hubId: hynHubId,
         status: 'AVAILABLE',
       },
       {
@@ -63,9 +65,29 @@ export class VehicleSeedService {
         type: 'CONTAINER_20FT',
         maxWeight: 15000,
         maxVolume: 38.0,
-        currentHub: 'Pegasus Hub (Cần Thơ)',
-        hubId: vthHubId,
-        status: 'MAINTENANCE',
+        currentHub: 'Xe bo HCM',
+        hubId: boHcmHubId,
+        status: 'AVAILABLE',
+      },
+      {
+        licensePlate: '43C-333.11',
+        model: 'Thaco Towner 800',
+        type: 'TRUCK_5T',
+        maxWeight: 3500,
+        maxVolume: 18.0,
+        currentHub: 'Xe bo Đà Nẵng',
+        hubId: boDadHubId,
+        status: 'AVAILABLE',
+      },
+      {
+        licensePlate: '89C-555.22',
+        model: 'Suzuki Carry Pro',
+        type: 'TRUCK_5T',
+        maxWeight: 2500,
+        maxVolume: 14.0,
+        currentHub: 'Xe bo Hưng Yên',
+        hubId: boHynHubId,
+        status: 'AVAILABLE',
       },
     ];
 
@@ -76,9 +98,13 @@ export class VehicleSeedService {
 
       if (!existing) {
         await this.repository.save(this.repository.create(v));
-      } else if (!existing.hubId && v.hubId) {
+      } else {
         existing.hubId = v.hubId;
         existing.currentHub = v.currentHub;
+        existing.model = v.model;
+        existing.type = v.type;
+        existing.maxWeight = v.maxWeight;
+        existing.maxVolume = v.maxVolume;
         await this.repository.save(existing);
       }
     }

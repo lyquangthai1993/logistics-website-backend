@@ -12,27 +12,11 @@ export class HubSeedService {
 
   async run() {
     const seedHubs = [
+      // ── Hub Cấp 1 (Main Hubs) ──
       {
-        code: 'HUB-HAN-01',
-        name: 'Andromeda Hub (Hà Nội)',
-        city: 'Hà Nội',
-        address: 'KCN Bắc Thăng Long, Huyện Đông Anh, TP. Hà Nội',
-        contactPhone: '024-3886-1234',
-        managerName: 'Nguyễn Văn Quản',
-        isActive: true,
-      },
-      {
-        code: 'HUB-DAD-01',
-        name: 'Magellan Hub (Đà Nẵng)',
-        city: 'Đà Nẵng',
-        address: 'KCN Hòa Khánh, Quận Liên Chiểu, TP. Đà Nẵng',
-        contactPhone: '0236-3732-555',
-        managerName: 'Trần Đình Kho',
-        isActive: true,
-      },
-      {
-        code: 'HUB-SGN-01',
-        name: 'Centaurus Hub (TP.HCM)',
+        code: 'HUB-HCM-01',
+        legacyCodes: ['HUB-SGN-01'],
+        name: 'Andromeda Hub - HCM',
         city: 'TP. Hồ Chí Minh',
         address: 'Khu Công Nghệ Cao, TP. Thủ Đức, TP. Hồ Chí Minh',
         contactPhone: '028-3736-8888',
@@ -40,32 +24,92 @@ export class HubSeedService {
         isActive: true,
       },
       {
-        code: 'HUB-VTH-01',
-        name: 'Pegasus Hub (Cần Thơ)',
-        city: 'Cần Thơ',
-        address: 'KCN Trà Nóc 1, Quận Bình Thủy, TP. Cần Thơ',
-        contactPhone: '0292-3841-222',
-        managerName: 'Phạm Minh Đức',
+        code: 'HUB-DAD-01',
+        legacyCodes: ['HUB-DAD-01'],
+        name: 'Magellan Hub - Đà Nẵng',
+        city: 'Đà Nẵng',
+        address: 'KCN Hòa Khánh, Quận Liên Chiểu, TP. Đà Nẵng',
+        contactPhone: '0236-3732-555',
+        managerName: 'Trần Đình Kho',
         isActive: true,
       },
       {
-        code: 'HUB-HPH-01',
-        name: 'Vela Hub (Hải Phòng)',
-        city: 'Hải Phòng',
-        address: 'KCN Đình Vũ, Quận Hải An, TP. Hải Phòng',
-        contactPhone: '0225-3979-666',
-        managerName: 'Hoàng Hải Cảng',
+        code: 'HUB-HYN-01',
+        legacyCodes: ['HUB-HAN-01'],
+        name: 'Polaris Hub - Hưng Yên',
+        city: 'Hưng Yên',
+        address: 'KCN Thăng Long II, Huyện Mỹ Hào, Tỉnh Hưng Yên',
+        contactPhone: '0221-3974-888',
+        managerName: 'Nguyễn Văn Quản',
+        isActive: true,
+      },
+      // ── Hub Cấp 2 (Xe Bo / Điểm Trung Chuyển Vệ Tinh) ──
+      {
+        code: 'HUB-BO-HCM-01',
+        legacyCodes: [],
+        name: 'Xe bo HCM',
+        city: 'TP. Hồ Chí Minh',
+        address: 'Điểm trung chuyển phân tán TP. Hồ Chí Minh',
+        contactPhone: '028-3736-9999',
+        managerName: 'Tài Xế Bo HCM',
+        isActive: true,
+      },
+      {
+        code: 'HUB-BO-DAD-01',
+        legacyCodes: [],
+        name: 'Xe bo Đà Nẵng',
+        city: 'Đà Nẵng',
+        address: 'Điểm trung chuyển phân tán Đà Nẵng',
+        contactPhone: '0236-3732-999',
+        managerName: 'Tài Xế Bo Đà Nẵng',
+        isActive: true,
+      },
+      {
+        code: 'HUB-BO-HYN-01',
+        legacyCodes: [],
+        name: 'Xe bo Hưng Yên',
+        city: 'Hưng Yên',
+        address: 'Điểm trung chuyển phân tán Hưng Yên',
+        contactPhone: '0221-3974-999',
+        managerName: 'Tài Xế Bo Hưng Yên',
         isActive: true,
       },
     ];
 
     for (const h of seedHubs) {
-      const count = await this.repository.count({
-        where: { code: h.code },
+      const searchConditions: Array<{ code?: string; name?: string }> = [
+        { code: h.code },
+        ...(h.legacyCodes || []).map((lc: string) => ({
+          code: lc,
+        })),
+        { name: h.name },
+      ];
+
+      const existing = await this.repository.findOne({
+        where: searchConditions,
       });
 
-      if (!count) {
-        await this.repository.save(this.repository.create(h));
+      if (existing) {
+        existing.code = h.code;
+        existing.name = h.name;
+        existing.city = h.city;
+        existing.address = h.address;
+        existing.contactPhone = h.contactPhone;
+        existing.managerName = h.managerName;
+        existing.isActive = h.isActive;
+        await this.repository.save(existing);
+      } else {
+        await this.repository.save(
+          this.repository.create({
+            code: h.code,
+            name: h.name,
+            city: h.city,
+            address: h.address,
+            contactPhone: h.contactPhone,
+            managerName: h.managerName,
+            isActive: h.isActive,
+          }),
+        );
       }
     }
   }
