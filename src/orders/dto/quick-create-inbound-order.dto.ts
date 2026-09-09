@@ -24,20 +24,20 @@ export class QuickCreateInboundOrderDto {
 
   @ApiProperty({ example: 50, description: 'Số thùng / số kiện' })
   @IsNotEmpty({ message: 'Số thùng/kiện không được để trống' })
-  @IsInt()
+  @IsInt({ message: 'Số thùng/kiện phải là số nguyên' })
   @Min(1, { message: 'Số thùng/kiện phải lớn hơn hoặc bằng 1' })
   totalQuantity: number;
 
   @ApiProperty({ example: 1250, description: 'Số kg (Gross Weight)' })
   @IsNotEmpty({ message: 'Số kg không được để trống' })
-  @IsNumber()
-  @IsPositive({ message: 'Số kg phải lớn hơn 0' })
+  @IsNumber({}, { message: 'Số kg phải là số' })
+  @Min(0, { message: 'Số kg phải lớn hơn hoặc bằng 0' })
   totalWeight: number;
 
   @ApiProperty({ example: 4.5, description: 'Số khối (m³ / CBM)' })
   @IsNotEmpty({ message: 'Số khối m³ không được để trống' })
-  @IsNumber()
-  @IsPositive({ message: 'Số khối phải lớn hơn 0' })
+  @IsNumber({}, { message: 'Số khối m³ phải là số' })
+  @Min(0, { message: 'Số khối phải lớn hơn hoặc bằng 0' })
   totalVolume: number;
 
   @ApiPropertyOptional({ example: 'KCN Thăng Long II, Hưng Yên' })
