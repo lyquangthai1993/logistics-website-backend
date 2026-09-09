@@ -106,8 +106,8 @@ export class WarehouseService {
     const countsRaw = await countQb
       .select([
         `COUNT(order.id) as "totalCount"`,
-        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO') THEN 1 END) as "storedCount"`,
-        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') THEN 1 END) as "draftCount"`,
+        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE') THEN 1 END) as "storedCount"`,
+        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING') THEN 1 END) as "draftCount"`,
       ])
       .getRawOne();
 
@@ -121,20 +121,21 @@ export class WarehouseService {
       switch (statusUpper) {
         case 'INBOUND':
         case 'STORED':
-          qb.andWhere("order.status IN ('INBOUND', 'STORED', 'LUU_KHO')");
+        case 'IN_WAREHOUSE':
+          qb.andWhere("order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE')");
           break;
         case 'WAITING':
         case 'DRAFT':
-          qb.andWhere("order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND')");
+          qb.andWhere("order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING')");
           break;
         case 'CUSTOMER':
           qb.andWhere(
-            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND order.orderCode NOT LIKE 'TRIP%'",
+            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING') AND NOT ((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub) OR EXISTS (SELECT 1 FROM trip t WHERE t.\"orderId\" = order.id AND t.\"deletedAt\" IS NULL))",
           );
           break;
         case 'TRANSFER':
           qb.andWhere(
-            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND order.orderCode LIKE 'TRIP%'",
+            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING') AND (((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub)) OR EXISTS (SELECT 1 FROM trip t WHERE t.\"orderId\" = order.id AND t.\"deletedAt\" IS NULL))",
           );
           break;
         case 'COMPLETED_INBOUND':
@@ -143,7 +144,7 @@ export class WarehouseService {
           );
           break;
         case 'PENDING_INBOUND':
-          qb.andWhere('order.status = :st', { st: 'PENDING_INBOUND' });
+          qb.andWhere("order.status IN ('PENDING_INBOUND', 'WAITING')");
           break;
         default:
           qb.andWhere('order.status = :st', { st: query.status });
@@ -329,11 +330,11 @@ export class WarehouseService {
       .createQueryBuilder('order')
       .select([
         `COUNT(order.id) as "total"`,
-        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') THEN 1 END) as "waitingInbound"`,
-        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND order.orderCode NOT LIKE 'TRIP%' THEN 1 END) as "customerInbound"`,
-        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND order.orderCode LIKE 'TRIP%' THEN 1 END) as "transferInbound"`,
-        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO') THEN 1 END) as "storedInbound"`,
-        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'DRAFT', 'PENDING_FLEET') THEN 1 END) as "waitingOutbound"`,
+        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING') THEN 1 END) as "waitingInbound"`,
+        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING') AND NOT ((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub) OR EXISTS (SELECT 1 FROM trip t WHERE t.\"orderId\" = order.id AND t.\"deletedAt\" IS NULL)) THEN 1 END) as "customerInbound"`,
+        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING') AND (((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub)) OR EXISTS (SELECT 1 FROM trip t WHERE t.\"orderId\" = order.id AND t.\"deletedAt\" IS NULL)) THEN 1 END) as "transferInbound"`,
+        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE') THEN 1 END) as "storedInbound"`,
+        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE', 'DRAFT', 'PENDING_FLEET') THEN 1 END) as "waitingOutbound"`,
         `COUNT(CASE WHEN order.status IN ('COMPLETED_INBOUND', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED_OUTBOUND') AND order.updatedAt >= CURRENT_DATE THEN 1 END) as "completedOutboundToday"`,
       ])
       .where('order.deletedAt IS NULL');
@@ -406,14 +407,14 @@ export class WarehouseService {
     const formatted = trips.map((t) => ({
       id: t.id,
       tripCode: `TRIP-${t.id}`,
-      vehicleLicensePlate: t.licensePlate || '50H-756.14',
-      driverName: t.driverName || 'Phạm Thành Trung',
-      status: t.status || 'CONFIRMED',
-      originHub: t.order?.originHub || 'Andromeda Hub (Hà Nội)',
-      destinationHub: t.order?.destinationHub || 'Polaris Hub (Hưng Yên)',
-      remainingOrdersCount: t.order ? 1 : 5,
-      totalWeight: Number(t.order?.totalWeight) || 3800,
-      totalVolume: Number(t.order?.totalVolume) || 12.5,
+      vehicleLicensePlate: t.licensePlate || '',
+      driverName: t.driverName || '',
+      status: t.status || 'PENDING',
+      originHub: t.order?.originHub || '',
+      destinationHub: t.order?.destinationHub || '',
+      remainingOrdersCount: t.order ? 1 : 0,
+      totalWeight: Number(t.weightAllocated ?? t.order?.totalWeight ?? 0),
+      totalVolume: Number(t.volumeAllocated ?? t.order?.totalVolume ?? 0),
       order: t.order,
     }));
 
