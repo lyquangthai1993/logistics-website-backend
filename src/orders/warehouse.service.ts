@@ -83,16 +83,35 @@ export class WarehouseService {
     // Status Filter (LƯU KHO = INBOUND, ĐÃ XUẤT KHO = COMPLETED_INBOUND)
     if (query?.status && query.status !== 'ALL') {
       const statusUpper = query.status.toUpperCase();
-      if (statusUpper === 'LƯU KHO' || statusUpper === 'INBOUND' || statusUpper === 'LUU_KHO') {
+      if (
+        statusUpper === 'LƯU KHO' ||
+        statusUpper === 'INBOUND' ||
+        statusUpper === 'LUU_KHO' ||
+        statusUpper === 'STORED'
+      ) {
         qb.andWhere('order.status = :st', { st: 'INBOUND' });
-      } else if (statusUpper === 'DRAFT') {
-        qb.andWhere('order.status = :st', { st: 'DRAFT' });
+      } else if (
+        statusUpper === 'DRAFT' ||
+        statusUpper === 'WAITING' ||
+        statusUpper === 'CHO_NHAP'
+      ) {
+        qb.andWhere("order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND')");
+      } else if (statusUpper === 'CUSTOMER' || statusUpper === 'KHACH_GUI') {
+        qb.andWhere(
+          "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'CUSTOMER' OR order.orderCode NOT LIKE 'TRIP%')",
+        );
+      } else if (statusUpper === 'TRANSFER' || statusUpper === 'LUAN_CHUYEN') {
+        qb.andWhere(
+          "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'TRANSFER' OR order.orderCode LIKE 'TRIP%')",
+        );
       } else if (
         statusUpper === 'ĐÃ XUẤT KHO' ||
         statusUpper === 'COMPLETED_INBOUND' ||
         statusUpper === 'DA_XUAT_KHO'
       ) {
-        qb.andWhere("order.status IN ('COMPLETED_INBOUND', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED_OUTBOUND')");
+        qb.andWhere(
+          "order.status IN ('COMPLETED_INBOUND', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED_OUTBOUND')",
+        );
       } else if (statusUpper === 'PENDING_INBOUND') {
         qb.andWhere('order.status = :st', { st: 'PENDING_INBOUND' });
       } else {
@@ -113,12 +132,19 @@ export class WarehouseService {
 
     const [data, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
-    // Summary totals of matched orders
-    const totals = await qb
-      .select('SUM(order.totalQuantity)', 'sumQty')
-      .addSelect('SUM(order.totalWeight)', 'sumWeight')
-      .addSelect('SUM(order.totalVolume)', 'sumVolume')
-      .getRawOne();
+    // Summary totals of current dataset
+    const totalQuantity = data.reduce(
+      (sum, item) => sum + (Number(item.totalQuantity) || 0),
+      0,
+    );
+    const totalWeight = data.reduce(
+      (sum, item) => sum + (Number(item.totalWeight) || 0),
+      0,
+    );
+    const totalVolume = data.reduce(
+      (sum, item) => sum + (Number(item.totalVolume) || 0),
+      0,
+    );
 
     return {
       data,
@@ -127,9 +153,9 @@ export class WarehouseService {
         page,
         limit,
         totalPages: Math.ceil(total / limit) || 1,
-        totalQuantity: Number(totals?.sumQty) || 0,
-        totalWeight: Number(totals?.sumWeight) || 0,
-        totalVolume: Number(totals?.sumVolume) || 0,
+        totalQuantity,
+        totalWeight,
+        totalVolume,
       },
     };
   }
@@ -253,10 +279,13 @@ export class WarehouseService {
   }
 
   /**
-   * Get KPI metrics for warehouse dashboard cards.
+   * Get KPI metrics for warehouse dashboard cards & tab counters.
    */
   async getKpiStats(user: UserEntity): Promise<{
+    total: number;
     waitingInbound: number;
+    customerInbound: number;
+    transferInbound: number;
     storedInbound: number;
     waitingOutbound: number;
     completedOutboundToday: number;
@@ -269,16 +298,22 @@ export class WarehouseService {
     const raw = await this.orderRepository
       .createQueryBuilder('order')
       .select([
-        `COUNT(CASE WHEN order.status = 'PENDING_INBOUND' THEN 1 END) as "waitingInbound"`,
+        `COUNT(order.id) as "total"`,
+        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') THEN 1 END) as "waitingInbound"`,
+        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'CUSTOMER' OR order.orderCode NOT LIKE 'TRIP%') THEN 1 END) as "customerInbound"`,
+        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'TRANSFER' OR order.orderCode LIKE 'TRIP%') THEN 1 END) as "transferInbound"`,
         `COUNT(CASE WHEN order.status = 'INBOUND' THEN 1 END) as "storedInbound"`,
         `COUNT(CASE WHEN order.status IN ('INBOUND', 'DRAFT', 'PENDING_FLEET') THEN 1 END) as "waitingOutbound"`,
-        `COUNT(CASE WHEN order.status IN ('COMPLETED_INBOUND', 'OUT_FOR_DELIVERY', 'DELIVERED') AND order.updatedAt >= CURRENT_DATE THEN 1 END) as "completedOutboundToday"`,
+        `COUNT(CASE WHEN order.status IN ('COMPLETED_INBOUND', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED_OUTBOUND') AND order.updatedAt >= CURRENT_DATE THEN 1 END) as "completedOutboundToday"`,
       ])
       .where(`order.deletedAt IS NULL ${hubCondition}`)
       .getRawOne();
 
     return {
+      total: Number(raw?.total) || 0,
       waitingInbound: Number(raw?.waitingInbound) || 0,
+      customerInbound: Number(raw?.customerInbound) || 0,
+      transferInbound: Number(raw?.transferInbound) || 0,
       storedInbound: Number(raw?.storedInbound) || 0,
       waitingOutbound: Number(raw?.waitingOutbound) || 0,
       completedOutboundToday: Number(raw?.completedOutboundToday) || 0,
