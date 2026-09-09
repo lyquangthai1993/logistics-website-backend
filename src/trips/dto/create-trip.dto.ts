@@ -14,12 +14,12 @@ export class CreateTripDto {
   @IsNumber()
   orderId: number;
 
-  @ApiPropertyOptional({ example: '50H-756.14', description: 'Biển số xe' })
+  @ApiPropertyOptional({ example: '29C-123.45', description: 'Biển số xe' })
   @IsOptional()
   @IsString()
   licensePlate?: string;
 
-  @ApiPropertyOptional({ example: 'Phạm Thành Trung', description: 'Họ tên tài xế' })
+  @ApiPropertyOptional({ example: 'Nguyễn Văn A', description: 'Họ tên tài xế' })
   @IsOptional()
   @IsString()
   driverName?: string;

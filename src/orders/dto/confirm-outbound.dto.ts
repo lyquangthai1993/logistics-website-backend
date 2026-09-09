@@ -56,7 +56,7 @@ export class ConfirmOutboundDto {
   @IsString()
   licensePlate?: string;
 
-  @ApiPropertyOptional({ example: 'Phạm Thành Trung' })
+  @ApiPropertyOptional({ example: 'Nguyễn Văn B' })
   @IsOptional()
   @IsString()
   driverName?: string;
