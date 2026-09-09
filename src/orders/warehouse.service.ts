@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -210,7 +211,9 @@ export class WarehouseService {
     });
 
     if (!userWithHub) {
-      throw new NotFoundException('Không tìm thấy tài khoản người dùng');
+      throw new UnauthorizedException(
+        'Tài khoản không tồn tại trên hệ thống hoặc phiên đăng nhập đã cũ. Vui lòng đăng nhập lại.',
+      );
     }
 
     // Server generates canonical orderCode atomically
