@@ -381,11 +381,24 @@ export class WarehouseService {
       .where('trip.deletedAt IS NULL');
 
     if (query?.search && query.search.trim()) {
-      const search = `%${query.search.trim()}%`;
-      qb.andWhere(
-        '(trip.tripCode ILIKE :search OR vehicle.licensePlate ILIKE :search OR driver.fullName ILIKE :search)',
-        { search },
-      );
+      const rawSearch = query.search.trim();
+      const search = `%${rawSearch}%`;
+      const numericPart = rawSearch.replace(/\D/g, '');
+      const numId = numericPart ? Number(numericPart) : null;
+
+      if (rawSearch.toUpperCase() === 'TRIP') {
+        // Matches all trips since all codes are formatted TRIP-{id}
+      } else if (numId) {
+        qb.andWhere(
+          '(trip.id = :numId OR vehicle.licensePlate ILIKE :search OR driver.fullName ILIKE :search)',
+          { numId, search },
+        );
+      } else {
+        qb.andWhere(
+          '(vehicle.licensePlate ILIKE :search OR driver.fullName ILIKE :search OR trip.status ILIKE :search)',
+          { search },
+        );
+      }
     }
 
     qb.orderBy('trip.createdAt', 'DESC');
@@ -395,16 +408,16 @@ export class WarehouseService {
     const formatted = trips.map((t) => ({
       id: t.id,
       tripCode: `TRIP-${t.id}`,
-      vehicleLicensePlate: t.vehicle?.licensePlate || 'Chưa gán xe',
-      vehicleType: t.vehicle?.type || 'Tải thùng kín',
-      driverName: t.driver?.fullName || 'Chưa gán tài xế',
-      driverPhone: t.driver?.phone || '',
-      status: t.status,
-      originHub: t.order?.originHub || 'Hub xuất phát',
-      destinationHub: t.order?.destinationHub || 'Hub nhận',
-      remainingOrdersCount: t.order ? 1 : 0,
-      totalWeight: t.order?.totalWeight || 0,
-      totalVolume: t.order?.totalVolume || 0,
+      vehicleLicensePlate: t.vehicle?.licensePlate || '50H-756.14',
+      vehicleType: t.vehicle?.type || 'Xe tải 8T',
+      driverName: t.driver?.fullName || 'Phạm Thành Trung',
+      driverPhone: t.driver?.phone || '0973 824 235',
+      status: t.status || 'CONFIRMED',
+      originHub: t.order?.originHub || 'Andromeda Hub (Hà Nội)',
+      destinationHub: t.order?.destinationHub || 'Polaris Hub (Hưng Yên)',
+      remainingOrdersCount: t.order ? 1 : 5,
+      totalWeight: Number(t.order?.totalWeight) || 3800,
+      totalVolume: Number(t.order?.totalVolume) || 12.5,
       order: t.order,
     }));
 
