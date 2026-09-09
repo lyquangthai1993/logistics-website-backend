@@ -129,12 +129,12 @@ export class WarehouseService {
           break;
         case 'CUSTOMER':
           qb.andWhere(
-            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'CUSTOMER' OR order.orderCode NOT LIKE 'TRIP%')",
+            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND order.orderCode NOT LIKE 'TRIP%'",
           );
           break;
         case 'TRANSFER':
           qb.andWhere(
-            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'TRANSFER' OR order.orderCode LIKE 'TRIP%')",
+            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND order.orderCode LIKE 'TRIP%'",
           );
           break;
         case 'COMPLETED_INBOUND':
@@ -325,24 +325,27 @@ export class WarehouseService {
     waitingOutbound: number;
     completedOutboundToday: number;
   }> {
-    const hubCondition =
-      user.role?.id === RoleEnum.WAREHOUSE_MANAGER && user.hubId
-        ? `AND (order.originHubId = ${user.hubId} OR order.destinationHubId = ${user.hubId} OR order.originHubId IS NULL)`
-        : '';
-
-    const raw = await this.orderRepository
+    const qb = this.orderRepository
       .createQueryBuilder('order')
       .select([
         `COUNT(order.id) as "total"`,
         `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') THEN 1 END) as "waitingInbound"`,
-        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'CUSTOMER' OR order.orderCode NOT LIKE 'TRIP%') THEN 1 END) as "customerInbound"`,
-        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'TRANSFER' OR order.orderCode LIKE 'TRIP%') THEN 1 END) as "transferInbound"`,
-        `COUNT(CASE WHEN order.status = 'INBOUND' THEN 1 END) as "storedInbound"`,
-        `COUNT(CASE WHEN order.status IN ('INBOUND', 'DRAFT', 'PENDING_FLEET') THEN 1 END) as "waitingOutbound"`,
+        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND order.orderCode NOT LIKE 'TRIP%' THEN 1 END) as "customerInbound"`,
+        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND order.orderCode LIKE 'TRIP%' THEN 1 END) as "transferInbound"`,
+        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO') THEN 1 END) as "storedInbound"`,
+        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'DRAFT', 'PENDING_FLEET') THEN 1 END) as "waitingOutbound"`,
         `COUNT(CASE WHEN order.status IN ('COMPLETED_INBOUND', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED_OUTBOUND') AND order.updatedAt >= CURRENT_DATE THEN 1 END) as "completedOutboundToday"`,
       ])
-      .where(`order.deletedAt IS NULL ${hubCondition}`)
-      .getRawOne();
+      .where('order.deletedAt IS NULL');
+
+    if (user.role?.id === RoleEnum.WAREHOUSE_MANAGER && user.hubId) {
+      qb.andWhere(
+        '(order.originHubId = :userHubId OR order.destinationHubId = :userHubId OR order.originHubId IS NULL)',
+        { userHubId: user.hubId },
+      );
+    }
+
+    const raw = await qb.getRawOne();
 
     return {
       total: Number(raw?.total) || 0,
