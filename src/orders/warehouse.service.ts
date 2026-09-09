@@ -28,6 +28,9 @@ export interface WarehouseOrdersResult {
     totalQuantity: number;
     totalWeight: number;
     totalVolume: number;
+    allCount?: number;
+    storedCount?: number;
+    draftCount?: number;
   };
 }
 
@@ -72,13 +75,45 @@ export class WarehouseService {
       .leftJoinAndSelect('order.trips', 'trips')
       .where('order.deletedAt IS NULL');
 
-    // Strict Hub Scoping for Warehouse Manager
+    // Scoping for Warehouse Manager: Include hub-bound orders and unassigned orders
     if (user.role?.id === RoleEnum.WAREHOUSE_MANAGER && user.hubId) {
       qb.andWhere(
-        '(order.originHubId = :userHubId OR order.destinationHubId = :userHubId)',
+        '(order.originHubId = :userHubId OR order.destinationHubId = :userHubId OR order.originHubId IS NULL)',
         { userHubId: user.hubId },
       );
     }
+
+    // Dynamic counts for status tabs based on current hub scope
+    const countQb = this.orderRepository
+      .createQueryBuilder('order')
+      .where('order.deletedAt IS NULL');
+
+    if (user.role?.id === RoleEnum.WAREHOUSE_MANAGER && user.hubId) {
+      countQb.andWhere(
+        '(order.originHubId = :userHubId OR order.destinationHubId = :userHubId OR order.originHubId IS NULL)',
+        { userHubId: user.hubId },
+      );
+    }
+
+    if (query?.search && query.search.trim()) {
+      const search = `%${query.search.trim()}%`;
+      countQb.andWhere(
+        '(order.orderCode ILIKE :search OR order.goodsDescription ILIKE :search)',
+        { search },
+      );
+    }
+
+    const countsRaw = await countQb
+      .select([
+        `COUNT(order.id) as "totalCount"`,
+        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO') THEN 1 END) as "storedCount"`,
+        `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') THEN 1 END) as "draftCount"`,
+      ])
+      .getRawOne();
+
+    const storedCount = Number(countsRaw?.storedCount) || 0;
+    const draftCount = Number(countsRaw?.draftCount) || 0;
+    const allCount = Number(countsRaw?.totalCount) || 0;
 
     // Status Filter (Standard Uppercase Enum Keys)
     if (query?.status && query.status.toUpperCase() !== 'ALL') {
@@ -86,7 +121,7 @@ export class WarehouseService {
       switch (statusUpper) {
         case 'INBOUND':
         case 'STORED':
-          qb.andWhere('order.status = :st', { st: 'INBOUND' });
+          qb.andWhere("order.status IN ('INBOUND', 'STORED', 'LUU_KHO')");
           break;
         case 'WAITING':
         case 'DRAFT':
@@ -153,6 +188,9 @@ export class WarehouseService {
         totalQuantity,
         totalWeight,
         totalVolume,
+        allCount,
+        storedCount,
+        draftCount,
       },
     };
   }
@@ -289,7 +327,7 @@ export class WarehouseService {
   }> {
     const hubCondition =
       user.role?.id === RoleEnum.WAREHOUSE_MANAGER && user.hubId
-        ? `AND (order.originHubId = ${user.hubId} OR order.destinationHubId = ${user.hubId})`
+        ? `AND (order.originHubId = ${user.hubId} OR order.destinationHubId = ${user.hubId} OR order.originHubId IS NULL)`
         : '';
 
     const raw = await this.orderRepository
