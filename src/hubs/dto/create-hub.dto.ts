@@ -7,6 +7,11 @@ export class CreateHubDto {
   @IsString()
   code: string;
 
+  @ApiPropertyOptional({ example: 'HAN' })
+  @IsOptional()
+  @IsString()
+  orderCodePrefix?: string;
+
   @ApiProperty({ example: 'Andromeda Hub' })
   @IsNotEmpty()
   @IsString()

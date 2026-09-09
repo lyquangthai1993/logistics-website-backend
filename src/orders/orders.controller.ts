@@ -16,6 +16,7 @@ import {
   ApiBearerAuth,
   ApiCreatedResponse,
   ApiOkResponse,
+  ApiOperation,
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
@@ -124,6 +125,13 @@ export class OrdersController {
     @Query('prefix') prefix?: string,
   ): Promise<{ orderCode: string }> {
     return this.ordersService.generateOrderCode(prefix);
+  }
+
+  @Post('refresh-metrics')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Làm mới thông số tải trọng cho danh sách đơn hàng' })
+  refreshMetrics(@Body('orderIds') orderIds: number[]) {
+    return this.ordersService.refreshMetrics(orderIds);
   }
 
   @ApiOkResponse({

@@ -11,13 +11,13 @@ import {
 } from 'class-validator';
 
 export class CreateOrderDto {
-  @ApiProperty({
-    example: 'NDA2608-0126',
-    description: 'Mã đơn hàng do user tự nhập',
+  @ApiPropertyOptional({
+    example: 'HCM-LTV-2609-011',
+    description: 'Mã đơn hàng (tự động sinh theo chuẩn leader nếu bỏ trống)',
   })
-  @IsNotEmpty({ message: 'Mã đơn hàng không được để trống' })
+  @IsOptional()
   @IsString()
-  orderCode: string;
+  orderCode?: string;
 
   @ApiPropertyOptional({ example: 'Hà Nội → TP.HCM' })
   @IsOptional()

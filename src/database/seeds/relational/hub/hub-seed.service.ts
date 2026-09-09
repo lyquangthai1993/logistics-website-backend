@@ -389,6 +389,16 @@ export class HubSeedService {
     ];
 
     for (const h of seedHubs) {
+      const prefix =
+        (h as any).orderCodePrefix ||
+        (h.code === 'HUB-HCM-01'
+          ? 'HCM'
+          : h.code === 'HUB-DAD-01'
+            ? 'DAD'
+            : h.code === 'HUB-HYN-01'
+              ? 'HYN'
+              : h.code.replace('HUB-', '').replace('-01', '').replace(/-/g, '_'));
+
       const searchConditions: Array<{ code?: string; name?: string }> = [
         { code: h.code },
         ...(h.legacyCodes || []).map((lc: string) => ({
@@ -403,6 +413,7 @@ export class HubSeedService {
 
       if (existing) {
         existing.code = h.code;
+        existing.orderCodePrefix = prefix;
         existing.name = h.name;
         existing.city = h.city;
         existing.address = h.address;
@@ -414,6 +425,7 @@ export class HubSeedService {
         await this.repository.save(
           this.repository.create({
             code: h.code,
+            orderCodePrefix: prefix,
             name: h.name,
             city: h.city,
             address: h.address,

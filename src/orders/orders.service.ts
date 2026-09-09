@@ -38,6 +38,8 @@ export interface OrderStatsResult {
   toDate: string;
 }
 
+import { OrderCodeService } from './order-code.service';
+
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -47,6 +49,7 @@ export class OrdersService {
     private readonly orderRepository: Repository<OrderEntity>,
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
+    private readonly orderCodeService: OrderCodeService,
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
   ) {}
@@ -55,14 +58,31 @@ export class OrdersService {
     createOrderDto: CreateOrderDto,
     userId?: number,
   ): Promise<OrderEntity> {
-    const existing = await this.orderRepository.findOne({
-      where: { orderCode: createOrderDto.orderCode.trim() },
-    });
+    let finalCode = createOrderDto.orderCode?.trim();
 
-    if (existing) {
-      throw new UnprocessableEntityException(
-        'Mã đơn hàng đã tồn tại, vui lòng chọn mã khác',
-      );
+    if (!finalCode) {
+      const user = userId
+        ? await this.userRepository.findOne({
+            where: { id: userId },
+            relations: ['hub'],
+          })
+        : null;
+
+      if (!user) {
+        throw new UnprocessableEntityException(
+          'Không tìm thấy thông tin tài khoản để tự sinh mã đơn hàng.',
+        );
+      }
+      finalCode = await this.orderCodeService.generateOrderCode(user);
+    } else {
+      const existing = await this.orderRepository.findOne({
+        where: { orderCode: finalCode },
+      });
+      if (existing) {
+        throw new UnprocessableEntityException(
+          'Mã đơn hàng đã tồn tại, vui lòng chọn mã khác',
+        );
+      }
     }
 
     if (
@@ -76,12 +96,41 @@ export class OrdersService {
 
     const order = this.orderRepository.create({
       ...createOrderDto,
-      orderCode: createOrderDto.orderCode.trim(),
+      orderCode: finalCode,
       status: 'DRAFT',
       createdByUserId: userId,
     });
 
     return this.orderRepository.save(order);
+  }
+
+  async refreshMetrics(orderIds: number[]): Promise<
+    Array<{
+      id: number;
+      orderCode: string;
+      totalQuantity: number | null;
+      totalWeight: number;
+      totalVolume: number;
+      status: string;
+      updatedAt: Date;
+    }>
+  > {
+    if (!orderIds || orderIds.length === 0) return [];
+    const orders = await this.orderRepository
+      .createQueryBuilder('order')
+      .where('order.id IN (:...orderIds)', { orderIds })
+      .andWhere('order.deletedAt IS NULL')
+      .getMany();
+
+    return orders.map((o) => ({
+      id: o.id,
+      orderCode: o.orderCode,
+      totalQuantity: o.totalQuantity,
+      totalWeight: o.totalWeight,
+      totalVolume: o.totalVolume,
+      status: o.status,
+      updatedAt: o.updatedAt,
+    }));
   }
 
   async findAll(query?: QueryOrderDto): Promise<PaginatedResult<OrderEntity>> {

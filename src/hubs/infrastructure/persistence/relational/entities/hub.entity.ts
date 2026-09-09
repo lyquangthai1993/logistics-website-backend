@@ -20,6 +20,10 @@ export class HubEntity extends AbstractBaseEntity {
   @Column({ type: String, unique: true, nullable: false })
   code: string;
 
+  @Index()
+  @Column({ type: String, unique: true, nullable: true })
+  orderCodePrefix: string | null;
+
   @Column({ type: String, nullable: false })
   name: string;
 
