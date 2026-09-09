@@ -14,6 +14,7 @@ import { AppModule } from './app.module';
 import validationOptions from './utils/validation-options';
 import { AllConfigType } from './config/config.type';
 import { ResolvePromisesInterceptor } from './utils/serializer.interceptor';
+import { isCorsOriginAllowed } from './utils/cors-origin.validator';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { ResponseTransformInterceptor } from './common/interceptors/response-transform.interceptor';
@@ -34,11 +35,27 @@ async function bootstrap() {
   );
   app.use(cookieParser());
 
+  const nodeEnv = configService.get('app.nodeEnv', { infer: true });
+  const isDev =
+    nodeEnv !== 'production' ||
+    process.env.RENDER_GIT_BRANCH === 'dev' ||
+    process.env.RENDER_GIT_BRANCH === 'development';
+
   const corsOrigins = configService.getOrThrow('app.corsOrigins', {
     infer: true,
   });
+
   app.enableCors({
-    origin: corsOrigins.includes('*') ? true : corsOrigins,
+    origin: (
+      origin: string | undefined,
+      callback: (err: Error | null, allow?: boolean) => void,
+    ) => {
+      const isAllowed = isCorsOriginAllowed(origin, corsOrigins, isDev);
+      if (isAllowed) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: [
@@ -53,6 +70,7 @@ async function bootstrap() {
       'Pragma',
       'X-Refresh-Token',
     ],
+    exposedHeaders: ['X-Refresh-Token', 'Content-Disposition'],
   });
 
   app.enableShutdownHooks();
