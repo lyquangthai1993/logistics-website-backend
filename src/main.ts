@@ -1,6 +1,18 @@
 import 'dotenv/config';
+import { types } from 'pg';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+
+// Force node-postgres (pg) to parse TIMESTAMP WITHOUT TIME ZONE (OID 1114) as UTC Date.
+// In PostgreSQL (Neon), timestamps are stored in UTC (GMT). Without this parser override,
+// pg parses the timestamp string in the server host machine's local timezone (e.g. UTC+7),
+// which causes a negative timezone offset shift when serialized to ISO string (JSON).
+types.setTypeParser(1114, (stringValue: string) => {
+  if (!stringValue) return null;
+  const isoString = stringValue.includes('T') ? stringValue : stringValue.replace(' ', 'T');
+  return new Date(isoString.endsWith('Z') ? isoString : `${isoString}Z`);
+});
+
 import {
   ClassSerializerInterceptor,
   ValidationPipe,
