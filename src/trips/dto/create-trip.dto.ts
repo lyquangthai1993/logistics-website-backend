@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -13,15 +14,15 @@ export class CreateTripDto {
   @IsNumber()
   orderId: number;
 
-  @ApiPropertyOptional({ example: 1, description: 'ID xe' })
+  @ApiPropertyOptional({ example: '50H-756.14', description: 'Biển số xe' })
   @IsOptional()
-  @IsNumber()
-  vehicleId?: number;
+  @IsString()
+  licensePlate?: string;
 
-  @ApiPropertyOptional({ example: 1, description: 'ID tài xế' })
+  @ApiPropertyOptional({ example: 'Phạm Thành Trung', description: 'Họ tên tài xế' })
   @IsOptional()
-  @IsNumber()
-  driverId?: number;
+  @IsString()
+  driverName?: string;
 
   @ApiPropertyOptional({ example: '2026-08-20', description: 'Ngày lấy hàng' })
   @IsOptional()

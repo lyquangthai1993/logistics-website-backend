@@ -3,7 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { TripEntity } from './infrastructure/persistence/relational/entities/trip.entity';
 import { OrderEntity } from '../orders/infrastructure/persistence/relational/entities/order.entity';
-import { VehicleEntity } from '../vehicles/infrastructure/persistence/relational/entities/vehicle.entity';
 import { DriverEntity } from '../drivers/infrastructure/persistence/relational/entities/driver.entity';
 import { UserEntity } from '../users/infrastructure/persistence/relational/entities/user.entity';
 import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
@@ -48,8 +47,6 @@ export class TripsService {
     private readonly tripRepository: Repository<TripEntity>,
     @InjectRepository(OrderEntity)
     private readonly orderRepository: Repository<OrderEntity>,
-    @InjectRepository(VehicleEntity)
-    private readonly vehicleRepository: Repository<VehicleEntity>,
     @InjectRepository(DriverEntity)
     private readonly driverRepository: Repository<DriverEntity>,
     @InjectRepository(UserEntity)
@@ -73,18 +70,10 @@ export class TripsService {
       );
     }
 
-    if (createTripDto.vehicleId) {
-      const vehicle = await this.vehicleRepository.findOne({
-        where: { id: createTripDto.vehicleId },
-      });
-      if (vehicle?.isExternal) {
-        order.isExternalVehicleNeeded = true;
-        await this.orderRepository.save(order);
-      }
-    }
-
     const trip = this.tripRepository.create({
       ...createTripDto,
+      licensePlate: createTripDto.licensePlate,
+      driverName: createTripDto.driverName,
       status: 'PENDING',
       sequenceNumber: createTripDto.sequenceNumber || 1,
       assignedByUserId: userId,
@@ -110,24 +99,15 @@ export class TripsService {
       status: 'PENDING',
     });
 
-    let hasExternal = false;
     const createdTrips: TripEntity[] = [];
 
     for (let i = 0; i < dto.trips.length; i++) {
       const item = dto.trips[i];
-      if (item.vehicleId) {
-        const vehicle = await this.vehicleRepository.findOne({
-          where: { id: item.vehicleId },
-        });
-        if (vehicle?.isExternal) {
-          hasExternal = true;
-        }
-      }
 
       const trip = this.tripRepository.create({
         orderId: dto.orderId,
-        vehicleId: item.vehicleId,
-        driverId: item.driverId,
+        licensePlate: item.licensePlate,
+        driverName: item.driverName,
         pickupDate: item.pickupDate,
         pickupTime: item.pickupTime,
         estimatedDeliveryDate: item.estimatedDeliveryDate,
@@ -143,18 +123,13 @@ export class TripsService {
       createdTrips.push(saved);
     }
 
-    if (hasExternal) {
-      order.isExternalVehicleNeeded = true;
-      await this.orderRepository.save(order);
-    }
-
     return createdTrips;
   }
 
   async confirm(id: number): Promise<TripEntity> {
     const trip = await this.tripRepository.findOne({
       where: { id },
-      relations: ['order', 'vehicle', 'driver'],
+      relations: ['order'],
     });
 
     if (!trip) {
@@ -192,21 +167,19 @@ export class TripsService {
   }
 
   private async sendTripNotifications(trip: TripEntity): Promise<void> {
-    const isExternal = !!trip.vehicle?.isExternal;
+    const isExternal = !!trip.order?.isExternalVehicleNeeded;
     const orderCode = trip.order?.orderCode || `Đơn #${trip.orderId}`;
-    const vehiclePlate = trip.vehicle?.licensePlate || 'Chưa gán xe';
-    const driverName = trip.driver?.fullName || 'Chưa gán tài xế';
-    const driverPhone = trip.driver?.phone || 'N/A';
-    const externalProvider =
-      trip.vehicle?.externalProvider || 'Đối tác thuê ngoài';
+    const vehiclePlate = trip.licensePlate || 'Chưa gán xe';
+    const driverName = trip.driverName || 'Chưa gán tài xế';
+    const externalNote = trip.order?.externalNote || '';
 
     const title = isExternal
       ? `🚨 [XE THUÊ NGOÀI] Chuyến xe #${trip.id} cho đơn ${orderCode} đã xác nhận`
       : `🚚 Chuyến xe #${trip.id} cho đơn ${orderCode} đã xác nhận`;
 
     const body = isExternal
-      ? `Xe ngoài: ${externalProvider} (${vehiclePlate}) | Tài xế: ${driverName} (${driverPhone}) | Khối lượng: ${trip.weightAllocated} kg | Đích: ${trip.order?.destinationHub || 'Kho nhận'}`
-      : `Xe: ${vehiclePlate} | Tài xế: ${driverName} (${driverPhone}) | Khối lượng: ${trip.weightAllocated} kg | Đích: ${trip.order?.destinationHub || 'Kho nhận'}`;
+      ? `Xe ngoài: ${vehiclePlate} | Tài xế: ${driverName} | Khối lượng: ${trip.weightAllocated} kg | Đích: ${trip.order?.destinationHub || 'Kho nhận'}${externalNote ? ` (${externalNote})` : ''}`
+      : `Xe: ${vehiclePlate} | Tài xế: ${driverName} | Khối lượng: ${trip.weightAllocated} kg | Đích: ${trip.order?.destinationHub || 'Kho nhận'}`;
 
     const order = trip.order;
 
@@ -263,9 +236,9 @@ export class TripsService {
             destinationHub: order?.destinationHub || undefined,
             licensePlate: vehiclePlate,
             isExternal,
-            externalProvider,
+            externalProvider: externalNote || undefined,
             driverName,
-            driverPhone,
+            driverPhone: undefined,
             totalQuantity: order?.totalQuantity,
             weightAllocated: trip.weightAllocated,
             volumeAllocated: trip.volumeAllocated,
@@ -401,8 +374,6 @@ export class TripsService {
     const qb = this.tripRepository
       .createQueryBuilder('trip')
       .leftJoinAndSelect('trip.order', 'order')
-      .leftJoinAndSelect('trip.vehicle', 'vehicle')
-      .leftJoinAndSelect('trip.driver', 'driver')
       .where('trip.deletedAt IS NULL')
       .orderBy('trip.createdAt', 'DESC');
 
@@ -416,7 +387,7 @@ export class TripsService {
 
     if (query?.hub) {
       qb.andWhere(
-        '(order.originHub = :hub OR order.destinationHub = :hub OR vehicle.currentHub = :hub)',
+        '(order.originHub = :hub OR order.destinationHub = :hub)',
         { hub: query.hub },
       );
     }
@@ -424,7 +395,7 @@ export class TripsService {
     if (query?.search && query.search.trim()) {
       const search = `%${query.search.trim()}%`;
       qb.andWhere(
-        '(order.orderCode ILIKE :search OR vehicle.licensePlate ILIKE :search OR driver.fullName ILIKE :search OR trip.notes ILIKE :search)',
+        '(order.orderCode ILIKE :search OR trip.licensePlate ILIKE :search OR trip.driverName ILIKE :search OR trip.notes ILIKE :search)',
         { search },
       );
     }
@@ -520,7 +491,7 @@ export class TripsService {
   async findOne(id: number): Promise<TripEntity> {
     const trip = await this.tripRepository.findOne({
       where: { id },
-      relations: ['order', 'vehicle', 'driver'],
+      relations: ['order'],
     });
 
     if (!trip) {

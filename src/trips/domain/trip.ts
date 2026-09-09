@@ -1,8 +1,8 @@
 export class Trip {
   id: number;
   orderId: number;
-  vehicleId?: number | null;
-  driverId?: number | null;
+  licensePlate?: string | null;
+  driverName?: string | null;
   status: string;
   pickupDate?: string | null;
   pickupTime?: string | null;

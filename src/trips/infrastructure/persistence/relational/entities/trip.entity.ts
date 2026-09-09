@@ -9,8 +9,6 @@ import {
 } from 'typeorm';
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 import { OrderEntity } from '../../../../../orders/infrastructure/persistence/relational/entities/order.entity';
-import { VehicleEntity } from '../../../../../vehicles/infrastructure/persistence/relational/entities/vehicle.entity';
-import { DriverEntity } from '../../../../../drivers/infrastructure/persistence/relational/entities/driver.entity';
 
 @Entity({
   name: 'trip',
@@ -29,25 +27,11 @@ export class TripEntity extends AbstractBaseEntity {
   @JoinColumn({ name: 'orderId' })
   order: Relation<OrderEntity>;
 
-  @Column({ type: Number, nullable: true })
-  vehicleId: number | null;
+  @Column({ type: String, nullable: true })
+  licensePlate: string | null;
 
-  @ManyToOne(() => VehicleEntity, {
-    nullable: true,
-    onDelete: 'SET NULL',
-  })
-  @JoinColumn({ name: 'vehicleId' })
-  vehicle: Relation<VehicleEntity> | null;
-
-  @Column({ type: Number, nullable: true })
-  driverId: number | null;
-
-  @ManyToOne(() => DriverEntity, {
-    nullable: true,
-    onDelete: 'SET NULL',
-  })
-  @JoinColumn({ name: 'driverId' })
-  driver: Relation<DriverEntity> | null;
+  @Column({ type: String, nullable: true })
+  driverName: string | null;
 
   @Index()
   @Column({ type: String, nullable: false, default: 'PENDING' })

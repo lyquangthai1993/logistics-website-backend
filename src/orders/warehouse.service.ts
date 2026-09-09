@@ -375,8 +375,6 @@ export class WarehouseService {
 
     const qb = this.tripRepository
       .createQueryBuilder('trip')
-      .leftJoinAndSelect('trip.vehicle', 'vehicle')
-      .leftJoinAndSelect('trip.driver', 'driver')
       .leftJoinAndSelect('trip.order', 'order')
       .where('trip.deletedAt IS NULL');
 
@@ -390,12 +388,12 @@ export class WarehouseService {
         // Matches all trips since all codes are formatted TRIP-{id}
       } else if (numId) {
         qb.andWhere(
-          '(trip.id = :numId OR vehicle.licensePlate ILIKE :search OR driver.fullName ILIKE :search)',
+          '(trip.id = :numId OR trip.licensePlate ILIKE :search OR trip.driverName ILIKE :search)',
           { numId, search },
         );
       } else {
         qb.andWhere(
-          '(vehicle.licensePlate ILIKE :search OR driver.fullName ILIKE :search OR trip.status ILIKE :search)',
+          '(trip.licensePlate ILIKE :search OR trip.driverName ILIKE :search OR trip.status ILIKE :search)',
           { search },
         );
       }
@@ -408,10 +406,8 @@ export class WarehouseService {
     const formatted = trips.map((t) => ({
       id: t.id,
       tripCode: `TRIP-${t.id}`,
-      vehicleLicensePlate: t.vehicle?.licensePlate || '50H-756.14',
-      vehicleType: t.vehicle?.type || 'Xe tải 8T',
-      driverName: t.driver?.fullName || 'Phạm Thành Trung',
-      driverPhone: t.driver?.phone || '0973 824 235',
+      vehicleLicensePlate: t.licensePlate || '50H-756.14',
+      driverName: t.driverName || 'Phạm Thành Trung',
       status: t.status || 'CONFIRMED',
       originHub: t.order?.originHub || 'Andromeda Hub (Hà Nội)',
       destinationHub: t.order?.destinationHub || 'Polaris Hub (Hưng Yên)',
