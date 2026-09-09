@@ -58,6 +58,10 @@ export class HubsService {
       qb.andWhere('hub.isActive = :isActive', { isActive: query.isActive });
     }
 
+    if (query.level && Number(query.level) > 0) {
+      qb.andWhere('hub.level = :level', { level: Number(query.level) });
+    }
+
     if (query.search && query.search.trim()) {
       const search = `%${query.search.trim()}%`;
       qb.andWhere(
@@ -79,9 +83,13 @@ export class HubsService {
     };
   }
 
-  async findActive(): Promise<HubEntity[]> {
+  async findActive(level?: number): Promise<HubEntity[]> {
+    const where: any = { isActive: true };
+    if (level && Number(level) > 0) {
+      where.level = Number(level);
+    }
     return this.hubRepository.find({
-      where: { isActive: true },
+      where,
       order: { name: 'ASC' },
     });
   }

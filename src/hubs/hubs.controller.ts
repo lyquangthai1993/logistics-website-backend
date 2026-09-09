@@ -81,8 +81,8 @@ export class HubsController {
   })
   @Get('active')
   @HttpCode(HttpStatus.OK)
-  findActive(): Promise<HubEntity[]> {
-    return this.hubsService.findActive();
+  findActive(@Query('level') level?: number): Promise<HubEntity[]> {
+    return this.hubsService.findActive(level);
   }
 
   @ApiOkResponse({

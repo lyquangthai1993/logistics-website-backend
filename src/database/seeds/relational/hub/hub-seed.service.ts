@@ -399,6 +399,8 @@ export class HubSeedService {
               ? 'HYN'
               : h.code.replace('HUB-', '').replace('-01', '').replace(/-/g, '_'));
 
+      const level = (h as any).level || (h.code.startsWith('HUB-BO-') ? 2 : 1);
+
       const searchConditions: Array<{ code?: string; name?: string }> = [
         { code: h.code },
         ...(h.legacyCodes || []).map((lc: string) => ({
@@ -414,6 +416,7 @@ export class HubSeedService {
       if (existing) {
         existing.code = h.code;
         existing.orderCodePrefix = prefix;
+        existing.level = level;
         existing.name = h.name;
         existing.city = h.city;
         existing.address = h.address;
@@ -426,6 +429,7 @@ export class HubSeedService {
           this.repository.create({
             code: h.code,
             orderCodePrefix: prefix,
+            level,
             name: h.name,
             city: h.city,
             address: h.address,

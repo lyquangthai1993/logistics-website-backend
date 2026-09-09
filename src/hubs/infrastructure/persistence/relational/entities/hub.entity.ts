@@ -40,6 +40,10 @@ export class HubEntity extends AbstractBaseEntity {
   managerName: string | null;
 
   @Index()
+  @Column({ type: 'int', nullable: false, default: 1 })
+  level: number;
+
+  @Index()
   @Column({ type: Boolean, nullable: false, default: true })
   isActive: boolean;
 

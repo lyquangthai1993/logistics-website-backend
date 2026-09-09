@@ -41,4 +41,12 @@ export class QueryHubDto {
   })
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({ description: 'Lọc theo phân cấp (1: Hub Cấp 1, 2: Hub Cấp 2 / Xe bo)', example: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2)
+  @IsOptional()
+  level?: number;
 }
