@@ -80,42 +80,39 @@ export class WarehouseService {
       );
     }
 
-    // Status Filter (LƯU KHO = INBOUND, ĐÃ XUẤT KHO = COMPLETED_INBOUND)
-    if (query?.status && query.status !== 'ALL') {
+    // Status Filter (Standard Uppercase Enum Keys)
+    if (query?.status && query.status.toUpperCase() !== 'ALL') {
       const statusUpper = query.status.toUpperCase();
-      if (
-        statusUpper === 'LƯU KHO' ||
-        statusUpper === 'INBOUND' ||
-        statusUpper === 'LUU_KHO' ||
-        statusUpper === 'STORED'
-      ) {
-        qb.andWhere('order.status = :st', { st: 'INBOUND' });
-      } else if (
-        statusUpper === 'DRAFT' ||
-        statusUpper === 'WAITING' ||
-        statusUpper === 'CHO_NHAP'
-      ) {
-        qb.andWhere("order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND')");
-      } else if (statusUpper === 'CUSTOMER' || statusUpper === 'KHACH_GUI') {
-        qb.andWhere(
-          "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'CUSTOMER' OR order.orderCode NOT LIKE 'TRIP%')",
-        );
-      } else if (statusUpper === 'TRANSFER' || statusUpper === 'LUAN_CHUYEN') {
-        qb.andWhere(
-          "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'TRANSFER' OR order.orderCode LIKE 'TRIP%')",
-        );
-      } else if (
-        statusUpper === 'ĐÃ XUẤT KHO' ||
-        statusUpper === 'COMPLETED_INBOUND' ||
-        statusUpper === 'DA_XUAT_KHO'
-      ) {
-        qb.andWhere(
-          "order.status IN ('COMPLETED_INBOUND', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED_OUTBOUND')",
-        );
-      } else if (statusUpper === 'PENDING_INBOUND') {
-        qb.andWhere('order.status = :st', { st: 'PENDING_INBOUND' });
-      } else {
-        qb.andWhere('order.status = :st', { st: query.status });
+      switch (statusUpper) {
+        case 'INBOUND':
+        case 'STORED':
+          qb.andWhere('order.status = :st', { st: 'INBOUND' });
+          break;
+        case 'WAITING':
+        case 'DRAFT':
+          qb.andWhere("order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND')");
+          break;
+        case 'CUSTOMER':
+          qb.andWhere(
+            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'CUSTOMER' OR order.orderCode NOT LIKE 'TRIP%')",
+          );
+          break;
+        case 'TRANSFER':
+          qb.andWhere(
+            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND') AND (order.inboundType = 'TRANSFER' OR order.orderCode LIKE 'TRIP%')",
+          );
+          break;
+        case 'COMPLETED_INBOUND':
+          qb.andWhere(
+            "order.status IN ('COMPLETED_INBOUND', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED_OUTBOUND')",
+          );
+          break;
+        case 'PENDING_INBOUND':
+          qb.andWhere('order.status = :st', { st: 'PENDING_INBOUND' });
+          break;
+        default:
+          qb.andWhere('order.status = :st', { st: query.status });
+          break;
       }
     }
 
