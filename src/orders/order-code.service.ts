@@ -119,33 +119,23 @@ export class OrderCodeService {
     const operatorInitials = this.extractInitials(fullName);
     const yearMonth = this.getYearMonthPeriod();
 
-    // Atomic increment using pessimistic row lock or upsert
-    let counter = await em.findOne(OrderCodeCounterEntity, {
-      where: {
-        hubId: hub.id,
-        operatorInitials,
-        yearMonth,
-      },
-      lock: { mode: 'pessimistic_write' },
-    });
+    // Atomic increment using PostgreSQL atomic UPSERT with RETURNING lastSequence
+    const result = await em.query(
+      `INSERT INTO "order_code_counter" ("hubId", "operatorInitials", "yearMonth", "lastSequence", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, 1, NOW(), NOW())
+       ON CONFLICT ("hubId", "operatorInitials", "yearMonth")
+       DO UPDATE SET
+         "lastSequence" = "order_code_counter"."lastSequence" + 1,
+         "updatedAt" = NOW()
+       RETURNING "lastSequence"`,
+      [hub.id, operatorInitials, yearMonth],
+    );
 
-    if (!counter) {
-      counter = em.create(OrderCodeCounterEntity, {
-        hubId: hub.id,
-        operatorInitials,
-        yearMonth,
-        lastSequence: 1,
-      });
-      await em.save(counter);
-    } else {
-      counter.lastSequence += 1;
-      await em.save(counter);
-    }
-
+    const lastSequence = Number(result?.[0]?.lastSequence) || 1;
     const seqStr =
-      counter.lastSequence < 1000
-        ? counter.lastSequence.toString().padStart(3, '0')
-        : counter.lastSequence.toString();
+      lastSequence < 1000
+        ? lastSequence.toString().padStart(3, '0')
+        : lastSequence.toString();
 
     return `${hubPrefix}-${operatorInitials}-${yearMonth}-${seqStr}`;
   }
