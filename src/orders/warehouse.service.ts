@@ -198,7 +198,7 @@ export class WarehouseService {
   }
 
   /**
-   * Quick create inbound order row from warehouse (Mode 1).
+   * Quick create inbound order row from warehouse.
    * Generates code atomically via OrderCodeService, sets status = 'INBOUND' (LƯU KHO).
    */
   async quickCreateInboundOrder(
@@ -285,7 +285,7 @@ export class WarehouseService {
   }
 
   /**
-   * Confirm outbound dispatch (Mode 1: Customer vs Mode 2: Transfer).
+   * Confirm outbound dispatch (Customer vs Transfer).
    */
   async confirmOutbound(
     user: UserEntity,

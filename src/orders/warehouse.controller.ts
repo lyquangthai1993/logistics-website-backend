@@ -79,7 +79,7 @@ export class WarehouseController {
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
-    summary: 'Tạo nhanh dòng hàng nhập kho từ khách (Mode 1)',
+    summary: 'Tạo nhanh dòng hàng nhập kho từ khách hàng',
   })
   async quickCreateInbound(
     @Request() req: any,
@@ -105,7 +105,7 @@ export class WarehouseController {
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Xác nhận xuất kho (Mode 1: Khách hàng hoặc Mode 2: Luân chuyển)',
+    summary: 'Xác nhận xuất kho (Giao khách hàng hoặc Luân chuyển)',
   })
   async confirmOutbound(
     @Request() req: any,
