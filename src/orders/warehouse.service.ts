@@ -288,12 +288,31 @@ export class WarehouseService {
 
     const initialStatus = dto.initialStatus || 'INBOUND'; // LƯU KHO
 
+    const finalGoodsDescription =
+      dto.goodsDescription?.trim() ||
+      (initialStatus === 'DRAFT' ? 'Hàng lưu kho (Nháp)' : 'Hàng hóa');
+
+    const finalQuantity =
+      dto.totalQuantity !== undefined && Number(dto.totalQuantity) > 0
+        ? Number(dto.totalQuantity)
+        : 1;
+
+    const finalWeight =
+      dto.totalWeight !== undefined && Number(dto.totalWeight) >= 0
+        ? Number(dto.totalWeight)
+        : 0;
+
+    const finalVolume =
+      dto.totalVolume !== undefined && Number(dto.totalVolume) >= 0
+        ? Number(dto.totalVolume)
+        : 0;
+
     const order = this.orderRepository.create({
       orderCode: finalOrderCode,
-      goodsDescription: dto.goodsDescription.trim(),
-      totalQuantity: dto.totalQuantity,
-      totalWeight: dto.totalWeight,
-      totalVolume: dto.totalVolume,
+      goodsDescription: finalGoodsDescription,
+      totalQuantity: finalQuantity,
+      totalWeight: finalWeight,
+      totalVolume: finalVolume,
       route: `${originHubName || 'Hub'} → ${dto.deliveryAddress || destinationHubName || 'Điểm đến'}`,
       originHub: originHubName,
       originHubId,
