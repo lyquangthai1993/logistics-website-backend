@@ -253,8 +253,25 @@ export class WarehouseService {
       );
     }
 
-    // Server generates canonical orderCode atomically
-    const orderCode = await this.orderCodeService.generateOrderCode(userWithHub);
+    // Check if client provided custom orderCode
+    let finalOrderCode = dto.orderCode?.trim();
+    if (
+      finalOrderCode &&
+      finalOrderCode !== '(Tự sinh khi lưu)' &&
+      !finalOrderCode.startsWith('(Tự sinh')
+    ) {
+      const existing = await this.orderRepository.findOne({
+        where: { orderCode: finalOrderCode },
+      });
+      if (existing) {
+        throw new UnprocessableEntityException(
+          `Mã vận đơn '${finalOrderCode}' đã tồn tại trên hệ thống, vui lòng nhập mã khác.`,
+        );
+      }
+    } else {
+      // Server generates canonical orderCode atomically
+      finalOrderCode = await this.orderCodeService.generateOrderCode(userWithHub);
+    }
 
     let destinationHubName: string | null = null;
     if (dto.destinationHubId) {
@@ -272,7 +289,7 @@ export class WarehouseService {
     const initialStatus = dto.initialStatus || 'INBOUND'; // LƯU KHO
 
     const order = this.orderRepository.create({
-      orderCode,
+      orderCode: finalOrderCode,
       goodsDescription: dto.goodsDescription.trim(),
       totalQuantity: dto.totalQuantity,
       totalWeight: dto.totalWeight,
@@ -366,10 +383,22 @@ export class WarehouseService {
           const saved = await this.orderRepository.save(foundOrder);
           savedOrders.push(saved);
         } else {
-          // New row added en-route! Generate canonical orderCode atomically
-          const newOrderCode = userWithHub
-            ? await this.orderCodeService.generateOrderCode(userWithHub)
-            : `ORD-${Date.now()}`;
+          // New row added en-route! Use custom orderCode if provided, or generate atomically
+          let newOrderCode = row.orderCode?.trim();
+          if (hasSpecificCode && newOrderCode) {
+            const duplicate = await this.orderRepository.findOne({
+              where: { orderCode: newOrderCode },
+            });
+            if (duplicate) {
+              throw new UnprocessableEntityException(
+                `Mã vận đơn '${newOrderCode}' đã tồn tại trên hệ thống, vui lòng nhập mã khác.`,
+              );
+            }
+          } else {
+            newOrderCode = userWithHub
+              ? await this.orderCodeService.generateOrderCode(userWithHub)
+              : `ORD-${Date.now()}`;
+          }
 
           const newOrder = this.orderRepository.create({
             orderCode: newOrderCode,

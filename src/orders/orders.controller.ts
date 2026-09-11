@@ -135,6 +135,26 @@ export class OrdersController {
   }
 
   @ApiOkResponse({
+    description: 'Kiểm tra mã vận đơn/đơn hàng đã tồn tại trong hệ thống hay chưa',
+    schema: {
+      properties: {
+        exists: { type: 'boolean', example: false },
+        message: { type: 'string', example: 'Mã vận đơn đã tồn tại' },
+      },
+    },
+  })
+  @Get('check-code')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Kiểm tra mã vận đơn/đơn hàng đã tồn tại trong hệ thống hay chưa',
+  })
+  checkCode(
+    @Query('code') code: string,
+  ): Promise<{ exists: boolean; message?: string }> {
+    return this.ordersService.checkCodeExists(code);
+  }
+
+  @ApiOkResponse({
     type: OrderEntity,
   })
   @Get(':id')

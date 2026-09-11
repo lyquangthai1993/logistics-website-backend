@@ -17,6 +17,14 @@ export enum DeliveryDestinationMode {
 }
 
 export class QuickCreateInboundOrderDto {
+  @ApiPropertyOptional({
+    example: 'HCM-LTV-2609-011',
+    description: 'Mã vận đơn (nhập tự do hoặc để trống để hệ thống tự cấp)',
+  })
+  @IsOptional()
+  @IsString()
+  orderCode?: string;
+
   @ApiProperty({ example: 'Vải cuộn may mặc' })
   @IsNotEmpty({ message: 'Tên hàng hóa không được để trống' })
   @IsString()

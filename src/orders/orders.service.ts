@@ -259,6 +259,28 @@ export class OrdersService {
     };
   }
 
+  async checkCodeExists(
+    code: string,
+  ): Promise<{ exists: boolean; message?: string }> {
+    const trimmed = (code || '').trim();
+    if (
+      !trimmed ||
+      trimmed === '(Tự sinh khi lưu)' ||
+      trimmed.startsWith('(Tự sinh')
+    ) {
+      return { exists: false };
+    }
+    const order = await this.orderRepository.findOne({
+      where: { orderCode: trimmed },
+    });
+    return {
+      exists: !!order,
+      message: order
+        ? `Mã vận đơn '${trimmed}' đã tồn tại trong hệ thống, vui lòng nhập mã khác.`
+        : undefined,
+    };
+  }
+
   async findOne(idOrCode: number | string): Promise<OrderEntity> {
     let order: OrderEntity | null = null;
 
