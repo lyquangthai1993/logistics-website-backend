@@ -39,12 +39,16 @@ export class WarehouseController {
     @Query('status') status?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
   ) {
     return this.warehouseService.getOrders(req.user, {
       search,
       status,
       page,
       limit,
+      fromDate,
+      toDate,
     });
   }
 
@@ -53,8 +57,12 @@ export class WarehouseController {
   @ApiOperation({
     summary: 'Lấy chỉ số KPI tổng quan kho (Chờ nhập, Lưu kho, Chờ xuất, Đã xuất)',
   })
-  async getKpi(@Request() req: any) {
-    return this.warehouseService.getKpiStats(req.user);
+  async getKpi(
+    @Request() req: any,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+  ) {
+    return this.warehouseService.getKpiStats(req.user, { fromDate, toDate });
   }
 
   @Get('inbound-trips')
@@ -96,9 +104,9 @@ export class WarehouseController {
   })
   async confirmInbound(
     @Request() req: any,
-    @Body('orderIds') orderIds: number[],
+    @Body() body: any,
   ) {
-    return this.warehouseService.confirmInbound(req.user, orderIds);
+    return this.warehouseService.confirmInbound(req.user, body);
   }
 
   @Post('outbound/confirm')

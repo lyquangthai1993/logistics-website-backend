@@ -53,6 +53,19 @@ export class WarehouseService {
   ) {}
 
   /**
+   * Helper to resolve hubId from user entity or DB when missing on JWT payload.
+   */
+  private async resolveUserHubId(user: UserEntity): Promise<number | null | undefined> {
+    if (user.hubId) return user.hubId;
+    if (!user.id) return undefined;
+    const dbUser = await this.userRepository.findOne({
+      where: { id: user.id },
+      select: ['id', 'hubId'],
+    });
+    return dbUser?.hubId ?? null;
+  }
+
+  /**
    * List or Lookup warehouse orders with Freetext Search, Status Filter & Pagination.
    * Strict Hub Scoping for WAREHOUSE_MANAGER.
    */
@@ -63,11 +76,15 @@ export class WarehouseService {
       status?: string;
       page?: number;
       limit?: number;
+      fromDate?: string;
+      toDate?: string;
     },
   ): Promise<WarehouseOrdersResult> {
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
     const skip = (page - 1) * limit;
+
+    const userHubId = await this.resolveUserHubId(user);
 
     const qb = this.orderRepository
       .createQueryBuilder('order')
@@ -77,10 +94,10 @@ export class WarehouseService {
       .where('order.deletedAt IS NULL');
 
     // Scoping for Warehouse Manager: Include hub-bound orders and unassigned orders
-    if (user.role?.id === RoleEnum.WAREHOUSE_MANAGER && user.hubId) {
+    if (user.role?.id === RoleEnum.WAREHOUSE_MANAGER && userHubId) {
       qb.andWhere(
         '(order.originHubId = :userHubId OR order.destinationHubId = :userHubId OR order.originHubId IS NULL)',
-        { userHubId: user.hubId },
+        { userHubId },
       );
     }
 
@@ -89,10 +106,10 @@ export class WarehouseService {
       .createQueryBuilder('order')
       .where('order.deletedAt IS NULL');
 
-    if (user.role?.id === RoleEnum.WAREHOUSE_MANAGER && user.hubId) {
+    if (user.role?.id === RoleEnum.WAREHOUSE_MANAGER && userHubId) {
       countQb.andWhere(
         '(order.originHubId = :userHubId OR order.destinationHubId = :userHubId OR order.originHubId IS NULL)',
-        { userHubId: user.hubId },
+        { userHubId },
       );
     }
 
@@ -102,6 +119,26 @@ export class WarehouseService {
         '(order.orderCode ILIKE :search OR order.goodsDescription ILIKE :search)',
         { search },
       );
+    }
+
+    if (query?.fromDate) {
+      const from = new Date(`${query.fromDate}T00:00:00`);
+      qb.andWhere('(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)', {
+        fromDate: from.toISOString(),
+      });
+      countQb.andWhere('(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)', {
+        fromDate: from.toISOString(),
+      });
+    }
+
+    if (query?.toDate) {
+      const to = new Date(`${query.toDate}T23:59:59.999`);
+      qb.andWhere('(order.createdAt <= :toDate OR order.updatedAt <= :toDate)', {
+        toDate: to.toISOString(),
+      });
+      countQb.andWhere('(order.createdAt <= :toDate OR order.updatedAt <= :toDate)', {
+        toDate: to.toISOString(),
+      });
     }
 
     const countsRaw = await countQb
@@ -131,12 +168,12 @@ export class WarehouseService {
           break;
         case 'CUSTOMER':
           qb.andWhere(
-            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING') AND NOT ((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub) OR EXISTS (SELECT 1 FROM trip t WHERE t.\"orderId\" = order.id AND t.\"deletedAt\" IS NULL))",
+            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING', 'INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE') AND NOT ((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub) OR EXISTS (SELECT 1 FROM trip t WHERE t.\"orderId\" = order.id AND t.\"deletedAt\" IS NULL))",
           );
           break;
         case 'TRANSFER':
           qb.andWhere(
-            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING') AND (((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub)) OR EXISTS (SELECT 1 FROM trip t WHERE t.\"orderId\" = order.id AND t.\"deletedAt\" IS NULL))",
+            "order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING', 'INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE') AND (((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub)) OR EXISTS (SELECT 1 FROM trip t WHERE t.\"orderId\" = order.id AND t.\"deletedAt\" IS NULL))",
           );
           break;
         case 'COMPLETED_INBOUND':
@@ -256,31 +293,121 @@ export class WarehouseService {
 
   /**
    * Confirm inbound orders (Transition status to 'INBOUND' / LƯU KHO).
+   * Supports both simple orderIds array and structured grid rows (existing + new en-route orders).
    */
   async confirmInbound(
     user: UserEntity,
-    orderIds: number[],
-  ): Promise<{ updatedCount: number; orders: OrderEntity[] }> {
-    if (!orderIds || orderIds.length === 0) {
-      throw new UnprocessableEntityException('Danh sách đơn hàng không được để trống');
+    body: any,
+  ): Promise<{ updatedCount: number; newCount?: number; orders: OrderEntity[] }> {
+    let orderIds: number[] = [];
+    let customOrders: any[] = [];
+    let tripId: number | undefined;
+
+    if (Array.isArray(body)) {
+      orderIds = body;
+    } else if (body?.orderIds && Array.isArray(body.orderIds)) {
+      orderIds = body.orderIds;
+    } else if (body?.orders && Array.isArray(body.orders)) {
+      customOrders = body.orders;
+      tripId = body.tripId;
+    } else {
+      throw new UnprocessableEntityException('Dữ liệu tiếp nhận kho không hợp lệ');
     }
 
-    const orders = await this.orderRepository.find({
-      where: { id: In(orderIds) },
+    const savedOrders: OrderEntity[] = [];
+    let newCreatedCount = 0;
+
+    const userWithHub = await this.userRepository.findOne({
+      where: { id: user.id },
+      relations: ['hub', 'role'],
     });
 
-    if (orders.length === 0) {
-      throw new NotFoundException('Không tìm thấy đơn hàng nào');
+    // 1. Process explicit orderIds if any
+    if (orderIds.length > 0) {
+      const existing = await this.orderRepository.find({
+        where: { id: In(orderIds) },
+      });
+      for (const order of existing) {
+        order.status = 'INBOUND'; // LƯU KHO
+        if (userWithHub?.hubId) {
+          order.originHubId = userWithHub.hubId;
+          order.originHub = userWithHub.hub?.name || order.originHub;
+        }
+      }
+      const saved = await this.orderRepository.save(existing);
+      savedOrders.push(...saved);
     }
 
-    for (const order of orders) {
-      order.status = 'INBOUND'; // LƯU KHO
+    // 2. Process customOrders (from 10-column grid)
+    if (customOrders.length > 0) {
+      for (const row of customOrders) {
+        const hasSpecificCode =
+          row.orderCode &&
+          row.orderCode !== '(Tự sinh khi lưu)' &&
+          !row.orderCode.startsWith('(Tự sinh');
+
+        let foundOrder: OrderEntity | null = null;
+        if (hasSpecificCode) {
+          foundOrder = await this.orderRepository.findOne({
+            where: { orderCode: row.orderCode },
+          });
+        }
+
+        if (foundOrder) {
+          // Existing order unloaded from trip -> Update to INBOUND at current Hub
+          foundOrder.status = 'INBOUND';
+          if (userWithHub?.hubId) {
+            foundOrder.originHubId = userWithHub.hubId;
+            foundOrder.originHub = userWithHub.hub?.name || foundOrder.originHub;
+          }
+          if (row.notes) {
+            foundOrder.notes = row.notes;
+          }
+          const saved = await this.orderRepository.save(foundOrder);
+          savedOrders.push(saved);
+        } else {
+          // New row added en-route! Generate canonical orderCode atomically
+          const newOrderCode = userWithHub
+            ? await this.orderCodeService.generateOrderCode(userWithHub)
+            : `ORD-${Date.now()}`;
+
+          const newOrder = this.orderRepository.create({
+            orderCode: newOrderCode,
+            goodsDescription: (row.goodsDescription || 'Hàng gom luân chuyển').trim(),
+            totalQuantity: Number(row.totalQuantity) || 1,
+            totalWeight: Number(row.totalWeight) || 0,
+            totalVolume: Number(row.totalVolume) || 0,
+            route: `${userWithHub?.hub?.name || 'Hub'} → ${row.deliveryAddress || 'Điểm giao'}`,
+            originHub: userWithHub?.hub?.name || null,
+            originHubId: userWithHub?.hubId || null,
+            destinationHub: row.destinationHub || null,
+            destinationHubId: row.destinationHubId || null,
+            notes: row.notes || 'Hàng lấy thêm dọc đường luân chuyển',
+            status: 'INBOUND',
+            createdByUserId: user.id,
+            isExternalVehicleNeeded: false,
+          });
+
+          const savedNew = await this.orderRepository.save(newOrder);
+          savedOrders.push(savedNew);
+          newCreatedCount++;
+        }
+      }
     }
 
-    const saved = await this.orderRepository.save(orders);
+    // 3. Update trip if tripId was provided
+    if (tripId) {
+      const trip = await this.tripRepository.findOne({ where: { id: tripId } });
+      if (trip) {
+        trip.notes = (trip.notes ? `${trip.notes} · ` : '') + `Đã dỡ hàng tại ${userWithHub?.hub?.name || 'Hub'}`;
+        await this.tripRepository.save(trip);
+      }
+    }
+
     return {
-      updatedCount: saved.length,
-      orders: saved,
+      updatedCount: savedOrders.length - newCreatedCount,
+      newCount: newCreatedCount,
+      orders: savedOrders,
     };
   }
 
@@ -290,7 +417,7 @@ export class WarehouseService {
   async confirmOutbound(
     user: UserEntity,
     dto: ConfirmOutboundDto,
-  ): Promise<{ updatedCount: number; orders: OrderEntity[] }> {
+  ): Promise<{ updatedCount: number; orders: OrderEntity[]; trip?: TripEntity }> {
     const orders = await this.orderRepository.find({
       where: { id: In(dto.orderIds) },
     });
@@ -311,24 +438,71 @@ export class WarehouseService {
     }
 
     const saved = await this.orderRepository.save(orders);
+
+    let createdTrip: TripEntity | undefined;
+    if (dto.mode === OutboundMode.TRANSFER) {
+      let destHubName = '';
+      if (dto.destinationHubId) {
+        const destHub = await this.hubRepository.findOne({
+          where: { id: dto.destinationHubId },
+        });
+        if (destHub) {
+          destHubName = destHub.name;
+        }
+      }
+
+      const totalWeight = orders.reduce(
+        (sum, o) => sum + (Number(o.totalWeight) || 0),
+        0,
+      );
+      const totalVolume = orders.reduce(
+        (sum, o) => sum + (Number(o.totalVolume) || 0),
+        0,
+      );
+
+      createdTrip = this.tripRepository.create({
+        orderId: orders[0].id,
+        licensePlate: dto.licensePlate || '29C-888.99',
+        driverName: dto.driverName || 'Tài xế luân chuyển',
+        status: 'IN_TRANSIT',
+        pickupDate: (dto as any).dispatchDate || new Date().toISOString().split('T')[0],
+        weightAllocated: totalWeight,
+        volumeAllocated: totalVolume,
+        notes: `Chuyến xe luân chuyển ${orders.length} đơn hàng đến ${destHubName || 'Kho đích'}`,
+      });
+      createdTrip = await this.tripRepository.save(createdTrip);
+    }
+
     return {
       updatedCount: saved.length,
       orders: saved,
+      trip: createdTrip,
     };
   }
 
   /**
    * Get KPI metrics for warehouse dashboard cards & tab counters.
    */
-  async getKpiStats(user: UserEntity): Promise<{
+  async getKpiStats(
+    user: UserEntity,
+    query?: {
+      fromDate?: string;
+      toDate?: string;
+    },
+  ): Promise<{
     total: number;
     waitingInbound: number;
     customerInbound: number;
     transferInbound: number;
     storedInbound: number;
     waitingOutbound: number;
+    customerOutbound: number;
+    transferOutbound: number;
     completedOutboundToday: number;
+    completedOutbound: number;
   }> {
+    const userHubId = await this.resolveUserHubId(user);
+
     const qb = this.orderRepository
       .createQueryBuilder('order')
       .select([
@@ -337,16 +511,33 @@ export class WarehouseService {
         `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING') AND NOT ((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub) OR EXISTS (SELECT 1 FROM trip t WHERE t.\"orderId\" = order.id AND t.\"deletedAt\" IS NULL)) THEN 1 END) as "customerInbound"`,
         `COUNT(CASE WHEN order.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING') AND (((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub)) OR EXISTS (SELECT 1 FROM trip t WHERE t.\"orderId\" = order.id AND t.\"deletedAt\" IS NULL)) THEN 1 END) as "transferInbound"`,
         `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE') THEN 1 END) as "storedInbound"`,
-        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE', 'DRAFT', 'PENDING_FLEET') THEN 1 END) as "waitingOutbound"`,
-        `COUNT(CASE WHEN order.status IN ('COMPLETED_INBOUND', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED_OUTBOUND') AND order.updatedAt >= CURRENT_DATE THEN 1 END) as "completedOutboundToday"`,
+        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE') THEN 1 END) as "waitingOutbound"`,
+        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE') AND NOT ((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub)) THEN 1 END) as "customerOutbound"`,
+        `COUNT(CASE WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE') AND (((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub))) THEN 1 END) as "transferOutbound"`,
+        `COUNT(CASE WHEN order.status IN ('COMPLETED_INBOUND', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED_OUTBOUND') THEN 1 END) as "completedOutbound"`,
+        `COUNT(CASE WHEN order.status IN ('COMPLETED_INBOUND', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED_OUTBOUND') THEN 1 END) as "completedOutboundToday"`,
       ])
       .where('order.deletedAt IS NULL');
 
-    if (user.role?.id === RoleEnum.WAREHOUSE_MANAGER && user.hubId) {
+    if (user.role?.id === RoleEnum.WAREHOUSE_MANAGER && userHubId) {
       qb.andWhere(
         '(order.originHubId = :userHubId OR order.destinationHubId = :userHubId OR order.originHubId IS NULL)',
-        { userHubId: user.hubId },
+        { userHubId },
       );
+    }
+
+    if (query?.fromDate) {
+      const from = new Date(`${query.fromDate}T00:00:00`);
+      qb.andWhere('(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)', {
+        fromDate: from.toISOString(),
+      });
+    }
+
+    if (query?.toDate) {
+      const to = new Date(`${query.toDate}T23:59:59.999`);
+      qb.andWhere('(order.createdAt <= :toDate OR order.updatedAt <= :toDate)', {
+        toDate: to.toISOString(),
+      });
     }
 
     const raw = await qb.getRawOne();
@@ -358,7 +549,10 @@ export class WarehouseService {
       transferInbound: Number(raw?.transferInbound) || 0,
       storedInbound: Number(raw?.storedInbound) || 0,
       waitingOutbound: Number(raw?.waitingOutbound) || 0,
-      completedOutboundToday: Number(raw?.completedOutboundToday) || 0,
+      customerOutbound: Number(raw?.customerOutbound) || 0,
+      transferOutbound: Number(raw?.transferOutbound) || 0,
+      completedOutbound: Number(raw?.completedOutbound) || 0,
+      completedOutboundToday: Number(raw?.completedOutboundToday) || Number(raw?.completedOutbound) || 0,
     };
   }
 
@@ -377,10 +571,19 @@ export class WarehouseService {
     const limit = Math.max(1, Math.min(50, Number(query?.limit) || 10));
     const skip = (page - 1) * limit;
 
+    const userHubId = await this.resolveUserHubId(user);
+
     const qb = this.tripRepository
       .createQueryBuilder('trip')
       .leftJoinAndSelect('trip.order', 'order')
       .where('trip.deletedAt IS NULL');
+
+    if (user.role?.id === RoleEnum.WAREHOUSE_MANAGER && userHubId) {
+      qb.andWhere(
+        '(order.destinationHubId = :userHubId OR order.destinationHubId IS NULL)',
+        { userHubId },
+      );
+    }
 
     if (query?.search && query.search.trim()) {
       const rawSearch = query.search.trim();
