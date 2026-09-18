@@ -6,6 +6,9 @@ export class Order {
   originHub?: string | null;
   destinationHub?: string | null;
   totalQuantity?: number | null;
+  inboundQuantity?: number;
+  outboundQuantity?: number;
+  remainingQuantity?: number;
   totalWeight: number;
   totalVolume: number;
   goodsDescription?: string | null;

@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   UnprocessableEntityException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -74,15 +75,6 @@ export class OrdersService {
         );
       }
       finalCode = await this.orderCodeService.generateOrderCode(user);
-    } else {
-      const existing = await this.orderRepository.findOne({
-        where: { orderCode: finalCode },
-      });
-      if (existing) {
-        throw new UnprocessableEntityException(
-          'Mã đơn hàng đã tồn tại, vui lòng chọn mã khác',
-        );
-      }
     }
 
     if (
@@ -94,9 +86,14 @@ export class OrdersService {
       );
     }
 
+    const initQty = createOrderDto.totalQuantity ?? 1;
     const order = this.orderRepository.create({
       ...createOrderDto,
       orderCode: finalCode,
+      totalQuantity: initQty,
+      inboundQuantity: initQty,
+      outboundQuantity: 0,
+      remainingQuantity: initQty,
       status: 'DRAFT',
       createdByUserId: userId,
     });
@@ -262,23 +259,7 @@ export class OrdersService {
   async checkCodeExists(
     code: string,
   ): Promise<{ exists: boolean; message?: string }> {
-    const trimmed = (code || '').trim();
-    if (
-      !trimmed ||
-      trimmed === '(Tự sinh khi lưu)' ||
-      trimmed.startsWith('(Tự sinh')
-    ) {
-      return { exists: false };
-    }
-    const order = await this.orderRepository.findOne({
-      where: { orderCode: trimmed },
-    });
-    return {
-      exists: !!order,
-      message: order
-        ? `Mã vận đơn '${trimmed}' đã tồn tại trong hệ thống, vui lòng nhập mã khác.`
-        : undefined,
-    };
+    return { exists: false };
   }
 
   async findOne(idOrCode: number | string): Promise<OrderEntity> {
@@ -320,14 +301,6 @@ export class OrdersService {
       updateOrderDto.orderCode &&
       updateOrderDto.orderCode.trim() !== order.orderCode
     ) {
-      const existing = await this.orderRepository.findOne({
-        where: { orderCode: updateOrderDto.orderCode.trim() },
-      });
-      if (existing) {
-        throw new UnprocessableEntityException(
-          'Mã đơn hàng đã tồn tại, vui lòng chọn mã khác',
-        );
-      }
       order.orderCode = updateOrderDto.orderCode.trim();
     }
 
@@ -395,8 +368,15 @@ export class OrdersService {
     return saved;
   }
 
-  async remove(id: number): Promise<void> {
+  async remove(id: number, user?: UserEntity): Promise<void> {
     const order = await this.findOne(id);
+    if (user && user.role?.id === RoleEnum.WAREHOUSE_MANAGER) {
+      if (order.status !== 'DRAFT') {
+        throw new ForbiddenException(
+          'Thủ kho chỉ có quyền xóa đơn hàng ở trạng thái Lưu nháp (DRAFT). Đơn hàng đã qua xử lý cần có quyền của Quản trị viên (Admin).',
+        );
+      }
+    }
     await this.orderRepository.softRemove(order);
   }
 

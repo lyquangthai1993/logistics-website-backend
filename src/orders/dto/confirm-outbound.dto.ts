@@ -15,15 +15,43 @@ export enum OutboundMode {
   TRANSFER = 'TRANSFER',
 }
 
+export class OutboundItemDto {
+  @ApiProperty({ example: 1 })
+  @IsInt()
+  orderId: number;
+
+  @ApiPropertyOptional({ example: 10, description: 'Số kiện xuất trong đợt này' })
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  quantityToExport?: number;
+
+  @ApiPropertyOptional({ example: 50 })
+  @IsOptional()
+  weightToExport?: number;
+
+  @ApiPropertyOptional({ example: 0.5 })
+  @IsOptional()
+  volumeToExport?: number;
+}
+
 export class ConfirmOutboundDto {
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: [1, 2, 3],
     description: 'Danh sách ID đơn hàng cần xuất kho',
   })
+  @IsOptional()
   @IsArray()
-  @ArrayMinSize(1, { message: 'Cần chọn ít nhất 1 đơn hàng để xuất kho' })
   @IsInt({ each: true })
-  orderIds: number[];
+  orderIds?: number[];
+
+  @ApiPropertyOptional({
+    type: [OutboundItemDto],
+    description: 'Chi tiết từng đơn hàng và số lượng xuất đợt này',
+  })
+  @IsOptional()
+  @IsArray()
+  items?: OutboundItemDto[];
 
   @ApiProperty({ example: OutboundMode.CUSTOMER, enum: OutboundMode })
   @IsNotEmpty()

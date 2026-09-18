@@ -20,7 +20,7 @@ export class OrderEntity extends AbstractBaseEntity {
   id: number;
 
   @Index()
-  @Column({ type: String, unique: true, nullable: false })
+  @Column({ type: String, unique: false, nullable: false })
   orderCode: string;
 
   @Index()
@@ -38,6 +38,15 @@ export class OrderEntity extends AbstractBaseEntity {
 
   @Column({ type: 'int', nullable: true })
   totalQuantity: number | null;
+
+  @Column({ type: 'int', nullable: false, default: 0 })
+  inboundQuantity: number;
+
+  @Column({ type: 'int', nullable: false, default: 0 })
+  outboundQuantity: number;
+
+  @Column({ type: 'int', nullable: false, default: 0 })
+  remainingQuantity: number;
 
   @Column({ type: 'float', nullable: false, default: 0 })
   totalWeight: number;

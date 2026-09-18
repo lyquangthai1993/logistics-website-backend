@@ -221,14 +221,14 @@ export class OrdersController {
   }
 
   @Delete(':id')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.DISPATCHER)
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.DISPATCHER, RoleEnum.WAREHOUSE_MANAGER)
   @ApiParam({
     name: 'id',
     type: Number,
     required: true,
   })
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id') id: string): Promise<void> {
-    return this.ordersService.remove(+id);
+  remove(@Param('id') id: string, @Request() req: any): Promise<void> {
+    return this.ordersService.remove(+id, req.user);
   }
 }

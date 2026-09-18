@@ -115,8 +115,9 @@ export class WarehouseService {
 
     if (query?.search && query.search.trim()) {
       const search = `%${query.search.trim()}%`;
+      countQb.leftJoin('order.trips', 'trips');
       countQb.andWhere(
-        '(order.orderCode ILIKE :search OR order.goodsDescription ILIKE :search)',
+        '(order.orderCode ILIKE :search OR order.goodsDescription ILIKE :search OR trips.licensePlate ILIKE :search)',
         { search },
       );
     }
@@ -190,11 +191,11 @@ export class WarehouseService {
       }
     }
 
-    // Freetext Search: orderCode OR goodsDescription (No location lookup)
+    // Freetext Search: orderCode OR goodsDescription OR trips.licensePlate
     if (query?.search && query.search.trim()) {
       const search = `%${query.search.trim()}%`;
       qb.andWhere(
-        '(order.orderCode ILIKE :search OR order.goodsDescription ILIKE :search)',
+        '(order.orderCode ILIKE :search OR order.goodsDescription ILIKE :search OR trips.licensePlate ILIKE :search)',
         { search },
       );
     }
@@ -256,19 +257,10 @@ export class WarehouseService {
     // Check if client provided custom orderCode
     let finalOrderCode = dto.orderCode?.trim();
     if (
-      finalOrderCode &&
-      finalOrderCode !== '(Tự sinh khi lưu)' &&
-      !finalOrderCode.startsWith('(Tự sinh')
+      !finalOrderCode ||
+      finalOrderCode === '(Tự sinh khi lưu)' ||
+      finalOrderCode.startsWith('(Tự sinh')
     ) {
-      const existing = await this.orderRepository.findOne({
-        where: { orderCode: finalOrderCode },
-      });
-      if (existing) {
-        throw new UnprocessableEntityException(
-          `Mã vận đơn '${finalOrderCode}' đã tồn tại trên hệ thống, vui lòng nhập mã khác.`,
-        );
-      }
-    } else {
       // Server generates canonical orderCode atomically
       finalOrderCode = await this.orderCodeService.generateOrderCode(userWithHub);
     }
@@ -311,6 +303,9 @@ export class WarehouseService {
       orderCode: finalOrderCode,
       goodsDescription: finalGoodsDescription,
       totalQuantity: finalQuantity,
+      inboundQuantity: finalQuantity,
+      outboundQuantity: 0,
+      remainingQuantity: finalQuantity,
       totalWeight: finalWeight,
       totalVolume: finalVolume,
       route: `${originHubName || 'Hub'} → ${dto.deliveryAddress || destinationHubName || 'Điểm đến'}`,
@@ -404,25 +399,20 @@ export class WarehouseService {
         } else {
           // New row added en-route! Use custom orderCode if provided, or generate atomically
           let newOrderCode = row.orderCode?.trim();
-          if (hasSpecificCode && newOrderCode) {
-            const duplicate = await this.orderRepository.findOne({
-              where: { orderCode: newOrderCode },
-            });
-            if (duplicate) {
-              throw new UnprocessableEntityException(
-                `Mã vận đơn '${newOrderCode}' đã tồn tại trên hệ thống, vui lòng nhập mã khác.`,
-              );
-            }
-          } else {
+          if (!hasSpecificCode || !newOrderCode) {
             newOrderCode = userWithHub
               ? await this.orderCodeService.generateOrderCode(userWithHub)
               : `ORD-${Date.now()}`;
           }
 
+          const initQty = Number(row.totalQuantity) || 1;
           const newOrder = this.orderRepository.create({
             orderCode: newOrderCode,
             goodsDescription: (row.goodsDescription || 'Hàng gom luân chuyển').trim(),
-            totalQuantity: Number(row.totalQuantity) || 1,
+            totalQuantity: initQty,
+            inboundQuantity: initQty,
+            outboundQuantity: 0,
+            remainingQuantity: initQty,
             totalWeight: Number(row.totalWeight) || 0,
             totalVolume: Number(row.totalVolume) || 0,
             route: `${userWithHub?.hub?.name || 'Hub'} → ${row.deliveryAddress || 'Điểm giao'}`,
@@ -452,6 +442,25 @@ export class WarehouseService {
       }
     }
 
+    // 4. Record inbound vehicle trip if license plate was provided
+    const inboundPlate = (body?.vehicleLicensePlate || body?.licensePlate || '')?.trim();
+    const inboundDriver = (body?.driverName || '')?.trim();
+    if (inboundPlate && savedOrders.length > 0) {
+      for (const order of savedOrders) {
+        const trip = this.tripRepository.create({
+          orderId: order.id,
+          licensePlate: inboundPlate,
+          driverName: inboundDriver || null,
+          status: 'COMPLETED',
+          pickupDate: new Date().toISOString().split('T')[0],
+          weightAllocated: Number(order.totalWeight) || 0,
+          volumeAllocated: Number(order.totalVolume) || 0,
+          notes: `[NHẬP KHO] Xe nhập ${order.inboundQuantity || order.totalQuantity} kiện tại ${userWithHub?.hub?.name || 'Kho'}`,
+        });
+        await this.tripRepository.save(trip);
+      }
+    }
+
     return {
       updatedCount: savedOrders.length - newCreatedCount,
       newCount: newCreatedCount,
@@ -461,65 +470,97 @@ export class WarehouseService {
 
   /**
    * Confirm outbound dispatch (Customer vs Transfer).
+   * Supports partial export deductions and validates against available inventory.
    */
   async confirmOutbound(
     user: UserEntity,
     dto: ConfirmOutboundDto,
   ): Promise<{ updatedCount: number; orders: OrderEntity[]; trip?: TripEntity }> {
+    const targetOrderIds =
+      dto.items && dto.items.length > 0
+        ? dto.items.map((i) => i.orderId)
+        : dto.orderIds || [];
+
+    if (!targetOrderIds || targetOrderIds.length === 0) {
+      throw new NotFoundException('Không tìm thấy đơn hàng nào để xuất kho');
+    }
+
     const orders = await this.orderRepository.find({
-      where: { id: In(dto.orderIds) },
+      where: { id: In(targetOrderIds) },
     });
 
     if (orders.length === 0) {
       throw new NotFoundException('Không tìm thấy đơn hàng nào để xuất kho');
     }
 
-    for (const order of orders) {
-      if (dto.mode === OutboundMode.CUSTOMER) {
-        order.status = 'COMPLETED_INBOUND'; // ĐÃ XUẤT KHO (chuyển sang giao khách)
-      } else {
-        order.status = 'COMPLETED_INBOUND'; // ĐÃ XUẤT KHO (luân chuyển)
-        if (dto.destinationHubId) {
-          order.destinationHubId = dto.destinationHubId;
-        }
+    const isTransfer = dto.mode === OutboundMode.TRANSFER;
+    let destHubName = '';
+    if (isTransfer && dto.destinationHubId) {
+      const destHub = await this.hubRepository.findOne({
+        where: { id: dto.destinationHubId },
+      });
+      if (destHub) {
+        destHubName = destHub.name;
       }
+    }
+
+    let createdTrip: TripEntity | undefined;
+
+    for (const order of orders) {
+      const item = dto.items?.find((i) => i.orderId === order.id);
+      const availableQty =
+        order.remainingQuantity !== undefined && order.remainingQuantity !== null
+          ? order.remainingQuantity
+          : (order.totalQuantity || 0);
+
+      const qtyToExport =
+        item && item.quantityToExport !== undefined
+          ? Number(item.quantityToExport)
+          : availableQty;
+
+      if (qtyToExport <= 0) {
+        throw new UnprocessableEntityException(
+          `Đơn hàng ${order.orderCode}: Số lượng xuất phải lớn hơn 0.`,
+        );
+      }
+
+      if (qtyToExport > availableQty) {
+        throw new UnprocessableEntityException(
+          `Mã đơn ${order.orderCode}: Số lượng xuất (${qtyToExport}) vượt quá tồn kho khả dụng (${availableQty} kiện).`,
+        );
+      }
+
+      order.outboundQuantity = (order.outboundQuantity || 0) + qtyToExport;
+      order.remainingQuantity = Math.max(0, availableQty - qtyToExport);
+
+      if (order.remainingQuantity === 0) {
+        order.status = 'COMPLETED_INBOUND'; // ĐÃ XUẤT KHO toàn bộ
+      } else {
+        order.status = 'INBOUND'; // Còn tồn kho, giữ LƯU KHO để xuất đợt tiếp theo
+      }
+
+      if (isTransfer && dto.destinationHubId) {
+        order.destinationHubId = dto.destinationHubId;
+      }
+
+      const tripNotes = isTransfer
+        ? `[XUẤT KHO - LUÂN CHUYỂN] Xuất ${qtyToExport} kiện đến ${destHubName || 'Kho đích'}`
+        : `[XUẤT KHO - GIAO KHÁCH] Xuất ${qtyToExport} kiện giao khách`;
+
+      const trip = this.tripRepository.create({
+        orderId: order.id,
+        licensePlate: dto.licensePlate || 'Xe xuất kho',
+        driverName: dto.driverName || 'Tài xế giao hàng',
+        status: 'IN_TRANSIT',
+        pickupDate: (dto as any).dispatchDate || new Date().toISOString().split('T')[0],
+        weightAllocated: Number(item?.weightToExport ?? order.totalWeight ?? 0),
+        volumeAllocated: Number(item?.volumeToExport ?? order.totalVolume ?? 0),
+        notes: tripNotes,
+      });
+      createdTrip = await this.tripRepository.save(trip);
     }
 
     const saved = await this.orderRepository.save(orders);
-
-    let createdTrip: TripEntity | undefined;
-    if (dto.mode === OutboundMode.TRANSFER) {
-      let destHubName = '';
-      if (dto.destinationHubId) {
-        const destHub = await this.hubRepository.findOne({
-          where: { id: dto.destinationHubId },
-        });
-        if (destHub) {
-          destHubName = destHub.name;
-        }
-      }
-
-      const totalWeight = orders.reduce(
-        (sum, o) => sum + (Number(o.totalWeight) || 0),
-        0,
-      );
-      const totalVolume = orders.reduce(
-        (sum, o) => sum + (Number(o.totalVolume) || 0),
-        0,
-      );
-
-      createdTrip = this.tripRepository.create({
-        orderId: orders[0].id,
-        licensePlate: dto.licensePlate || '29C-888.99',
-        driverName: dto.driverName || 'Tài xế luân chuyển',
-        status: 'IN_TRANSIT',
-        pickupDate: (dto as any).dispatchDate || new Date().toISOString().split('T')[0],
-        weightAllocated: totalWeight,
-        volumeAllocated: totalVolume,
-        notes: `Chuyến xe luân chuyển ${orders.length} đơn hàng đến ${destHubName || 'Kho đích'}`,
-      });
-      createdTrip = await this.tripRepository.save(createdTrip);
-    }
 
     return {
       updatedCount: saved.length,
