@@ -69,6 +69,9 @@ export class OrderEntity extends AbstractBaseEntity {
   @Column({ type: 'text', nullable: true })
   notes: string | null;
 
+  @Column({ type: String, nullable: true })
+  province: string | null;
+
   // ── Hub FK (Phase 1: nullable, backward-compat with VARCHAR originHub/destinationHub) ──
 
   @Column({ type: 'int', nullable: true })

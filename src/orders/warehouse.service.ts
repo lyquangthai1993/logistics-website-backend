@@ -313,6 +313,7 @@ export class WarehouseService {
       originHubId,
       destinationHub: destinationHubName,
       destinationHubId: dto.destinationHubId || null,
+      province: dto.province?.trim() || null,
       notes: dto.notes?.trim() || null,
       status: initialStatus,
       createdByUserId: user.id,

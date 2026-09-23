@@ -66,6 +66,11 @@ export class QuickCreateInboundOrderDto {
   @IsString()
   deliveryAddress?: string;
 
+  @ApiPropertyOptional({ example: 'TP.HCM', description: 'Tỉnh/Thành phố nhận hàng (nhập tự do)' })
+  @IsOptional()
+  @IsString()
+  province?: string;
+
   @ApiPropertyOptional({ example: 2, description: 'ID Hub đích' })
   @IsOptional()
   @IsInt()
