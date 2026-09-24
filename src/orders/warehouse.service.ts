@@ -6,7 +6,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, In } from 'typeorm';
+import { Repository, DataSource, In, EntityManager } from 'typeorm';
 import { OrderEntity } from './infrastructure/persistence/relational/entities/order.entity';
 import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
 import { UserEntity } from '../users/infrastructure/persistence/relational/entities/user.entity';
@@ -19,6 +19,7 @@ import { OrderCodeService } from './order-code.service';
 import { RoleEnum } from '../roles/roles.enum';
 import {
   QuickCreateInboundOrderDto,
+  BatchQuickCreateInboundDto,
   DeliveryDestinationMode,
 } from './dto/quick-create-inbound-order.dto';
 import { ConfirmOutboundDto, OutboundMode } from './dto/confirm-outbound.dto';
@@ -243,8 +244,35 @@ export class WarehouseService {
   }
 
   /**
+   * Generate canonical Trip Code: TRIP-{YYMM}-{SEQUENCE}
+   */
+  async generateTripCode(manager?: EntityManager): Promise<string> {
+    const yymm = this.orderCodeService.getYearMonthPeriod(); // e.g. "2609"
+    const repo = manager ? manager.getRepository(TripEntity) : this.tripRepository;
+
+    const result = await repo
+      .createQueryBuilder('trip')
+      .select('MAX(trip.tripCode)', 'maxCode')
+      .where('trip.tripCode LIKE :pattern', { pattern: `TRIP-${yymm}-%` })
+      .getRawOne();
+
+    let nextSeq = 1;
+    if (result?.maxCode) {
+      const parts = result.maxCode.split('-');
+      const currentSeq = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(currentSeq)) {
+        nextSeq = currentSeq + 1;
+      }
+    }
+
+    const paddedSeq = String(nextSeq).padStart(3, '0');
+    return `TRIP-${yymm}-${paddedSeq}`;
+  }
+
+  /**
    * Quick create inbound order row from warehouse.
    * Generates code atomically via OrderCodeService, sets status = 'INBOUND' (LƯU KHO).
+   * Automatically creates TripEntity with tripCode, licensePlate, and driverName.
    */
   async quickCreateInboundOrder(
     user: UserEntity,
@@ -306,6 +334,10 @@ export class WarehouseService {
         ? Number(dto.totalVolume)
         : 0;
 
+    const plate = dto.licensePlate?.trim().toUpperCase();
+    const driver = dto.driverName?.trim() || null;
+    const date = dto.receiveDate?.trim() || new Date().toISOString().split('T')[0];
+
     const order = this.orderRepository.create({
       orderCode: finalOrderCode,
       goodsDescription: finalGoodsDescription,
@@ -338,13 +370,193 @@ export class WarehouseService {
         remainingQuantity: finalQuantity,
         weight: finalWeight,
         volume: finalVolume,
+        licensePlate: plate || null,
+        driverName: driver || null,
         notes: dto.notes?.trim() || 'Tiếp nhận nhập kho ban đầu',
         destination: dto.deliveryAddress || destinationHubName || null,
         performedByUserId: user.id,
       }),
     );
 
+    // Create TripEntity for vehicle intake
+    if (plate) {
+      let finalTripCode = dto.tripCode?.trim();
+      if (!finalTripCode) {
+        finalTripCode = await this.generateTripCode();
+      }
+
+      const trip = this.tripRepository.create({
+        orderId: savedOrder.id,
+        tripCode: finalTripCode,
+        licensePlate: plate,
+        driverName: driver,
+        status: 'COMPLETED',
+        pickupDate: date,
+        weightAllocated: finalWeight,
+        volumeAllocated: finalVolume,
+        notes: `[NHẬP KHO] Xe ${plate} tiếp nhận ${finalQuantity} kiện tại ${originHubName || 'Kho'}`,
+      });
+      await this.tripRepository.save(trip);
+      savedOrder.trips = [trip];
+    }
+
     return savedOrder;
+  }
+
+  /**
+   * Batch create inbound orders for a single vehicle trip.
+   * Generates ONE shared canonical tripCode, creates OrderEntity and TripEntity for each item.
+   */
+  async batchCreateInboundOrders(
+    user: UserEntity,
+    dto: BatchQuickCreateInboundDto,
+  ): Promise<{
+    tripCode: string;
+    licensePlate: string;
+    driverName: string | null;
+    count: number;
+    orders: OrderEntity[];
+  }> {
+    if (!dto.items || dto.items.length === 0) {
+      throw new UnprocessableEntityException('Danh sách hàng nhập kho không được để trống');
+    }
+
+    const userWithHub = await this.userRepository.findOne({
+      where: { id: user.id },
+      relations: ['hub', 'role'],
+    });
+
+    if (!userWithHub) {
+      throw new UnauthorizedException(
+        'Tài khoản không tồn tại trên hệ thống hoặc phiên đăng nhập đã cũ. Vui lòng đăng nhập lại.',
+      );
+    }
+
+    const plate = dto.licensePlate.trim().toUpperCase();
+    const driver = dto.driverName?.trim() || null;
+    const date = dto.receiveDate?.trim() || new Date().toISOString().split('T')[0];
+
+    // Single shared tripCode for all items on this vehicle
+    let sharedTripCode = dto.tripCode?.trim();
+    if (!sharedTripCode) {
+      sharedTripCode = await this.generateTripCode();
+    }
+
+    const savedOrders: OrderEntity[] = [];
+
+    // Execute in transaction for atomicity
+    await this.dataSource.transaction(async (manager) => {
+      const orderRepo = manager.getRepository(OrderEntity);
+      const tripRepo = manager.getRepository(TripEntity);
+      const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
+      const hubRepo = manager.getRepository(HubEntity);
+
+      const originHubId = userWithHub.hubId || null;
+      const originHubName = userWithHub.hub?.name || null;
+
+      for (const item of dto.items) {
+        let finalOrderCode = item.orderCode?.trim();
+        if (
+          !finalOrderCode ||
+          finalOrderCode === '(Tự sinh khi lưu)' ||
+          finalOrderCode.startsWith('(Tự sinh')
+        ) {
+          finalOrderCode = await this.orderCodeService.generateOrderCode(userWithHub, manager);
+        }
+
+        let destinationHubName: string | null = null;
+        if (item.destinationHubId) {
+          const destHub = await hubRepo.findOne({
+            where: { id: item.destinationHubId },
+          });
+          if (destHub) {
+            destinationHubName = destHub.name;
+          }
+        }
+
+        const initialStatus = item.initialStatus || 'INBOUND';
+        const finalGoodsDesc =
+          item.goodsDescription?.trim() ||
+          (initialStatus === 'DRAFT' ? 'Hàng lưu kho (Nháp)' : 'Hàng hóa');
+        const qty =
+          item.totalQuantity !== undefined && Number(item.totalQuantity) > 0
+            ? Number(item.totalQuantity)
+            : 1;
+        const weight =
+          item.totalWeight !== undefined && Number(item.totalWeight) >= 0
+            ? Number(item.totalWeight)
+            : 0;
+        const vol =
+          item.totalVolume !== undefined && Number(item.totalVolume) >= 0
+            ? Number(item.totalVolume)
+            : 0;
+
+        const order = orderRepo.create({
+          orderCode: finalOrderCode,
+          goodsDescription: finalGoodsDesc,
+          totalQuantity: qty,
+          inboundQuantity: qty,
+          outboundQuantity: 0,
+          remainingQuantity: qty,
+          totalWeight: weight,
+          totalVolume: vol,
+          route: `${originHubName || 'Hub'} → ${item.deliveryAddress || destinationHubName || 'Điểm đến'}`,
+          originHub: originHubName,
+          originHubId,
+          destinationHub: destinationHubName,
+          destinationHubId: item.destinationHubId || null,
+          province: item.province?.trim() || null,
+          notes: item.notes?.trim() || null,
+          status: initialStatus,
+          createdByUserId: user.id,
+          isExternalVehicleNeeded: false,
+        });
+
+        const savedOrder = await orderRepo.save(order);
+
+        // Create TripEntity linked to this order with shared tripCode
+        const trip = tripRepo.create({
+          orderId: savedOrder.id,
+          tripCode: sharedTripCode,
+          licensePlate: plate,
+          driverName: driver,
+          status: 'COMPLETED',
+          pickupDate: date,
+          weightAllocated: weight,
+          volumeAllocated: vol,
+          notes: `[NHẬP KHO] Xe ${plate} tiếp nhận ${qty} kiện tại ${originHubName || 'Kho'}`,
+        });
+        await tripRepo.save(trip);
+        savedOrder.trips = [trip];
+
+        // Create initial INBOUND inventory transaction
+        await txRepo.save(
+          txRepo.create({
+            orderId: savedOrder.id,
+            type: InventoryTransactionType.INBOUND,
+            quantity: qty,
+            remainingQuantity: qty,
+            weight: weight,
+            volume: vol,
+            licensePlate: plate,
+            driverName: driver,
+            notes: item.notes?.trim() || `Tiếp nhận xe ${plate} - ${sharedTripCode}`,
+            destination: item.deliveryAddress || destinationHubName || null,
+            performedByUserId: user.id,
+          }),
+        );
+
+        savedOrders.push(savedOrder);
+      }
+    });
+
+    return {
+      tripCode: sharedTripCode,
+      licensePlate: plate,
+      driverName: driver,
+      count: savedOrders.length,
+      orders: savedOrders,
+    };
   }
 
   /**

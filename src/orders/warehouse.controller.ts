@@ -15,7 +15,10 @@ import { RolesGuard } from '../roles/roles.guard';
 import { Roles } from '../roles/roles.decorator';
 import { RoleEnum } from '../roles/roles.enum';
 import { WarehouseService } from './warehouse.service';
-import { QuickCreateInboundOrderDto } from './dto/quick-create-inbound-order.dto';
+import {
+  QuickCreateInboundOrderDto,
+  BatchQuickCreateInboundDto,
+} from './dto/quick-create-inbound-order.dto';
 import { ConfirmOutboundDto } from './dto/confirm-outbound.dto';
 
 @ApiTags('Warehouse')
@@ -94,6 +97,19 @@ export class WarehouseController {
     @Body() dto: QuickCreateInboundOrderDto,
   ) {
     return this.warehouseService.quickCreateInboundOrder(req.user, dto);
+  }
+
+  @Post('inbound/batch-create')
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Tạo lô hàng nhập kho từ 1 xe (nhiều dòng hàng chung 1 chuyến xe / trip)',
+  })
+  async batchCreateInbound(
+    @Request() req: any,
+    @Body() dto: BatchQuickCreateInboundDto,
+  ) {
+    return this.warehouseService.batchCreateInboundOrders(req.user, dto);
   }
 
   @Post('inbound/confirm')

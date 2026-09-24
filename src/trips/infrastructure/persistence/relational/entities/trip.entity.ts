@@ -21,6 +21,10 @@ export class TripEntity extends AbstractBaseEntity {
   @Column({ type: Number, nullable: false })
   orderId: number;
 
+  @Index()
+  @Column({ type: String, nullable: true })
+  tripCode: string | null;
+
   @ManyToOne('OrderEntity', (order: OrderEntity) => order.trips, {
     onDelete: 'CASCADE',
   })

@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsArray,
   IsEnum,
   IsInt,
   IsNotEmpty,
@@ -8,7 +9,9 @@ import {
   IsPositive,
   IsString,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export enum DeliveryDestinationMode {
   DIRECT_CUSTOMER = 'DIRECT_CUSTOMER',
@@ -16,7 +19,7 @@ export enum DeliveryDestinationMode {
   XE_BO = 'XE_BO',
 }
 
-export class QuickCreateInboundOrderDto {
+export class InboundOrderItemDto {
   @ApiPropertyOptional({
     example: 'HCM-LTV-2609-011',
     description: 'Mã vận đơn (nhập tự do hoặc để trống để hệ thống tự cấp)',
@@ -53,7 +56,7 @@ export class QuickCreateInboundOrderDto {
   @IsString()
   pickupAddress?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: DeliveryDestinationMode.HUB_L1,
     enum: DeliveryDestinationMode,
   })
@@ -90,3 +93,82 @@ export class QuickCreateInboundOrderDto {
   @IsString()
   initialStatus?: string;
 }
+
+export class QuickCreateInboundOrderDto extends InboundOrderItemDto {
+  @ApiProperty({
+    example: '29C-123.45',
+    description: 'Biển số xe tiếp nhận tại cửa kho (bắt buộc)',
+  })
+  @IsNotEmpty({ message: 'Biển số xe không được để trống' })
+  @IsString({ message: 'Biển số xe phải là chuỗi ký tự' })
+  licensePlate: string;
+
+  @ApiPropertyOptional({
+    example: 'Nguyễn Văn A',
+    description: 'Họ tên tài xế / người giao hàng',
+  })
+  @IsOptional()
+  @IsString()
+  driverName?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-09-24',
+    description: 'Ngày tiếp nhận hàng',
+  })
+  @IsOptional()
+  @IsString()
+  receiveDate?: string;
+
+  @ApiPropertyOptional({
+    example: 'TRIP-2609-001',
+    description: 'Mã chuyến xe / trip code (tùy chọn hoặc hệ thống tự cấp)',
+  })
+  @IsOptional()
+  @IsString()
+  tripCode?: string;
+}
+
+export class BatchQuickCreateInboundDto {
+  @ApiProperty({
+    example: '29C-123.45',
+    description: 'Biển số xe tiếp nhận tại cửa kho (bắt buộc)',
+  })
+  @IsNotEmpty({ message: 'Biển số xe không được để trống' })
+  @IsString({ message: 'Biển số xe phải là chuỗi ký tự' })
+  licensePlate: string;
+
+  @ApiPropertyOptional({
+    example: 'Nguyễn Văn A',
+    description: 'Họ tên tài xế / người giao hàng',
+  })
+  @IsOptional()
+  @IsString()
+  driverName?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-09-24',
+    description: 'Ngày tiếp nhận hàng',
+  })
+  @IsOptional()
+  @IsString()
+  receiveDate?: string;
+
+  @ApiPropertyOptional({
+    example: 'TRIP-2609-001',
+    description: 'Mã chuyến xe / trip code (tùy chọn hoặc hệ thống tự cấp)',
+  })
+  @IsOptional()
+  @IsString()
+  tripCode?: string;
+
+  @ApiProperty({
+    description: 'Danh sách các dòng hàng của chuyến xe',
+    type: () => [InboundOrderItemDto],
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => InboundOrderItemDto)
+  items: InboundOrderItemDto[];
+}
+
+
