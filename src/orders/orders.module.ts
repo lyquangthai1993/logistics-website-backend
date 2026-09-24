@@ -11,6 +11,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { MailModule } from '../mail/mail.module';
 
 import { TripEntity } from '../trips/infrastructure/persistence/relational/entities/trip.entity';
+import { OrderInventoryTransactionEntity } from './infrastructure/persistence/relational/entities/order-inventory-transaction.entity';
 import { WarehouseController } from './warehouse.controller';
 import { WarehouseService } from './warehouse.service';
 
@@ -22,6 +23,7 @@ import { WarehouseService } from './warehouse.service';
       UserEntity,
       HubEntity,
       TripEntity,
+      OrderInventoryTransactionEntity,
     ]),
     NotificationsModule,
     MailModule,

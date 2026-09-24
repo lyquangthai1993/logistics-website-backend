@@ -98,4 +98,10 @@ export class OrderEntity extends AbstractBaseEntity {
 
   @OneToMany('TripEntity', (trip: TripEntity) => trip.order)
   trips: Relation<TripEntity[]>;
+
+  @OneToMany(
+    'OrderInventoryTransactionEntity',
+    (tx: any) => tx.order,
+  )
+  inventoryTransactions: Relation<any[]>;
 }

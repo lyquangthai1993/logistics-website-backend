@@ -271,14 +271,24 @@ export class OrdersService {
     ) {
       order = await this.orderRepository.findOne({
         where: { id: Number(idOrCode) },
-        relations: ['trips', 'trips.vehicle', 'trips.driver'],
+        relations: [
+          'trips',
+          'inventoryTransactions',
+          'originHubEntity',
+          'destinationHubEntity',
+        ],
       });
     }
 
     if (!order && typeof idOrCode === 'string' && idOrCode.trim()) {
       order = await this.orderRepository.findOne({
         where: { orderCode: idOrCode.trim() },
-        relations: ['trips', 'trips.vehicle', 'trips.driver'],
+        relations: [
+          'trips',
+          'inventoryTransactions',
+          'originHubEntity',
+          'destinationHubEntity',
+        ],
       });
     }
 

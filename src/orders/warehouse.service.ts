@@ -11,6 +11,10 @@ import { OrderEntity } from './infrastructure/persistence/relational/entities/or
 import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
 import { UserEntity } from '../users/infrastructure/persistence/relational/entities/user.entity';
 import { TripEntity } from '../trips/infrastructure/persistence/relational/entities/trip.entity';
+import {
+  OrderInventoryTransactionEntity,
+  InventoryTransactionType,
+} from './infrastructure/persistence/relational/entities/order-inventory-transaction.entity';
 import { OrderCodeService } from './order-code.service';
 import { RoleEnum } from '../roles/roles.enum';
 import {
@@ -48,6 +52,8 @@ export class WarehouseService {
     private readonly userRepository: Repository<UserEntity>,
     @InjectRepository(TripEntity)
     private readonly tripRepository: Repository<TripEntity>,
+    @InjectRepository(OrderInventoryTransactionEntity)
+    private readonly transactionRepository: Repository<OrderInventoryTransactionEntity>,
     private readonly orderCodeService: OrderCodeService,
     private readonly dataSource: DataSource,
   ) {}
@@ -91,6 +97,7 @@ export class WarehouseService {
       .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
       .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
       .leftJoinAndSelect('order.trips', 'trips')
+      .leftJoinAndSelect('order.inventoryTransactions', 'inventoryTransactions')
       .where('order.deletedAt IS NULL');
 
     // Scoping for Warehouse Manager: Include hub-bound orders and unassigned orders
@@ -320,7 +327,24 @@ export class WarehouseService {
       isExternalVehicleNeeded: false,
     });
 
-    return this.orderRepository.save(order);
+    const savedOrder = await this.orderRepository.save(order);
+
+    // Record initial INBOUND inventory transaction
+    await this.transactionRepository.save(
+      this.transactionRepository.create({
+        orderId: savedOrder.id,
+        type: InventoryTransactionType.INBOUND,
+        quantity: finalQuantity,
+        remainingQuantity: finalQuantity,
+        weight: finalWeight,
+        volume: finalVolume,
+        notes: dto.notes?.trim() || 'Tiếp nhận nhập kho ban đầu',
+        destination: dto.deliveryAddress || destinationHubName || null,
+        performedByUserId: user.id,
+      }),
+    );
+
+    return savedOrder;
   }
 
   /**
@@ -462,6 +486,27 @@ export class WarehouseService {
       }
     }
 
+    // 5. Record INBOUND inventory transactions for all confirmed orders
+    for (const order of savedOrders) {
+      await this.transactionRepository.save(
+        this.transactionRepository.create({
+          orderId: order.id,
+          type: InventoryTransactionType.INBOUND,
+          quantity: order.inboundQuantity || order.totalQuantity || 1,
+          remainingQuantity: order.remainingQuantity ?? order.totalQuantity ?? 1,
+          weight: Number(order.totalWeight) || 0,
+          volume: Number(order.totalVolume) || 0,
+          licensePlate: inboundPlate || null,
+          driverName: inboundDriver || null,
+          destination: order.destinationHub || order.province || null,
+          performedByUserId: user.id,
+          notes: inboundPlate
+            ? `Nhập kho từ xe ${inboundPlate} tại ${userWithHub?.hub?.name || 'Kho'}`
+            : `Tiếp nhận lưu kho tại ${userWithHub?.hub?.name || 'Kho'}`,
+        }),
+      );
+    }
+
     return {
       updatedCount: savedOrders.length - newCreatedCount,
       newCount: newCreatedCount,
@@ -559,6 +604,29 @@ export class WarehouseService {
         notes: tripNotes,
       });
       createdTrip = await this.tripRepository.save(trip);
+
+      // Record OUTBOUND / TRANSFER inventory transaction
+      await this.transactionRepository.save(
+        this.transactionRepository.create({
+          orderId: order.id,
+          type: isTransfer
+            ? InventoryTransactionType.TRANSFER
+            : InventoryTransactionType.OUTBOUND,
+          quantity: qtyToExport,
+          remainingQuantity: order.remainingQuantity,
+          weight: Number(item?.weightToExport ?? 0),
+          volume: Number(item?.volumeToExport ?? 0),
+          licensePlate: dto.licensePlate || null,
+          driverName: dto.driverName || null,
+          destination: isTransfer
+            ? destHubName || 'Kho đích'
+            : (order.destinationHub || order.province || 'Giao khách'),
+          performedByUserId: user.id,
+          notes: isTransfer
+            ? `Xuất ${qtyToExport} kiện luân chuyển đến ${destHubName || 'Kho đích'}`
+            : `Xuất ${qtyToExport} kiện giao khách`,
+        }),
+      );
     }
 
     const saved = await this.orderRepository.save(orders);
