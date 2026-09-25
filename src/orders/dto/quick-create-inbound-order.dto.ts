@@ -80,6 +80,11 @@ export class InboundOrderItemDto {
   @IsPositive()
   destinationHubId?: number;
 
+  @ApiPropertyOptional({ example: '1 BCT', description: 'Chứng từ đi kèm (optional)' })
+  @IsOptional()
+  @IsString()
+  accompanyingDocs?: string;
+
   @ApiPropertyOptional({ example: 'Hàng dễ ướt, bốc nhẹ tay' })
   @IsOptional()
   @IsString()

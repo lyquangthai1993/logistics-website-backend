@@ -103,4 +103,9 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   province?: string;
+
+  @ApiPropertyOptional({ example: '1 BCT', description: 'Chứng từ đi kèm (optional)' })
+  @IsOptional()
+  @IsString()
+  accompanyingDocs?: string;
 }
