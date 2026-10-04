@@ -278,7 +278,9 @@ export class WarehouseService {
         .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
         .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
         .leftJoinAndSelect('order.trips', 'trips')
+        .leftJoinAndSelect('trips.originHub', 'tripOriginHub')
         .leftJoinAndSelect('order.inventoryTransactions', 'inventoryTransactions')
+        .leftJoinAndSelect('inventoryTransactions.hub', 'inventoryTransactionHub')
         .where('order.deletedAt IS NULL');
 
     // Dynamic counts for status tabs based on current hub scope
