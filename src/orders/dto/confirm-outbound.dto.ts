@@ -33,6 +33,22 @@ export class OutboundItemDto {
   @ApiPropertyOptional({ example: 0.5 })
   @IsOptional()
   volumeToExport?: number;
+
+  @ApiPropertyOptional({ example: 2, description: 'ID Hub nhận trung chuyển của đơn này' })
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  destinationHubId?: number;
+
+  @ApiPropertyOptional({ example: 'HUB_L1' })
+  @IsOptional()
+  @IsString()
+  deliveryMode?: string;
+
+  @ApiPropertyOptional({ example: 'Kho Hưng Yên' })
+  @IsOptional()
+  @IsString()
+  deliveryAddress?: string;
 }
 
 export class ConfirmOutboundDto {

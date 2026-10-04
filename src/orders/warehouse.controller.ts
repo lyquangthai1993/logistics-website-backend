@@ -47,6 +47,7 @@ export class WarehouseController {
     @Request() req: any,
     @Query('search') search?: string,
     @Query('status') status?: string,
+    @Query('flow') flow?: 'INBOUND' | 'OUTBOUND',
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('fromDate') fromDate?: string,
@@ -55,6 +56,7 @@ export class WarehouseController {
     return this.warehouseService.getOrders(req.user, {
       search,
       status,
+      flow,
       page,
       limit,
       fromDate,

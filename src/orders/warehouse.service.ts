@@ -44,6 +44,8 @@ export interface WarehouseOrdersResult {
     allCount?: number;
     storedCount?: number;
     draftCount?: number;
+    inboundTotal?: number;
+    outboundTotal?: number;
   };
 }
 
@@ -159,6 +161,7 @@ export class WarehouseService {
     query: {
       search?: string;
       status?: string;
+      flow?: 'INBOUND' | 'OUTBOUND';
       page?: number;
       limit?: number;
       fromDate?: string;
@@ -195,6 +198,21 @@ export class WarehouseService {
       const scope = this.ledgerService.hubScopeSql();
       qb.andWhere(scope).setParameter('userHubId', userHubId);
       countQb.andWhere(scope).setParameter('userHubId', userHubId);
+    }
+
+    const flowUpper = query?.flow?.toUpperCase();
+    const waitingOrStored = sqlList([...WAITING_STATUSES, ...STORED_STATUSES]);
+    const storedOrDispatched = sqlList([...STORED_STATUSES, ...DISPATCHED_STATUSES]);
+
+    // Context flow scoping:
+    // When flow === 'INBOUND' and status === 'ALL' (or omitted), only show items physically in or inbound to warehouse
+    // (exclude COMPLETED_INBOUND / DISPATCHED items which already departed).
+    if (flowUpper === 'INBOUND' && (!query?.status || query.status.toUpperCase() === 'ALL')) {
+      qb.andWhere(`${statusExpr} IN (${waitingOrStored})`);
+      countQb.andWhere(`${statusExpr} IN (${waitingOrStored})`);
+    } else if (flowUpper === 'OUTBOUND' && (!query?.status || query.status.toUpperCase() === 'ALL')) {
+      qb.andWhere(`${statusExpr} IN (${storedOrDispatched})`);
+      countQb.andWhere(`${statusExpr} IN (${storedOrDispatched})`);
     }
 
     if (query?.search && query.search.trim()) {
@@ -1167,19 +1185,32 @@ export class WarehouseService {
         throw new NotFoundException('Không tìm thấy đơn hàng nào để xuất kho');
       }
 
-      const isTransfer = dto.mode === OutboundMode.TRANSFER;
+      // Auto-detect isTransfer if mode is TRANSFER OR any item/order has a destination hub different from origin
+      const actingOriginId = userHubId ?? orders[0].currentHubId ?? orders[0].originHubId ?? null;
+      const hasTransferItem = orders.some((order) => {
+        const item = dto.items?.find((i) => i.orderId === order.id);
+        const destId = item?.destinationHubId ?? dto.destinationHubId ?? order.destinationHubId;
+        return destId && destId !== actingOriginId;
+      });
+      const isTransfer = dto.mode === OutboundMode.TRANSFER || hasTransferItem;
+
+      const primaryTargetHubId =
+        dto.destinationHubId ||
+        dto.items?.find((i) => i.destinationHubId && i.destinationHubId !== actingOriginId)?.destinationHubId ||
+        orders.find((o) => o.destinationHubId && o.destinationHubId !== actingOriginId)?.destinationHubId ||
+        null;
+
       let destHubName = '';
-      if (isTransfer && dto.destinationHubId) {
+      if (isTransfer && primaryTargetHubId) {
         const destHub = await hubRepo.findOne({
-          where: { id: dto.destinationHubId },
+          where: { id: primaryTargetHubId },
         });
         if (destHub) {
           destHubName = destHub.name;
         }
       }
 
-      const originHubId =
-        userHubId ?? orders[0].currentHubId ?? orders[0].originHubId ?? null;
+      const originHubId = actingOriginId;
       const tripCode = await this.ledgerService.generateTripCode(manager);
       const invoiceCode = await this.ledgerService.generateInvoiceCode(
         isTransfer ? InventoryTransactionType.TRANSFER : InventoryTransactionType.OUTBOUND,
@@ -1236,6 +1267,19 @@ export class WarehouseService {
           order.status = 'INBOUND'; // Còn tồn kho, giữ LƯU KHO để xuất đợt tiếp theo
         }
 
+        const itemDestHubId =
+          item?.destinationHubId ??
+          (dto.destinationHubId && dto.destinationHubId !== actingHubId
+            ? dto.destinationHubId
+            : null);
+        if (itemDestHubId && itemDestHubId !== actingHubId) {
+          order.destinationHubId = itemDestHubId;
+          const destHub = await hubRepo.findOne({ where: { id: itemDestHubId } });
+          if (destHub) {
+            order.destinationHub = destHub.name;
+          }
+        }
+
         if (isTransfer) {
           order.currentTripCode = tripCode;
         }
@@ -1252,17 +1296,28 @@ export class WarehouseService {
             this.proportional(order.totalVolume, qtyToExport, order.totalQuantity),
         );
 
+        const orderTargetHubName =
+          order.destinationHub || destHubName || 'Kho đích';
         const tripNotes = isTransfer
-          ? `[XUẤT KHO - LUÂN CHUYỂN] Xuất ${qtyToExport} kiện đến ${destHubName || order.destinationHub || 'Kho đích'}`
+          ? `[XUẤT KHO - LUÂN CHUYỂN] Xuất ${qtyToExport} kiện đến ${orderTargetHubName}`
           : `[XUẤT KHO - GIAO KHÁCH] Xuất ${qtyToExport} kiện giao khách`;
+
+        const tripDestHubId =
+          itemDestHubId && itemDestHubId !== actingHubId
+            ? itemDestHubId
+            : primaryTargetHubId && primaryTargetHubId !== actingHubId
+              ? primaryTargetHubId
+              : order.destinationHubId && order.destinationHubId !== actingHubId
+                ? order.destinationHubId
+                : null;
 
         createdTrip = await tripRepo.save(
           tripRepo.create({
             orderId: order.id,
             tripCode,
             originHubId: actingHubId,
-            destinationHubId: isTransfer ? (dto.destinationHubId || order.destinationHubId || null) : null,
-            type: isTransfer ? 'TRANSFER' : 'OUTBOUND',
+            destinationHubId: tripDestHubId,
+            type: tripDestHubId ? 'TRANSFER' : isTransfer ? 'TRANSFER' : 'OUTBOUND',
             licensePlate: dto.licensePlate || 'Xe xuất kho',
             driverName: dto.driverName || 'Tài xế giao hàng',
             status: 'IN_TRANSIT',
@@ -1293,11 +1348,11 @@ export class WarehouseService {
             licensePlate: dto.licensePlate || null,
             driverName: dto.driverName || null,
             destination: isTransfer
-              ? destHubName || order.destinationHub || 'Kho đích'
+              ? orderTargetHubName
               : (order.destinationHub || order.province || 'Giao khách'),
             performedByUserId: user.id,
             notes: isTransfer
-              ? `Xuất ${qtyToExport} kiện luân chuyển đến ${destHubName || order.destinationHub || 'Kho đích'} trên chuyến ${tripCode}`
+              ? `Xuất ${qtyToExport} kiện luân chuyển đến ${orderTargetHubName} trên chuyến ${tripCode}`
               : `Xuất ${qtyToExport} kiện giao khách trên chuyến ${tripCode}`,
           }),
         );
@@ -1322,7 +1377,11 @@ export class WarehouseService {
       if (isTransfer) {
         const targets = Array.from(
           new Set(
-            [dto.destinationHubId ?? null, ...saved.map((o) => o.destinationHubId)].filter(
+            [
+              dto.destinationHubId ?? null,
+              ...(dto.items?.map((i) => i.destinationHubId) ?? []),
+              ...saved.map((o) => o.destinationHubId),
+            ].filter(
               (h): h is number => !!h && h !== originHubId,
             ),
           ),
@@ -1363,6 +1422,8 @@ export class WarehouseService {
     },
   ): Promise<{
     total: number;
+    inboundTotal: number;
+    outboundTotal: number;
     waitingInbound: number;
     customerInbound: number;
     transferInbound: number;
@@ -1432,8 +1493,13 @@ export class WarehouseService {
       }
     }
 
+    const inboundTotal = waitingInbound + storedInbound;
+    const outboundTotal = storedInbound + completedOutbound;
+
     return {
       total: rows.length,
+      inboundTotal,
+      outboundTotal,
       waitingInbound,
       customerInbound,
       transferInbound,

@@ -56,6 +56,7 @@ export class TripsService {
     private readonly hubRepository: Repository<HubEntity>,
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
+    private readonly ledgerService: OperationalLedgerService,
   ) {}
 
   private async resolveUserHubId(user?: UserEntity): Promise<number | null> {
