@@ -99,6 +99,28 @@ export class OrderEntity extends AbstractBaseEntity {
   @JoinColumn({ name: 'destinationHubId' })
   destinationHubEntity: Relation<HubEntity> | null;
 
+  // ── Live location (NOT part of the immutable Master Contract) ──
+  // Contract fields (orderCode, totalQuantity, totalWeight, totalVolume, goodsDescription,
+  // originHub/originHubId, destinationHub/destinationHubId, route) are locked after DRAFT.
+
+  /** Hub currently holding (most recently received) the goods; null when fully dispatched. */
+  @Index('IDX_order_currentHubId')
+  @Column({ type: 'int', nullable: true })
+  currentHubId: number | null;
+
+  @ManyToOne(() => HubEntity, {
+    nullable: true,
+    eager: false,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'currentHubId', foreignKeyConstraintName: 'FK_order_currentHub' })
+  currentHubEntity: Relation<HubEntity> | null;
+
+  /** Logical trip (SD...) currently carrying goods of this order; null when nothing in transit. */
+  @Index('IDX_order_currentTripCode')
+  @Column({ type: String, length: 50, nullable: true })
+  currentTripCode: string | null;
+
   @OneToMany('TripEntity', (trip: TripEntity) => trip.order)
   trips: Relation<TripEntity[]>;
 

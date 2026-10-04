@@ -9,11 +9,14 @@ import { TripsService } from './trips.service';
 import { TripsController } from './trips.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MailModule } from '../mail/mail.module';
+import { TripStopEntity } from './infrastructure/persistence/relational/entities/trip-stop.entity';
+import { OrdersModule } from '../orders/orders.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       TripEntity,
+      TripStopEntity,
       OrderEntity,
       DriverEntity,
       UserEntity,
@@ -21,6 +24,7 @@ import { MailModule } from '../mail/mail.module';
     ]),
     NotificationsModule,
     MailModule,
+    OrdersModule,
   ],
   controllers: [TripsController],
   providers: [TripsService],

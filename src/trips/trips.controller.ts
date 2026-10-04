@@ -92,8 +92,11 @@ export class TripsController {
   })
   @Get()
   @HttpCode(HttpStatus.OK)
-  findAll(@Query() query: QueryTripDto): Promise<PaginatedResult<TripEntity>> {
-    return this.tripsService.findAll(query);
+  findAll(
+    @Query() query: QueryTripDto,
+    @Request() req: any,
+  ): Promise<PaginatedResult<TripEntity>> {
+    return this.tripsService.findAll(query, req.user);
   }
 
   @ApiOkResponse({

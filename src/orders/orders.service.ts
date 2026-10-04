@@ -6,16 +6,26 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { OrderEntity } from './infrastructure/persistence/relational/entities/order.entity';
 import { UserEntity } from '../users/infrastructure/persistence/relational/entities/user.entity';
+import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
+import {
+  OrderInventoryTransactionEntity,
+  InventoryTransactionType,
+} from './infrastructure/persistence/relational/entities/order-inventory-transaction.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { QueryOrderDto } from './dto/query-order.dto';
 import { QueryOrderStatsDto } from './dto/query-order-stats.dto';
+import { AdminOverrideOrderDto } from './dto/admin-override-order.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { RoleEnum } from '../roles/roles.enum';
+import {
+  CONTRACT_FIELDS,
+  OperationalLedgerService,
+} from './operational-ledger.service';
 
 export interface PaginatedResult<T> {
   data: T[];
@@ -39,6 +49,29 @@ export interface OrderStatsResult {
   toDate: string;
 }
 
+export interface OrderLedgerEntry {
+  id: number;
+  type: string;
+  invoiceCode: string | null;
+  hubId: number | null;
+  hubName: string | null;
+  tripCode: string | null;
+  licensePlate: string | null;
+  driverName: string | null;
+  quantity: number;
+  expectedQuantity: number | null;
+  discrepancyQuantity: number;
+  discrepancyReason: string | null;
+  remainingQuantity: number;
+  weight: number;
+  volume: number;
+  destination: string | null;
+  notes: string | null;
+  performedByUserId: number | null;
+  performedByName: string | null;
+  createdAt: Date;
+}
+
 import { OrderCodeService } from './order-code.service';
 
 @Injectable()
@@ -50,9 +83,15 @@ export class OrdersService {
     private readonly orderRepository: Repository<OrderEntity>,
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
+    @InjectRepository(HubEntity)
+    private readonly hubRepository: Repository<HubEntity>,
+    @InjectRepository(OrderInventoryTransactionEntity)
+    private readonly transactionRepository: Repository<OrderInventoryTransactionEntity>,
     private readonly orderCodeService: OrderCodeService,
+    private readonly ledgerService: OperationalLedgerService,
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async create(
@@ -276,6 +315,7 @@ export class OrdersService {
           'inventoryTransactions',
           'originHubEntity',
           'destinationHubEntity',
+          'currentHubEntity',
         ],
       });
     }
@@ -288,6 +328,7 @@ export class OrdersService {
           'inventoryTransactions',
           'originHubEntity',
           'destinationHubEntity',
+          'currentHubEntity',
         ],
       });
     }
@@ -301,11 +342,52 @@ export class OrdersService {
     return order;
   }
 
+  /**
+   * Returns the contract fields whose incoming value differs from the persisted value.
+   * Unchanged values (frontend re-sending the whole form) are not treated as modifications.
+   */
+  private getChangedContractFields(
+    order: OrderEntity,
+    dto: Record<string, any>,
+  ): string[] {
+    const normalize = (v: any) => {
+      if (v === undefined || v === null || v === '') return null;
+      if (typeof v === 'number') return Number(v);
+      if (typeof v === 'string') {
+        const trimmed = v.trim();
+        const asNum = Number(trimmed);
+        return trimmed !== '' && !isNaN(asNum) && /^-?\d+(\.\d+)?$/.test(trimmed)
+          ? asNum
+          : trimmed;
+      }
+      return v;
+    };
+    return CONTRACT_FIELDS.filter((field) => {
+      if (!(field in dto) || dto[field] === undefined) return false;
+      return normalize(dto[field]) !== normalize((order as any)[field]);
+    });
+  }
+
   async update(
     id: number,
     updateOrderDto: UpdateOrderDto,
   ): Promise<OrderEntity> {
     const order = await this.findOne(id);
+
+    // ── Master Contract Immutability Guard ──
+    // After leaving DRAFT, contract fields are locked for every role.
+    // SUPER_ADMIN must use PATCH /orders/:id/admin-override (mandatory audit reason).
+    if (order.status !== 'DRAFT') {
+      const changed = this.getChangedContractFields(
+        order,
+        updateOrderDto as Record<string, any>,
+      );
+      if (changed.length > 0) {
+        throw new ForbiddenException(
+          'Hợp đồng gốc của đơn hàng đã được khóa sau khi gửi đi (số kiện, khối lượng, thể tích, mô tả hàng, nơi gửi, nơi nhận). Chỉ Quản trị viên được điều chỉnh qua chức năng "Điều chỉnh hợp đồng gốc" kèm lý do.',
+        );
+      }
+    }
 
     if (
       updateOrderDto.orderCode &&
@@ -335,6 +417,175 @@ export class OrdersService {
     });
 
     return this.orderRepository.save(order);
+  }
+
+  /**
+   * SUPER_ADMIN-only override of Master Contract fields.
+   * Writes an ADJUSTMENT invoice (DCH-...) containing old → new values and the audit reason.
+   * Operational stock (inbound/outbound/remaining quantities) is NOT modified.
+   */
+  async adminOverride(
+    id: number,
+    dto: AdminOverrideOrderDto,
+    admin: UserEntity,
+  ): Promise<OrderEntity> {
+    if (admin?.role?.id !== RoleEnum.SUPER_ADMIN) {
+      throw new ForbiddenException(
+        'Chỉ Quản trị viên hệ thống được phép điều chỉnh hợp đồng gốc.',
+      );
+    }
+
+    const auditReason = dto.auditReason?.trim();
+    if (!auditReason) {
+      throw new UnprocessableEntityException(
+        'Vui lòng nhập lý do điều chỉnh hợp đồng gốc.',
+      );
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const orderRepo = manager.getRepository(OrderEntity);
+      const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
+      const hubRepo = manager.getRepository(HubEntity);
+
+      const order = await orderRepo.findOne({ where: { id } });
+      if (!order) {
+        throw new NotFoundException('Không tìm thấy đơn hàng cần điều chỉnh.');
+      }
+
+      const LABELS: Record<string, string> = {
+        totalQuantity: 'Số kiện',
+        totalWeight: 'Khối lượng (kg)',
+        totalVolume: 'Thể tích (m³)',
+        goodsDescription: 'Mô tả hàng',
+        originHubId: 'Kho gửi',
+        destinationHubId: 'Kho nhận',
+      };
+      const changes: string[] = [];
+
+      const applyScalar = (
+        field: 'totalQuantity' | 'totalWeight' | 'totalVolume' | 'goodsDescription',
+      ) => {
+        const next = dto[field];
+        if (next === undefined || next === null) return;
+        const prev = order[field];
+        const nextVal =
+          typeof next === 'string' ? next.trim() : Number(next);
+        if (nextVal === '' || nextVal === prev) return;
+        changes.push(`${LABELS[field]}: ${prev ?? '—'} → ${nextVal}`);
+        (order as any)[field] = nextVal;
+      };
+      applyScalar('totalQuantity');
+      applyScalar('totalWeight');
+      applyScalar('totalVolume');
+      applyScalar('goodsDescription');
+
+      const applyHub = async (
+        idField: 'originHubId' | 'destinationHubId',
+        nameField: 'originHub' | 'destinationHub',
+      ) => {
+        const nextId = dto[idField];
+        if (!nextId || nextId === order[idField]) return;
+        const hub = await hubRepo.findOne({ where: { id: nextId } });
+        if (!hub) {
+          throw new UnprocessableEntityException(
+            `${LABELS[idField]} không tồn tại trên hệ thống.`,
+          );
+        }
+        changes.push(`${LABELS[idField]}: ${order[nameField] ?? '—'} → ${hub.name}`);
+        order[idField] = hub.id;
+        order[nameField] = hub.name;
+      };
+      await applyHub('originHubId', 'originHub');
+      await applyHub('destinationHubId', 'destinationHub');
+
+      if (changes.length === 0) {
+        throw new UnprocessableEntityException(
+          'Không có thông tin hợp đồng nào thay đổi so với hiện tại.',
+        );
+      }
+
+      if (dto.originHubId || dto.destinationHubId) {
+        order.route = `${order.originHub ?? 'Kho gửi'} → ${order.destinationHub ?? 'Kho nhận'}`;
+      }
+
+      const saved = await orderRepo.save(order);
+
+      const invoiceCode = await this.ledgerService.generateInvoiceCode(
+        InventoryTransactionType.ADJUSTMENT,
+        admin.hubId ?? null,
+        manager,
+      );
+      await txRepo.save(
+        txRepo.create({
+          orderId: saved.id,
+          type: InventoryTransactionType.ADJUSTMENT,
+          invoiceCode,
+          hubId: admin.hubId ?? null,
+          quantity: 0,
+          remainingQuantity: saved.remainingQuantity ?? 0,
+          weight: 0,
+          volume: 0,
+          performedByUserId: admin.id,
+          discrepancyReason: auditReason,
+          notes: `Điều chỉnh hợp đồng gốc: ${changes.join('; ')}`,
+        }),
+      );
+
+      this.logger.warn(
+        `[ADMIN OVERRIDE] order=${saved.orderCode} by userId=${admin.id}: ${changes.join('; ')} | reason=${auditReason}`,
+      );
+
+      return saved;
+    });
+  }
+
+  /**
+   * Order Timeline Ledger: every operational invoice of the order in chronological order,
+   * enriched with hub and performer names.
+   */
+  async getLedger(idOrCode: string): Promise<OrderLedgerEntry[]> {
+    const order = await this.findOne(idOrCode);
+
+    const rows: any[] = await this.transactionRepository.query(
+      `SELECT tx.id, tx."type", tx."invoiceCode", tx."hubId", h."name" AS "hubName",
+              tx."tripCode", tx."licensePlate", tx."driverName", tx."quantity",
+              tx."expectedQuantity", tx."discrepancyQuantity", tx."discrepancyReason",
+              tx."remainingQuantity", tx."weight", tx."volume", tx."destination", tx."notes",
+              tx."performedByUserId",
+              NULLIF(TRIM(CONCAT_WS(' ', u."firstName", u."lastName")), '') AS "performedByName",
+              tx."createdAt"
+       FROM "order_inventory_transaction" tx
+       LEFT JOIN "hub" h ON h.id = tx."hubId"
+       LEFT JOIN "user" u ON u.id = tx."performedByUserId"
+       WHERE tx."orderId" = $1 AND tx."deletedAt" IS NULL
+       ORDER BY tx."createdAt" ASC, tx.id ASC`,
+      [order.id],
+    );
+
+    return rows.map((r) => ({
+      id: Number(r.id),
+      type: r.type,
+      invoiceCode: r.invoiceCode ?? null,
+      hubId: r.hubId != null ? Number(r.hubId) : null,
+      hubName: r.hubName ?? null,
+      tripCode: r.tripCode ?? null,
+      licensePlate: r.licensePlate ?? null,
+      driverName: r.driverName ?? null,
+      quantity: Number(r.quantity) || 0,
+      expectedQuantity:
+        r.expectedQuantity != null ? Number(r.expectedQuantity) : null,
+      discrepancyQuantity: Number(r.discrepancyQuantity) || 0,
+      discrepancyReason: r.discrepancyReason ?? null,
+      remainingQuantity: Number(r.remainingQuantity) || 0,
+      weight: Number(r.weight) || 0,
+      volume: Number(r.volume) || 0,
+      destination: r.destination ?? null,
+      notes: r.notes ?? null,
+      performedByUserId:
+        r.performedByUserId != null ? Number(r.performedByUserId) : null,
+      performedByName: r.performedByName ?? null,
+      createdAt: r.createdAt,
+    }));
   }
 
   async submit(id: number): Promise<OrderEntity> {

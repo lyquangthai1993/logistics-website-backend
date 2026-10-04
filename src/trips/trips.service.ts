@@ -14,6 +14,7 @@ import { QueryTripStatsDto } from './dto/query-trip-stats.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { RoleEnum } from '../roles/roles.enum';
+import { OperationalLedgerService } from '../orders/operational-ledger.service';
 
 export interface PaginatedResult<T> {
   data: T[];
@@ -55,6 +56,7 @@ export class TripsService {
     private readonly hubRepository: Repository<HubEntity>,
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
+    private readonly ledgerService: OperationalLedgerService,
   ) {}
 
   async create(
@@ -72,6 +74,7 @@ export class TripsService {
 
     const trip = this.tripRepository.create({
       ...createTripDto,
+      tripCode: await this.ledgerService.generateTripCode(),
       licensePlate: createTripDto.licensePlate,
       driverName: createTripDto.driverName,
       status: 'PENDING',
@@ -104,8 +107,10 @@ export class TripsService {
     for (let i = 0; i < dto.trips.length; i++) {
       const item = dto.trips[i];
 
+      // Mỗi xe phân bổ là một chuyến xe riêng → mã SD riêng
       const trip = this.tripRepository.create({
         orderId: dto.orderId,
+        tripCode: await this.ledgerService.generateTripCode(),
         licensePlate: item.licensePlate,
         driverName: item.driverName,
         pickupDate: item.pickupDate,
@@ -366,7 +371,10 @@ export class TripsService {
     }
   }
 
-  async findAll(query?: QueryTripDto): Promise<PaginatedResult<TripEntity>> {
+  async findAll(
+    query?: QueryTripDto,
+    user?: UserEntity,
+  ): Promise<PaginatedResult<TripEntity>> {
     const page = query?.page ?? 1;
     const limit = query?.limit ?? 20;
     const skip = (page - 1) * limit;
@@ -417,6 +425,38 @@ export class TripsService {
     qb.skip(skip).take(limit);
 
     const [data, total] = await qb.getManyAndCount();
+
+    // Hub-scoped trip status (Chờ xử lý / Đã xử lý) from the viewer hub's trip stop
+    const viewerHubId = user?.hubId ?? null;
+    const wantsHubContext =
+      query?.hubContext === 'true' || user?.role?.id === RoleEnum.WAREHOUSE_MANAGER;
+    if (wantsHubContext && viewerHubId) {
+      const codes = Array.from(
+        new Set(data.map((t) => t.tripCode).filter((c): c is string => !!c)),
+      );
+      const stopMap = new Map<string, string>();
+      if (codes.length > 0) {
+        const stops: Array<{ tripCode: string; status: string }> =
+          await this.tripRepository.query(
+            `SELECT "tripCode", "status" FROM "trip_stop"
+             WHERE "hubId" = $1 AND "tripCode" = ANY($2) AND "deletedAt" IS NULL`,
+            [viewerHubId, codes],
+          );
+        for (const s of stops) stopMap.set(s.tripCode, s.status);
+      }
+      return {
+        data: data.map((t) => ({
+          ...t,
+          hubStatus: t.tripCode ? (stopMap.get(t.tripCode) ?? null) : null,
+        })) as unknown as TripEntity[],
+        meta: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
+    }
 
     return {
       data,

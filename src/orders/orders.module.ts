@@ -11,9 +11,11 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { MailModule } from '../mail/mail.module';
 
 import { TripEntity } from '../trips/infrastructure/persistence/relational/entities/trip.entity';
+import { TripStopEntity } from '../trips/infrastructure/persistence/relational/entities/trip-stop.entity';
 import { OrderInventoryTransactionEntity } from './infrastructure/persistence/relational/entities/order-inventory-transaction.entity';
 import { WarehouseController } from './warehouse.controller';
 import { WarehouseService } from './warehouse.service';
+import { OperationalLedgerService } from './operational-ledger.service';
 
 @Module({
   imports: [
@@ -23,13 +25,25 @@ import { WarehouseService } from './warehouse.service';
       UserEntity,
       HubEntity,
       TripEntity,
+      TripStopEntity,
       OrderInventoryTransactionEntity,
     ]),
     NotificationsModule,
     MailModule,
   ],
   controllers: [OrdersController, WarehouseController],
-  providers: [OrdersService, OrderCodeService, WarehouseService],
-  exports: [OrdersService, OrderCodeService, WarehouseService, TypeOrmModule],
+  providers: [
+    OrdersService,
+    OrderCodeService,
+    WarehouseService,
+    OperationalLedgerService,
+  ],
+  exports: [
+    OrdersService,
+    OrderCodeService,
+    WarehouseService,
+    OperationalLedgerService,
+    TypeOrmModule,
+  ],
 })
 export class OrdersModule {}

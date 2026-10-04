@@ -28,11 +28,13 @@ import {
   OrdersService,
   PaginatedResult,
   OrderStatsResult,
+  OrderLedgerEntry,
 } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { QueryOrderDto } from './dto/query-order.dto';
 import { QueryOrderStatsDto } from './dto/query-order-stats.dto';
+import { AdminOverrideOrderDto } from './dto/admin-override-order.dto';
 import { OrderEntity } from './infrastructure/persistence/relational/entities/order.entity';
 
 @ApiBearerAuth()
@@ -167,6 +169,40 @@ export class OrdersController {
   })
   findOne(@Param('id') id: string): Promise<OrderEntity> {
     return this.ordersService.findOne(id);
+  }
+
+  @ApiOkResponse({
+    description:
+      'Nhật ký phiếu vận hành của đơn hàng (nhập / xuất / luân chuyển / điều chỉnh) theo thời gian',
+  })
+  @Get(':id/ledger')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Sổ cái phiếu vận hành & lịch sử đơn hàng' })
+  @ApiParam({
+    name: 'id',
+    type: String,
+    description: 'ID đơn hàng (số) hoặc Mã đơn hàng (orderCode)',
+    required: true,
+  })
+  getLedger(@Param('id') id: string): Promise<OrderLedgerEntry[]> {
+    return this.ordersService.getLedger(id);
+  }
+
+  @ApiOkResponse({ type: OrderEntity })
+  @Roles(RoleEnum.SUPER_ADMIN)
+  @Patch(':id/admin-override')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Điều chỉnh hợp đồng gốc (chỉ SUPER_ADMIN, bắt buộc lý do, tự ghi phiếu điều chỉnh)',
+  })
+  @ApiParam({ name: 'id', type: Number, required: true })
+  adminOverride(
+    @Param('id') id: string,
+    @Body() dto: AdminOverrideOrderDto,
+    @Request() req: any,
+  ): Promise<OrderEntity> {
+    return this.ordersService.adminOverride(+id, dto, req.user);
   }
 
   @ApiOkResponse({

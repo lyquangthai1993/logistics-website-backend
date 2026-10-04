@@ -53,4 +53,12 @@ export class QueryTripDto {
   @IsOptional()
   @IsString()
   toDate?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'true: trả thêm hubStatus (PENDING = Chờ xử lý / COMPLETED = Đã xử lý) theo kho của người xem',
+  })
+  @IsOptional()
+  @IsString()
+  hubContext?: string;
 }

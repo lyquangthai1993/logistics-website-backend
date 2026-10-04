@@ -4,13 +4,20 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   Query,
   Request,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { RolesGuard } from '../roles/roles.guard';
 import { Roles } from '../roles/roles.decorator';
 import { RoleEnum } from '../roles/roles.enum';
@@ -71,19 +78,42 @@ export class WarehouseController {
   @Get('inbound-trips')
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @ApiOperation({
-    summary: 'Danh sách chuyến xe luân chuyển đang đến kho (còn hàng cần dỡ)',
+    summary:
+      'Danh sách chuyến xe dừng tại kho hiện tại với trạng thái theo kho (Chờ xử lý / Đã xử lý)',
   })
+  @ApiQuery({ name: 'status', required: false, enum: ['PENDING', 'COMPLETED'] })
   async getInboundTrips(
     @Request() req: any,
     @Query('search') search?: string,
+    @Query('status') status?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
     return this.warehouseService.getInboundTrips(req.user, {
       search,
+      status,
       page,
       limit,
     });
+  }
+
+  @Get('trips/:tripCode/manifest')
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.WAREHOUSE_MANAGER,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+  )
+  @ApiOperation({
+    summary:
+      'Bảng kê toàn bộ hàng trên chuyến xe (SD...) theo góc nhìn kho: dòng nhận tại kho, số dự kiến / đã nhận, trạng thái từng trạm',
+  })
+  @ApiParam({ name: 'tripCode', type: String, example: 'SD12' })
+  async getTripManifest(
+    @Request() req: any,
+    @Param('tripCode') tripCode: string,
+  ) {
+    return this.warehouseService.getTripManifest(req.user, tripCode);
   }
 
   @Post('inbound/quick-create')
