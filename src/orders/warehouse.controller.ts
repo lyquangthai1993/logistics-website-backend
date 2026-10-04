@@ -45,15 +45,20 @@ export class WarehouseController {
   @ApiOperation({
     summary: 'Tra cứu & danh sách hàng hóa trong kho (Freetext + Status + Pagination)',
   })
+  @ApiQuery({ name: 'flow', required: false, enum: ['INBOUND', 'OUTBOUND', 'OUTBOUND_LOOKUP'] })
+  @ApiQuery({ name: 'ids', required: false, description: 'Danh sách id đơn, phân tách dấu phẩy' })
+  @ApiQuery({ name: 'groupBy', required: false, enum: ['orderCode'] })
   async getOrders(
     @Request() req: any,
     @Query('search') search?: string,
     @Query('status') status?: string,
-    @Query('flow') flow?: 'INBOUND' | 'OUTBOUND',
+    @Query('flow') flow?: 'INBOUND' | 'OUTBOUND' | 'OUTBOUND_LOOKUP',
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
+    @Query('ids') ids?: string,
+    @Query('groupBy') groupBy?: string,
   ) {
     return this.warehouseService.getOrders(req.user, {
       search,
@@ -63,6 +68,8 @@ export class WarehouseController {
       limit,
       fromDate,
       toDate,
+      ids,
+      groupBy,
     });
   }
 

@@ -6,7 +6,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, In, EntityManager } from 'typeorm';
+import { Repository, DataSource, In, EntityManager, SelectQueryBuilder } from 'typeorm';
 import { OrderEntity } from './infrastructure/persistence/relational/entities/order.entity';
 import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
 import { UserEntity } from '../users/infrastructure/persistence/relational/entities/user.entity';
@@ -161,11 +161,20 @@ export class WarehouseService {
     query: {
       search?: string;
       status?: string;
-      flow?: 'INBOUND' | 'OUTBOUND';
+      /**
+       * INBOUND / OUTBOUND: board views.
+       * OUTBOUND_LOOKUP: rows selectable on an outbound note — stock held at the viewer hub
+       * (Lưu kho) or a local draft; never goods still on the way or already dispatched.
+       */
+      flow?: 'INBOUND' | 'OUTBOUND' | 'OUTBOUND_LOOKUP';
       page?: number;
       limit?: number;
       fromDate?: string;
       toDate?: string;
+      /** Comma-separated order ids (e.g. refresh metrics of rows already on a note). */
+      ids?: string;
+      /** `orderCode`: one row per order code with aggregated metrics (Đơn hàng kho). */
+      groupBy?: string;
     },
   ): Promise<WarehouseOrdersResult> {
     const page = Math.max(1, Number(query?.page) || 1);
@@ -177,121 +186,138 @@ export class WarehouseService {
       ? this.ledgerService.hubStatusSql()
       : 'order.status';
 
-    const qb = this.orderRepository
-      .createQueryBuilder('order')
-      .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
-      .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
-      .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
-      .leftJoinAndSelect('order.trips', 'trips')
-      .leftJoinAndSelect('order.inventoryTransactions', 'inventoryTransactions')
-      .where('order.deletedAt IS NULL');
+    const flowUpper = query?.flow?.toUpperCase();
+    const isAllStatus = !query?.status || query.status.toUpperCase() === 'ALL';
+    const searchTerm = query?.search?.trim() ? `%${query.search.trim()}%` : null;
+    const idFilter = (query?.ids || '')
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isInteger(n) && n > 0);
+    const groupByOrderCode = query?.groupBy === 'orderCode';
+    const waitingOrStored = sqlList([...WAITING_STATUSES, ...STORED_STATUSES]);
+    const storedOrDispatched = sqlList([...STORED_STATUSES, ...DISPATCHED_STATUSES]);
+
+    /**
+     * Filters shared by the list, group and counter queries (everything except the status tab),
+     * so tab counters always match the rows rendered. Needs alias `trips` joined when searching.
+     */
+    const applyScope = (q: SelectQueryBuilder<OrderEntity>) => {
+      if (useHubContext) {
+        q.andWhere(this.ledgerService.hubScopeSql()).setParameter('userHubId', userHubId);
+      }
+      if (flowUpper === 'OUTBOUND_LOOKUP') {
+        q.andWhere(`${statusExpr} IN (${sqlList([...STORED_STATUSES, 'DRAFT'])})`);
+      } else if (isAllStatus && flowUpper === 'INBOUND') {
+        // Only items physically in or inbound to the warehouse (exclude departed ones)
+        q.andWhere(`${statusExpr} IN (${waitingOrStored})`);
+      } else if (isAllStatus && flowUpper === 'OUTBOUND') {
+        q.andWhere(`${statusExpr} IN (${storedOrDispatched})`);
+      }
+      if (idFilter.length > 0) {
+        q.andWhere('order.id IN (:...idFilter)', { idFilter });
+      }
+      if (searchTerm) {
+        // Freetext: orderCode OR goodsDescription OR trips.licensePlate OR trips.tripCode
+        q.andWhere(
+          '(order.orderCode ILIKE :search OR order.goodsDescription ILIKE :search OR trips.licensePlate ILIKE :search OR trips.tripCode ILIKE :search)',
+          { search: searchTerm },
+        );
+      }
+      if (query?.fromDate) {
+        const from = new Date(`${query.fromDate}T00:00:00`);
+        q.andWhere('(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)', {
+          fromDate: from.toISOString(),
+        });
+      }
+      if (query?.toDate) {
+        const to = new Date(`${query.toDate}T23:59:59.999`);
+        q.andWhere('(order.createdAt <= :toDate OR order.updatedAt <= :toDate)', {
+          toDate: to.toISOString(),
+        });
+      }
+      return q;
+    };
+
+    // Status Filter (Standard Uppercase Enum Keys) — applied on the hub-scoped status
+    const applyStatusFilter = (q: SelectQueryBuilder<OrderEntity>) => {
+      if (isAllStatus) return q;
+      const statusUpper = query.status!.toUpperCase();
+      switch (statusUpper) {
+        case 'INBOUND':
+        case 'STORED':
+        case 'IN_WAREHOUSE':
+          q.andWhere(`${statusExpr} IN (${sqlList(STORED_STATUSES)})`);
+          break;
+        case 'WAITING':
+        case 'DRAFT':
+          q.andWhere(`${statusExpr} IN (${sqlList(WAITING_STATUSES)})`);
+          break;
+        case 'CUSTOMER':
+          q.andWhere(`${statusExpr} IN (${waitingOrStored}) AND NOT ${TRANSFER_INBOUND_SQL}`);
+          break;
+        case 'TRANSFER':
+          q.andWhere(`${statusExpr} IN (${waitingOrStored}) AND ${TRANSFER_INBOUND_SQL}`);
+          break;
+        case 'COMPLETED_INBOUND':
+          q.andWhere(`${statusExpr} IN (${sqlList(DISPATCHED_STATUSES)})`);
+          break;
+        case 'PENDING_INBOUND':
+          q.andWhere(`${statusExpr} IN ('PENDING_INBOUND', 'WAITING')`);
+          break;
+        default:
+          q.andWhere(`${statusExpr} = :st`, { st: query.status });
+          break;
+      }
+      return q;
+    };
+
+    const createListQb = () =>
+      this.orderRepository
+        .createQueryBuilder('order')
+        .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+        .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
+        .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
+        .leftJoinAndSelect('order.trips', 'trips')
+        .leftJoinAndSelect('order.inventoryTransactions', 'inventoryTransactions')
+        .where('order.deletedAt IS NULL');
 
     // Dynamic counts for status tabs based on current hub scope
     const countQb = this.orderRepository
       .createQueryBuilder('order')
       .select('order.id', 'id')
+      .addSelect('order.orderCode', 'oc')
       .addSelect(statusExpr, 'hs')
       .distinct(true)
       .where('order.deletedAt IS NULL');
+    if (searchTerm) countQb.leftJoin('order.trips', 'trips');
+    applyScope(countQb);
 
-    if (useHubContext) {
-      const scope = this.ledgerService.hubScopeSql();
-      qb.andWhere(scope).setParameter('userHubId', userHubId);
-      countQb.andWhere(scope).setParameter('userHubId', userHubId);
-    }
+    const countRows: Array<{ id: number; oc: string; hs: string }> = await countQb.getRawMany();
+    // Grouped view counts order codes (a code is in a tab when any of its rows is)
+    const bucketCount = (pred: (hs: string) => boolean) => {
+      const rows = countRows.filter((r) => pred(r.hs));
+      return groupByOrderCode ? new Set(rows.map((r) => r.oc)).size : rows.length;
+    };
+    const allCount = bucketCount(() => true);
+    const storedCount = bucketCount((hs) => STORED_STATUSES.includes(hs));
+    const draftCount = bucketCount((hs) => WAITING_STATUSES.includes(hs));
 
-    const flowUpper = query?.flow?.toUpperCase();
-    const waitingOrStored = sqlList([...WAITING_STATUSES, ...STORED_STATUSES]);
-    const storedOrDispatched = sqlList([...STORED_STATUSES, ...DISPATCHED_STATUSES]);
-
-    // Context flow scoping:
-    // When flow === 'INBOUND' and status === 'ALL' (or omitted), only show items physically in or inbound to warehouse
-    // (exclude COMPLETED_INBOUND / DISPATCHED items which already departed).
-    if (flowUpper === 'INBOUND' && (!query?.status || query.status.toUpperCase() === 'ALL')) {
-      qb.andWhere(`${statusExpr} IN (${waitingOrStored})`);
-      countQb.andWhere(`${statusExpr} IN (${waitingOrStored})`);
-    } else if (flowUpper === 'OUTBOUND' && (!query?.status || query.status.toUpperCase() === 'ALL')) {
-      qb.andWhere(`${statusExpr} IN (${storedOrDispatched})`);
-      countQb.andWhere(`${statusExpr} IN (${storedOrDispatched})`);
-    }
-
-    if (query?.search && query.search.trim()) {
-      const search = `%${query.search.trim()}%`;
-      countQb.leftJoin('order.trips', 'trips');
-      countQb.andWhere(
-        '(order.orderCode ILIKE :search OR order.goodsDescription ILIKE :search OR trips.licensePlate ILIKE :search OR trips.tripCode ILIKE :search)',
-        { search },
-      );
-    }
-
-    if (query?.fromDate) {
-      const from = new Date(`${query.fromDate}T00:00:00`);
-      qb.andWhere('(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)', {
-        fromDate: from.toISOString(),
-      });
-      countQb.andWhere('(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)', {
-        fromDate: from.toISOString(),
+    if (groupByOrderCode) {
+      return this.getOrdersGroupedByCode({
+        createListQb,
+        applyScope,
+        applyStatusFilter,
+        searchTerm,
+        page,
+        limit,
+        skip,
+        userHubId,
+        useHubContext,
+        counts: { allCount, storedCount, draftCount },
       });
     }
 
-    if (query?.toDate) {
-      const to = new Date(`${query.toDate}T23:59:59.999`);
-      qb.andWhere('(order.createdAt <= :toDate OR order.updatedAt <= :toDate)', {
-        toDate: to.toISOString(),
-      });
-      countQb.andWhere('(order.createdAt <= :toDate OR order.updatedAt <= :toDate)', {
-        toDate: to.toISOString(),
-      });
-    }
-
-    const countRows = await countQb.getRawMany();
-    const allCount = countRows.length;
-    const storedCount = countRows.filter((r) => STORED_STATUSES.includes(r.hs)).length;
-    const draftCount = countRows.filter((r) => WAITING_STATUSES.includes(r.hs)).length;
-
-    // Status Filter (Standard Uppercase Enum Keys) — applied on the hub-scoped status
-    if (query?.status && query.status.toUpperCase() !== 'ALL') {
-      const statusUpper = query.status.toUpperCase();
-      const waitingOrStored = sqlList([...WAITING_STATUSES, ...STORED_STATUSES]);
-      switch (statusUpper) {
-        case 'INBOUND':
-        case 'STORED':
-        case 'IN_WAREHOUSE':
-          qb.andWhere(`${statusExpr} IN (${sqlList(STORED_STATUSES)})`);
-          break;
-        case 'WAITING':
-        case 'DRAFT':
-          qb.andWhere(`${statusExpr} IN (${sqlList(WAITING_STATUSES)})`);
-          break;
-        case 'CUSTOMER':
-          qb.andWhere(
-            `${statusExpr} IN (${waitingOrStored}) AND NOT ${TRANSFER_INBOUND_SQL}`,
-          );
-          break;
-        case 'TRANSFER':
-          qb.andWhere(`${statusExpr} IN (${waitingOrStored}) AND ${TRANSFER_INBOUND_SQL}`);
-          break;
-        case 'COMPLETED_INBOUND':
-          qb.andWhere(`${statusExpr} IN (${sqlList(DISPATCHED_STATUSES)})`);
-          break;
-        case 'PENDING_INBOUND':
-          qb.andWhere(`${statusExpr} IN ('PENDING_INBOUND', 'WAITING')`);
-          break;
-        default:
-          qb.andWhere(`${statusExpr} = :st`, { st: query.status });
-          break;
-      }
-    }
-
-    // Freetext Search: orderCode OR goodsDescription OR trips.licensePlate OR trips.tripCode
-    if (query?.search && query.search.trim()) {
-      const search = `%${query.search.trim()}%`;
-      qb.andWhere(
-        '(order.orderCode ILIKE :search OR order.goodsDescription ILIKE :search OR trips.licensePlate ILIKE :search OR trips.tripCode ILIKE :search)',
-        { search },
-      );
-    }
-
+    const qb = applyStatusFilter(applyScope(createListQb()));
     qb.orderBy('order.createdAt', 'DESC');
 
     const [data, total] = await qb.skip(skip).take(limit).getManyAndCount();
@@ -310,6 +336,31 @@ export class WarehouseService {
       0,
     );
 
+    const enrichedData = await this.enrichWarehouseRows(data, userHubId, useHubContext);
+
+    return {
+      data: enrichedData as any,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit) || 1,
+        totalQuantity,
+        totalWeight,
+        totalVolume,
+        allCount,
+        storedCount,
+        draftCount,
+      },
+    };
+  }
+
+  /** Adds address fallbacks plus hub-scoped status/stock (ledger based) to warehouse rows. */
+  private async enrichWarehouseRows(
+    data: OrderEntity[],
+    userHubId: number | null,
+    useHubContext: boolean,
+  ): Promise<any[]> {
     const hubView =
       useHubContext && userHubId
         ? await this.computeHubView(
@@ -318,7 +369,7 @@ export class WarehouseService {
           )
         : new Map<number, { hubStatus: string; hubStock: number }>();
 
-    const enrichedData = data.map((item) => {
+    return data.map((item) => {
       let pickupAddr = item.originHub || '';
       let deliveryAddr = '';
       if (item.route && item.route.includes('→')) {
@@ -340,21 +391,128 @@ export class WarehouseService {
         isContractLocked: !DRAFT_LIKE_STATUSES.includes(item.status),
       };
     });
+  }
+
+  /**
+   * "Đơn hàng kho" view: one row per order code. Pagination runs over distinct codes; each code
+   * aggregates only its rows matching the active filters. Member rows are returned in `items`.
+   */
+  private async getOrdersGroupedByCode(ctx: {
+    createListQb: () => SelectQueryBuilder<OrderEntity>;
+    applyScope: (q: SelectQueryBuilder<OrderEntity>) => SelectQueryBuilder<OrderEntity>;
+    applyStatusFilter: (q: SelectQueryBuilder<OrderEntity>) => SelectQueryBuilder<OrderEntity>;
+    searchTerm: string | null;
+    page: number;
+    limit: number;
+    skip: number;
+    userHubId: number | null;
+    useHubContext: boolean;
+    counts: { allCount: number; storedCount: number; draftCount: number };
+  }): Promise<WarehouseOrdersResult> {
+    const groupQb = this.orderRepository
+      .createQueryBuilder('order')
+      .where('order.deletedAt IS NULL');
+    if (ctx.searchTerm) groupQb.leftJoin('order.trips', 'trips');
+    ctx.applyStatusFilter(ctx.applyScope(groupQb));
+
+    const totalRow = await groupQb
+      .clone()
+      .select('COUNT(DISTINCT order.orderCode)', 'cnt')
+      .getRawOne<{ cnt: string }>();
+    const total = Number(totalRow?.cnt) || 0;
+
+    const codeRows = await groupQb
+      .select('order.orderCode', 'orderCode')
+      .addSelect('MAX(order.createdAt)', 'lastAt')
+      .groupBy('order.orderCode')
+      .orderBy('"lastAt"', 'DESC')
+      .offset(ctx.skip)
+      .limit(ctx.limit)
+      .getRawMany<{ orderCode: string }>();
+    const codes = codeRows.map((r) => r.orderCode);
+
+    let members: OrderEntity[] = [];
+    if (codes.length > 0) {
+      members = await ctx
+        .applyStatusFilter(ctx.applyScope(ctx.createListQb()))
+        .andWhere('order.orderCode IN (:...groupCodes)', { groupCodes: codes })
+        .orderBy('order.createdAt', 'ASC')
+        .getMany();
+    }
+    const enriched = await this.enrichWarehouseRows(members, ctx.userHubId, ctx.useHubContext);
+
+    const byCode = new Map<string, any[]>();
+    for (const row of enriched) {
+      const list = byCode.get(row.orderCode) ?? [];
+      list.push(row);
+      byCode.set(row.orderCode, list);
+    }
+    const grouped = codes
+      .filter((code) => byCode.has(code))
+      .map((code) => this.aggregateOrderGroup(code, byCode.get(code)!));
+
+    const sum = (pick: (g: any) => unknown) =>
+      grouped.reduce((s, g) => s + (Number(pick(g)) || 0), 0);
 
     return {
-      data: enrichedData as any,
+      data: grouped as any,
       meta: {
         total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit) || 1,
-        totalQuantity,
-        totalWeight,
-        totalVolume,
-        allCount,
-        storedCount,
-        draftCount,
+        page: ctx.page,
+        limit: ctx.limit,
+        totalPages: Math.ceil(total / ctx.limit) || 1,
+        totalQuantity: sum((g) => g.totalQuantity),
+        totalWeight: sum((g) => g.totalWeight),
+        totalVolume: sum((g) => g.totalVolume),
+        ...ctx.counts,
       },
+    };
+  }
+
+  /** Collapse the rows sharing one order code into a single summary row. */
+  private aggregateOrderGroup(orderCode: string, items: any[]): any {
+    const first = items[0];
+    const sum = (pick: (it: any) => unknown) =>
+      items.reduce((s, it) => s + (Number(pick(it)) || 0), 0);
+    const round3 = (n: number) => Math.round(n * 1000) / 1000;
+    const distinctJoin = (pick: (it: any) => string | null | undefined) =>
+      Array.from(new Set(items.map(pick).map((v) => v?.trim()).filter(Boolean))).join(', ');
+
+    // A code is "Lưu kho" while any row is still held here; "Đã xuất kho" only when none is.
+    const statuses: string[] = items.map((it) => it.hubStatus ?? it.status);
+    const hubStatus =
+      statuses.find((s) => STORED_STATUSES.includes(s)) ??
+      statuses.find((s) => s === 'DRAFT') ??
+      statuses.find((s) => WAITING_STATUSES.includes(s)) ??
+      statuses[0];
+
+    const tripMap = new Map<string, any>();
+    for (const it of items) {
+      for (const t of it.trips ?? []) {
+        const key = t.tripCode || `id-${t.id}`;
+        if (!tripMap.has(key)) tripMap.set(key, t);
+      }
+    }
+    const trips = Array.from(tripMap.values()).sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+
+    const hasHubStock = items.some((it) => it.hubStock !== null && it.hubStock !== undefined);
+
+    return {
+      ...first,
+      orderCode,
+      goodsDescription: distinctJoin((it) => it.goodsDescription),
+      totalQuantity: sum((it) => it.totalQuantity),
+      inboundQuantity: sum((it) => it.inboundQuantity),
+      outboundQuantity: sum((it) => it.outboundQuantity),
+      remainingQuantity: sum((it) => it.remainingQuantity),
+      totalWeight: round3(sum((it) => it.totalWeight)),
+      totalVolume: round3(sum((it) => it.totalVolume)),
+      hubStock: hasHubStock ? sum((it) => it.hubStock) : null,
+      hubStatus,
+      destinationHub: distinctJoin((it) => it.destinationHub || it.destinationHubEntity?.name),
+      trips,
+      lineCount: items.length,
+      items,
     };
   }
 
