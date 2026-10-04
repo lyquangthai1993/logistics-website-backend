@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 import { OrderEntity } from '../../../../../orders/infrastructure/persistence/relational/entities/order.entity';
+import { HubEntity } from '../../../../../hubs/infrastructure/persistence/relational/entities/hub.entity';
 
 @Entity({
   name: 'trip',
@@ -64,4 +65,24 @@ export class TripEntity extends AbstractBaseEntity {
 
   @Column({ type: 'text', nullable: true })
   notes: string | null;
+
+  @Index()
+  @Column({ type: Number, nullable: true })
+  originHubId: number | null;
+
+  @ManyToOne(() => HubEntity, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'originHubId' })
+  originHub: Relation<HubEntity>;
+
+  @Index()
+  @Column({ type: Number, nullable: true })
+  destinationHubId: number | null;
+
+  @ManyToOne(() => HubEntity, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'destinationHubId' })
+  destinationHub: Relation<HubEntity>;
+
+  @Index()
+  @Column({ type: String, length: 20, nullable: false, default: 'INBOUND' })
+  type: string;
 }

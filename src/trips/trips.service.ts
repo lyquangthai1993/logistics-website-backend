@@ -56,8 +56,18 @@ export class TripsService {
     private readonly hubRepository: Repository<HubEntity>,
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
-    private readonly ledgerService: OperationalLedgerService,
   ) {}
+
+  private async resolveUserHubId(user?: UserEntity): Promise<number | null> {
+    if (!user) return null;
+    if (user.hubId) return user.hubId;
+    if (!user.id) return null;
+    const dbUser = await this.userRepository.findOne({
+      where: { id: user.id },
+      select: ['id', 'hubId'],
+    });
+    return dbUser?.hubId ?? null;
+  }
 
   async create(
     createTripDto: CreateTripDto,
@@ -72,9 +82,14 @@ export class TripsService {
       );
     }
 
+    const isTransfer =
+      !!(order.originHubId && order.destinationHubId && order.originHubId !== order.destinationHubId);
     const trip = this.tripRepository.create({
       ...createTripDto,
       tripCode: await this.ledgerService.generateTripCode(),
+      originHubId: order.originHubId ?? null,
+      destinationHubId: order.destinationHubId ?? null,
+      type: isTransfer ? 'TRANSFER' : 'OUTBOUND',
       licensePlate: createTripDto.licensePlate,
       driverName: createTripDto.driverName,
       status: 'PENDING',
@@ -107,10 +122,15 @@ export class TripsService {
     for (let i = 0; i < dto.trips.length; i++) {
       const item = dto.trips[i];
 
+      const isTransfer =
+        !!(order.originHubId && order.destinationHubId && order.originHubId !== order.destinationHubId);
       // Mỗi xe phân bổ là một chuyến xe riêng → mã SD riêng
       const trip = this.tripRepository.create({
         orderId: dto.orderId,
         tripCode: await this.ledgerService.generateTripCode(),
+        originHubId: order.originHubId ?? null,
+        destinationHubId: order.destinationHubId ?? null,
+        type: isTransfer ? 'TRANSFER' : 'OUTBOUND',
         licensePlate: item.licensePlate,
         driverName: item.driverName,
         pickupDate: item.pickupDate,
@@ -384,6 +404,15 @@ export class TripsService {
       .leftJoinAndSelect('trip.order', 'order')
       .where('trip.deletedAt IS NULL')
       .orderBy('trip.createdAt', 'DESC');
+
+    // Strict hub scoping for WAREHOUSE_MANAGER
+    const userHubId = await this.resolveUserHubId(user);
+    if (user?.role?.id === RoleEnum.WAREHOUSE_MANAGER && userHubId) {
+      qb.andWhere(
+        '(trip.originHubId = :userHubId OR trip.destinationHubId = :userHubId OR order.originHubId = :userHubId OR order.destinationHubId = :userHubId OR EXISTS (SELECT 1 FROM "trip_stop" ts WHERE ts."tripCode" = trip."tripCode" AND ts."hubId" = :userHubId AND ts."deletedAt" IS NULL))',
+        { userHubId },
+      );
+    }
 
     if (query?.status && query.status !== 'ALL') {
       qb.andWhere('trip.status = :status', { status: query.status });

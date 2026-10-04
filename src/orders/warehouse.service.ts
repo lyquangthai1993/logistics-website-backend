@@ -59,10 +59,10 @@ const DISPATCHED_STATUSES = [
 
 const sqlList = (values: string[]) => values.map((v) => `'${v}'`).join(', ');
 
-/** Inbound classification: inter-hub order or already linked to a trip. */
-const TRANSFER_INBOUND_SQL = `(((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub)) OR EXISTS (SELECT 1 FROM trip t WHERE t."orderId" = order.id AND t."deletedAt" IS NULL))`;
-/** Outbound classification: inter-hub order. */
-const TRANSFER_OUTBOUND_SQL = `((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub))`;
+/** Inbound classification: inter-hub order or transfer transaction / transfer trip. */
+const TRANSFER_INBOUND_SQL = `(((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub)) OR EXISTS (SELECT 1 FROM order_inventory_transaction tx WHERE tx."orderId" = order.id AND tx."type" = 'TRANSFER' AND tx."deletedAt" IS NULL) OR EXISTS (SELECT 1 FROM trip t WHERE t."orderId" = order.id AND (t."type" = 'TRANSFER' OR t."notes" ILIKE '%LUÂN CHUYỂN%') AND t."deletedAt" IS NULL))`;
+/** Outbound classification: inter-hub order or transfer transaction / transfer trip. */
+const TRANSFER_OUTBOUND_SQL = `(((order.originHubId IS NOT NULL AND order.destinationHubId IS NOT NULL AND order.originHubId != order.destinationHubId) OR (order.originHub IS NOT NULL AND order.destinationHub IS NOT NULL AND order.originHub != order.destinationHub)) OR EXISTS (SELECT 1 FROM order_inventory_transaction tx WHERE tx."orderId" = order.id AND tx."type" = 'TRANSFER' AND tx."deletedAt" IS NULL) OR EXISTS (SELECT 1 FROM trip t WHERE t."orderId" = order.id AND (t."type" = 'TRANSFER' OR t."notes" ILIKE '%LUÂN CHUYỂN%') AND t."deletedAt" IS NULL))`;
 
 const isPlaceholderCode = (code?: string | null) =>
   !code || code === '(Tự sinh khi lưu)' || code.startsWith('(Tự sinh');
@@ -463,6 +463,9 @@ export class WarehouseService {
           tripRepo.create({
             orderId: savedOrder.id,
             tripCode: finalTripCode,
+            originHubId,
+            destinationHubId: dto.destinationHubId || null,
+            type: 'INBOUND',
             licensePlate: plate,
             driverName: driver,
             status: isDraft ? 'PENDING' : 'COMPLETED',
@@ -639,6 +642,9 @@ export class WarehouseService {
           tripRepo.create({
             orderId: savedOrder.id,
             tripCode: sharedTripCode,
+            originHubId,
+            destinationHubId: item.destinationHubId || null,
+            type: 'INBOUND',
             licensePlate: plate,
             driverName: driver,
             status: isDraft ? 'PENDING' : 'COMPLETED',
@@ -1007,6 +1013,9 @@ export class WarehouseService {
               tripRepo.create({
                 orderId: order.id,
                 tripCode: code,
+                originHubId: hubId,
+                destinationHubId: order.destinationHubId || null,
+                type: 'INBOUND',
                 licensePlate: inboundPlate,
                 driverName: inboundDriver || null,
                 status: isKeepStatus ? 'PENDING' : 'COMPLETED',
@@ -1251,6 +1260,9 @@ export class WarehouseService {
           tripRepo.create({
             orderId: order.id,
             tripCode,
+            originHubId: actingHubId,
+            destinationHubId: isTransfer ? (dto.destinationHubId || order.destinationHubId || null) : null,
+            type: isTransfer ? 'TRANSFER' : 'OUTBOUND',
             licensePlate: dto.licensePlate || 'Xe xuất kho',
             driverName: dto.driverName || 'Tài xế giao hàng',
             status: 'IN_TRANSIT',
