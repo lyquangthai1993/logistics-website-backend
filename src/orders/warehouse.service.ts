@@ -226,8 +226,25 @@ export class WarehouseService {
       0,
     );
 
+    const enrichedData = data.map((item) => {
+      let pickupAddr = item.originHub || '';
+      let deliveryAddr = '';
+      if (item.route && item.route.includes('→')) {
+        const parts = item.route.split('→');
+        if (!pickupAddr || pickupAddr === 'Hub') {
+          pickupAddr = parts[0]?.trim() || '';
+        }
+        deliveryAddr = parts[1]?.trim() || '';
+      }
+      return {
+        ...item,
+        pickupAddress: pickupAddr || item.originHubEntity?.name || '',
+        deliveryAddress: deliveryAddr || item.destinationHub || item.destinationHubEntity?.name || '',
+      };
+    });
+
     return {
-      data,
+      data: enrichedData as any,
       meta: {
         total,
         page,
@@ -338,6 +355,9 @@ export class WarehouseService {
     const driver = dto.driverName?.trim() || null;
     const date = dto.receiveDate?.trim() || new Date().toISOString().split('T')[0];
 
+    const pickupAddr = dto.pickupAddress?.trim() || originHubName || 'Hub';
+    const deliveryAddr = dto.deliveryAddress?.trim() || destinationHubName || 'Điểm đến';
+
     const order = this.orderRepository.create({
       orderCode: finalOrderCode,
       goodsDescription: finalGoodsDescription,
@@ -347,8 +367,8 @@ export class WarehouseService {
       remainingQuantity: finalQuantity,
       totalWeight: finalWeight,
       totalVolume: finalVolume,
-      route: `${originHubName || 'Hub'} → ${dto.deliveryAddress || destinationHubName || 'Điểm đến'}`,
-      originHub: originHubName,
+      route: `${pickupAddr} → ${deliveryAddr}`,
+      originHub: dto.pickupAddress?.trim() || originHubName,
       originHubId,
       destinationHub: destinationHubName,
       destinationHubId: dto.destinationHubId || null,
@@ -492,6 +512,9 @@ export class WarehouseService {
             ? Number(item.totalVolume)
             : 0;
 
+        const pickupAddr = item.pickupAddress?.trim() || originHubName || 'Hub';
+        const deliveryAddr = item.deliveryAddress?.trim() || destinationHubName || 'Điểm đến';
+
         const order = orderRepo.create({
           orderCode: finalOrderCode,
           goodsDescription: finalGoodsDesc,
@@ -501,8 +524,8 @@ export class WarehouseService {
           remainingQuantity: qty,
           totalWeight: weight,
           totalVolume: vol,
-          route: `${originHubName || 'Hub'} → ${item.deliveryAddress || destinationHubName || 'Điểm đến'}`,
-          originHub: originHubName,
+          route: `${pickupAddr} → ${deliveryAddr}`,
+          originHub: item.pickupAddress?.trim() || originHubName,
           originHubId,
           destinationHub: destinationHubName,
           destinationHubId: item.destinationHubId || null,
@@ -608,6 +631,13 @@ export class WarehouseService {
       savedOrders.push(...saved);
     }
 
+    const targetStatus = body?.targetStatus || 'INBOUND';
+    const isKeepStatus = targetStatus === 'KEEP';
+    const inboundPlate = (body?.vehicleLicensePlate || body?.licensePlate || '')?.trim();
+    const inboundDriver = (body?.driverName || '')?.trim();
+    const inboundDate = body?.receiveDate || new Date().toISOString().split('T')[0];
+    const tripCodeParam = (body?.tripCode || '')?.trim();
+
     // 2. Process customOrders (from 10-column grid)
     if (customOrders.length > 0) {
       for (const row of customOrders) {
@@ -624,14 +654,48 @@ export class WarehouseService {
         }
 
         if (foundOrder) {
-          // Existing order unloaded from trip -> Update to INBOUND at current Hub
-          foundOrder.status = 'INBOUND';
+          // Existing order unloaded from trip -> Update fields
+          if (!isKeepStatus) {
+            foundOrder.status = 'INBOUND';
+          }
           if (userWithHub?.hubId) {
             foundOrder.originHubId = userWithHub.hubId;
             foundOrder.originHub = userWithHub.hub?.name || foundOrder.originHub;
           }
-          if (row.notes) {
-            foundOrder.notes = row.notes;
+          if (row.totalQuantity !== undefined && Number(row.totalQuantity) > 0) {
+            const q = Number(row.totalQuantity);
+            foundOrder.totalQuantity = q;
+            foundOrder.inboundQuantity = q;
+            foundOrder.remainingQuantity = q;
+          }
+          if (row.totalWeight !== undefined && Number(row.totalWeight) >= 0) {
+            foundOrder.totalWeight = Number(row.totalWeight);
+          }
+          if (row.totalVolume !== undefined && Number(row.totalVolume) >= 0) {
+            foundOrder.totalVolume = Number(row.totalVolume);
+          }
+          if (row.goodsDescription) {
+            foundOrder.goodsDescription = row.goodsDescription.trim();
+          }
+          if (row.deliveryAddress || row.pickupAddress) {
+            const currentOrigin = row.pickupAddress?.trim() || foundOrder.originHub || userWithHub?.hub?.name || 'Hub';
+            const currentDelivery = row.deliveryAddress?.trim() || (foundOrder.route?.includes('→') ? foundOrder.route.split('→')[1]?.trim() : '') || 'Điểm đến';
+            foundOrder.route = `${currentOrigin} → ${currentDelivery}`;
+          }
+          if (row.pickupAddress) {
+            foundOrder.originHub = row.pickupAddress.trim();
+          }
+          if (row.destinationHubId !== undefined) {
+            foundOrder.destinationHubId = row.destinationHubId || null;
+          }
+          if (row.province !== undefined) {
+            foundOrder.province = row.province?.trim() || null;
+          }
+          if (row.accompanyingDocs !== undefined) {
+            foundOrder.accompanyingDocs = row.accompanyingDocs?.trim() || null;
+          }
+          if (row.notes !== undefined) {
+            foundOrder.notes = row.notes?.trim() || null;
           }
           const saved = await this.orderRepository.save(foundOrder);
           savedOrders.push(saved);
@@ -654,13 +718,15 @@ export class WarehouseService {
             remainingQuantity: initQty,
             totalWeight: Number(row.totalWeight) || 0,
             totalVolume: Number(row.totalVolume) || 0,
-            route: `${userWithHub?.hub?.name || 'Hub'} → ${row.deliveryAddress || 'Điểm giao'}`,
-            originHub: userWithHub?.hub?.name || null,
+            route: `${row.pickupAddress?.trim() || userWithHub?.hub?.name || 'Hub'} → ${row.deliveryAddress || 'Điểm giao'}`,
+            originHub: row.pickupAddress?.trim() || userWithHub?.hub?.name || null,
             originHubId: userWithHub?.hubId || null,
             destinationHub: row.destinationHub || null,
             destinationHubId: row.destinationHubId || null,
-            notes: row.notes || 'Hàng lấy thêm dọc đường luân chuyển',
-            status: 'INBOUND',
+            province: row.province?.trim() || null,
+            accompanyingDocs: row.accompanyingDocs?.trim() || null,
+            notes: row.notes?.trim() || 'Hàng tiếp nhận xe nhập kho',
+            status: isKeepStatus ? 'DRAFT' : 'INBOUND',
             createdByUserId: user.id,
             isExternalVehicleNeeded: false,
           });
@@ -677,48 +743,70 @@ export class WarehouseService {
       const trip = await this.tripRepository.findOne({ where: { id: tripId } });
       if (trip) {
         trip.notes = (trip.notes ? `${trip.notes} · ` : '') + `Đã dỡ hàng tại ${userWithHub?.hub?.name || 'Hub'}`;
+        if (inboundPlate) trip.licensePlate = inboundPlate;
+        if (inboundDriver) trip.driverName = inboundDriver;
+        if (inboundDate) trip.pickupDate = inboundDate;
         await this.tripRepository.save(trip);
       }
     }
 
-    // 4. Record inbound vehicle trip if license plate was provided
-    const inboundPlate = (body?.vehicleLicensePlate || body?.licensePlate || '')?.trim();
-    const inboundDriver = (body?.driverName || '')?.trim();
+    // 4. Update / Record inbound vehicle trip if license plate or tripCode was provided
+    if (tripCodeParam && tripCodeParam !== '—') {
+      const existingTrips = await this.tripRepository.find({ where: { tripCode: tripCodeParam } });
+      for (const t of existingTrips) {
+        if (inboundPlate) t.licensePlate = inboundPlate;
+        if (inboundDriver) t.driverName = inboundDriver;
+        if (inboundDate) t.pickupDate = inboundDate;
+        await this.tripRepository.save(t);
+      }
+    }
+
     if (inboundPlate && savedOrders.length > 0) {
       for (const order of savedOrders) {
-        const trip = this.tripRepository.create({
-          orderId: order.id,
-          licensePlate: inboundPlate,
-          driverName: inboundDriver || null,
-          status: 'COMPLETED',
-          pickupDate: new Date().toISOString().split('T')[0],
-          weightAllocated: Number(order.totalWeight) || 0,
-          volumeAllocated: Number(order.totalVolume) || 0,
-          notes: `[NHẬP KHO] Xe nhập ${order.inboundQuantity || order.totalQuantity} kiện tại ${userWithHub?.hub?.name || 'Kho'}`,
+        const hasTrip = await this.tripRepository.findOne({
+          where: {
+            orderId: order.id,
+            ...(tripCodeParam && tripCodeParam !== '—' ? { tripCode: tripCodeParam } : {}),
+          },
         });
-        await this.tripRepository.save(trip);
+        if (!hasTrip) {
+          const trip = this.tripRepository.create({
+            orderId: order.id,
+            tripCode: tripCodeParam && tripCodeParam !== '—' ? tripCodeParam : undefined,
+            licensePlate: inboundPlate,
+            driverName: inboundDriver || null,
+            status: isKeepStatus ? 'PENDING' : 'COMPLETED',
+            pickupDate: inboundDate,
+            weightAllocated: Number(order.totalWeight) || 0,
+            volumeAllocated: Number(order.totalVolume) || 0,
+            notes: `[NHẬP KHO] Xe nhập ${order.inboundQuantity || order.totalQuantity} kiện tại ${userWithHub?.hub?.name || 'Kho'}`,
+          });
+          await this.tripRepository.save(trip);
+        }
       }
     }
 
-    // 5. Record INBOUND inventory transactions for all confirmed orders
-    for (const order of savedOrders) {
-      await this.transactionRepository.save(
-        this.transactionRepository.create({
-          orderId: order.id,
-          type: InventoryTransactionType.INBOUND,
-          quantity: order.inboundQuantity || order.totalQuantity || 1,
-          remainingQuantity: order.remainingQuantity ?? order.totalQuantity ?? 1,
-          weight: Number(order.totalWeight) || 0,
-          volume: Number(order.totalVolume) || 0,
-          licensePlate: inboundPlate || null,
-          driverName: inboundDriver || null,
-          destination: order.destinationHub || order.province || null,
-          performedByUserId: user.id,
-          notes: inboundPlate
-            ? `Nhập kho từ xe ${inboundPlate} tại ${userWithHub?.hub?.name || 'Kho'}`
-            : `Tiếp nhận lưu kho tại ${userWithHub?.hub?.name || 'Kho'}`,
-        }),
-      );
+    // 5. Record INBOUND inventory transactions for newly confirmed orders (only if targetStatus is INBOUND)
+    if (!isKeepStatus) {
+      for (const order of savedOrders) {
+        await this.transactionRepository.save(
+          this.transactionRepository.create({
+            orderId: order.id,
+            type: InventoryTransactionType.INBOUND,
+            quantity: order.inboundQuantity || order.totalQuantity || 1,
+            remainingQuantity: order.remainingQuantity ?? order.totalQuantity ?? 1,
+            weight: Number(order.totalWeight) || 0,
+            volume: Number(order.totalVolume) || 0,
+            licensePlate: inboundPlate || null,
+            driverName: inboundDriver || null,
+            destination: order.destinationHub || order.province || null,
+            performedByUserId: user.id,
+            notes: inboundPlate
+              ? `Nhập kho từ xe ${inboundPlate} tại ${userWithHub?.hub?.name || 'Kho'}`
+              : `Tiếp nhận lưu kho tại ${userWithHub?.hub?.name || 'Kho'}`,
+          }),
+        );
+      }
     }
 
     return {
