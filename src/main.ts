@@ -36,6 +36,10 @@ async function bootstrap() {
   useContainer(app.select(AppModule), { fallbackOnErrors: true });
   const configService = app.get(ConfigService<AllConfigType>);
 
+  // Trust proxy for reverse proxies (Render, Vercel, Cloudflare, Nginx) so client IP and protocol are properly resolved
+  const expressApp = app.getHttpAdapter().getInstance();
+  expressApp.set('trust proxy', 1);
+
   // Enable Socket.IO WebSocket adapter
   app.useWebSocketAdapter(new IoAdapter(app));
 

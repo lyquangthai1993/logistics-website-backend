@@ -35,7 +35,8 @@ import { MailerModule } from './mailer/mailer.module';
 import { MongooseModule } from '@nestjs/mongoose';
 import { MongooseConfigService } from './database/mongoose-config.service';
 import { DatabaseConfig } from './database/config/database-config.type';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { AppThrottlerGuard } from './common/guards/app-throttler.guard';
 import { APP_GUARD } from '@nestjs/core';
 
 // <database-block>
@@ -152,19 +153,19 @@ const infrastructureDatabaseModule = (databaseConfig() as DatabaseConfig)
       {
         name: 'default',
         ttl: 60000, // 60 seconds
-        limit: 100, // 100 requests per minute
+        limit: 300, // 300 requests per minute per user/IP
       },
       {
         name: 'auth',
         ttl: 60000, // 60 seconds
-        limit: process.env.NODE_ENV === 'development' ? 200 : 10,
+        limit: process.env.NODE_ENV === 'development' ? 200 : 15,
       },
     ]),
   ],
   providers: [
     {
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: AppThrottlerGuard,
     },
   ],
 })

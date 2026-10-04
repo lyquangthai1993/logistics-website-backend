@@ -26,8 +26,10 @@ import {
   QuickCreateInboundOrderDto,
   BatchQuickCreateInboundDto,
 } from './dto/quick-create-inbound-order.dto';
+import { Throttle } from '@nestjs/throttler';
 import { ConfirmOutboundDto } from './dto/confirm-outbound.dto';
 
+@Throttle({ default: { limit: 600, ttl: 60000 } })
 @ApiTags('Warehouse')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), RolesGuard)
