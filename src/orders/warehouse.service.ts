@@ -12,6 +12,7 @@ import { HubEntity } from '../hubs/infrastructure/persistence/relational/entitie
 import { UserEntity } from '../users/infrastructure/persistence/relational/entities/user.entity';
 import { TripEntity } from '../trips/infrastructure/persistence/relational/entities/trip.entity';
 import {
+  TripStopEntity,
   TripStopStatus,
   TripStopType,
 } from '../trips/infrastructure/persistence/relational/entities/trip-stop.entity';
@@ -29,6 +30,7 @@ import {
   QuickCreateInboundOrderDto,
   BatchQuickCreateInboundDto,
 } from './dto/quick-create-inbound-order.dto';
+import { AppendOrderToTripDto } from './dto/append-order-to-trip.dto';
 import { ConfirmOutboundDto, OutboundMode } from './dto/confirm-outbound.dto';
 
 export interface WarehouseOrdersResult {
@@ -892,6 +894,197 @@ export class WarehouseService {
       orders: savedOrders,
       invoiceCode,
     };
+  }
+
+  /**
+   * Bốc thêm đơn hàng dọc đường vào chuyến xe đang chạy (SD...)
+   * Đơn hàng mới sẽ thuộc chuyến xe hiện tại, tránh tạo chuyến xe mới làm 1 xe mang 2 trip.
+   */
+  async appendOrderToTrip(
+    user: UserEntity,
+    tripCodeParam: string,
+    dto: AppendOrderToTripDto,
+  ): Promise<{
+    tripCode: string;
+    order: OrderEntity;
+    trip: TripEntity;
+  }> {
+    const tripCode = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
+    if (!tripCode) {
+      throw new NotFoundException('Mã chuyến xe không hợp lệ');
+    }
+
+    const userWithHub = await this.loadUserWithHub(user);
+    const originHubId = userWithHub.hubId;
+    const originHubName = userWithHub.hub?.name || 'Kho tiếp nhận';
+
+    return this.dataSource.transaction(async (manager) => {
+      const tripRepo = manager.getRepository(TripEntity);
+      const orderRepo = manager.getRepository(OrderEntity);
+      const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
+      const hubRepo = manager.getRepository(HubEntity);
+
+      // 1. Tìm chuyến xe hiện tại
+      const existingTrips = await tripRepo.find({
+        where: { tripCode },
+        order: { id: 'ASC' },
+      });
+      if (!existingTrips || existingTrips.length === 0) {
+        throw new NotFoundException(`Không tìm thấy chuyến xe ${tripCode}`);
+      }
+
+      const firstTrip = existingTrips[0];
+      const licensePlate = firstTrip.licensePlate || 'CHƯA GÁN XE';
+      const driverName = firstTrip.driverName || null;
+      const pickupDate = firstTrip.pickupDate || new Date().toISOString().split('T')[0];
+
+      // 2. Điểm đến (Destination Hub)
+      let destinationHubName: string | null = null;
+      let destinationHubId: number | null = dto.destinationHubId ?? null;
+
+      if (destinationHubId) {
+        const destHub = await hubRepo.findOne({ where: { id: destinationHubId } });
+        if (destHub) {
+          destinationHubName = destHub.name;
+        }
+      } else {
+        // Fallback: Lấy đích đến của chuyến xe hiện tại
+        destinationHubId = firstTrip.destinationHubId;
+        if (destinationHubId) {
+          const destHub = await hubRepo.findOne({ where: { id: destinationHubId } });
+          if (destHub) {
+            destinationHubName = destHub.name;
+          }
+        }
+      }
+
+      // 3. Mã đơn hàng
+      let finalOrderCode = dto.orderCode?.trim();
+      if (isPlaceholderCode(finalOrderCode)) {
+        finalOrderCode = await this.orderCodeService.generateOrderCode(userWithHub, manager);
+      }
+
+      const qty = Math.max(1, Number(dto.totalQuantity) || 1);
+      const weight = Math.max(0, Number(dto.totalWeight) || 0);
+      const vol = Math.max(0, Number(dto.totalVolume) || 0);
+      const pickupAddr = dto.pickupAddress?.trim() || originHubName;
+      const deliveryAddr = dto.deliveryAddress?.trim() || destinationHubName || 'Điểm đến';
+
+      // 4. Tạo OrderEntity - Hàng được bốc lên xe đang chạy -> status IN_TRANSIT
+      const order = orderRepo.create({
+        orderCode: finalOrderCode,
+        goodsDescription: dto.goodsDescription.trim(),
+        totalQuantity: qty,
+        inboundQuantity: 0,
+        outboundQuantity: qty,
+        remainingQuantity: qty,
+        totalWeight: weight,
+        totalVolume: vol,
+        route: `${pickupAddr} → ${deliveryAddr}`,
+        originHub: pickupAddr,
+        originHubId,
+        currentHubId: null, // Hàng đang trên xe, chưa lưu kho đích
+        currentTripCode: tripCode,
+        destinationHub: destinationHubName,
+        destinationHubId,
+        province: dto.province?.trim() || null,
+        accompanyingDocs: dto.accompanyingDocs?.trim() || null,
+        notes: dto.notes?.trim() || `Bốc thêm dọc đường tại ${originHubName} lên xe ${licensePlate} (${tripCode})`,
+        status: 'IN_TRANSIT',
+        createdByUserId: user.id,
+        isExternalVehicleNeeded: false,
+      });
+      const savedOrder = await orderRepo.save(order);
+
+      // 5. Tạo TripEntity gán vào tripCode cũ
+      const savedTrip = await tripRepo.save(
+        tripRepo.create({
+          orderId: savedOrder.id,
+          tripCode,
+          originHubId,
+          destinationHubId,
+          type: 'TRANSFER',
+          licensePlate,
+          driverName,
+          status: 'IN_TRANSIT',
+          pickupDate,
+          weightAllocated: weight,
+          volumeAllocated: vol,
+          quantityAllocated: qty,
+          notes: `[BỐC DỌC ĐƯỜNG] Xe ${licensePlate} bốc thêm ${qty} kiện tại ${originHubName}`,
+        }),
+      );
+      savedOrder.trips = [savedTrip];
+
+      // 6. Ghi nhận giao dịch luân chuyển (TRANSFER) bốc lên xe
+      await txRepo.save(
+        txRepo.create({
+          orderId: savedOrder.id,
+          type: InventoryTransactionType.TRANSFER,
+          hubId: originHubId,
+          tripId: savedTrip.id,
+          tripCode,
+          quantity: qty,
+          expectedQuantity: qty,
+          discrepancyQuantity: 0,
+          remainingQuantity: 0,
+          weight,
+          volume: vol,
+          licensePlate,
+          driverName,
+          notes: `Bốc thêm hàng dọc đường tại ${originHubName} lên xe ${licensePlate} (Chuyến ${tripCode})`,
+          destination: deliveryAddr,
+          performedByUserId: user.id,
+        }),
+      );
+
+      // 7. Bảo đảm điểm dừng (TripStopEntity)
+      // Kho bốc hàng: Đã xử lý (COMPLETED) vì đã bốc hàng lên xe
+      if (originHubId) {
+        await this.ledgerService.upsertTripStop(
+          {
+            tripCode,
+            hubId: originHubId,
+            status: TripStopStatus.COMPLETED,
+            stopType: TripStopType.TRANSIT,
+            userId: user.id,
+          },
+          manager,
+        );
+      }
+
+      // Kho nhận hàng: Chờ xử lý (PENDING) để kho nhận kiểm đếm dỡ hàng
+      if (destinationHubId && destinationHubId !== originHubId) {
+        const existingDestStop = await manager.getRepository(TripStopEntity).findOne({
+          where: { tripCode, hubId: destinationHubId },
+        });
+        if (!existingDestStop) {
+          // Lấy sequence lớn nhất để xếp cuối
+          const maxSeqRow = await manager.query(
+            `SELECT COALESCE(MAX("stopSequence"), 1)::int AS "maxSeq" FROM "trip_stop" WHERE "tripCode" = $1 AND "deletedAt" IS NULL`,
+            [tripCode],
+          );
+          const nextSeq = (Number(maxSeqRow?.[0]?.maxSeq) || 1) + 1;
+          await this.ledgerService.upsertTripStop(
+            {
+              tripCode,
+              hubId: destinationHubId,
+              status: TripStopStatus.PENDING,
+              stopType: TripStopType.DESTINATION,
+              stopSequence: nextSeq,
+              userId: user.id,
+            },
+            manager,
+          );
+        }
+      }
+
+      return {
+        tripCode,
+        order: savedOrder,
+        trip: savedTrip,
+      };
+    });
   }
 
   /**

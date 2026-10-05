@@ -15,6 +15,7 @@ import {
 import { UserEntity } from '../users/infrastructure/persistence/relational/entities/user.entity';
 import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
 import { TripEntity } from '../trips/infrastructure/persistence/relational/entities/trip.entity';
+import { TripStopEntity } from '../trips/infrastructure/persistence/relational/entities/trip-stop.entity';
 import { OrderCodeService } from './order-code.service';
 import { OperationalLedgerService } from './operational-ledger.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -102,11 +103,14 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       getInTransitQuantity: jest.fn().mockResolvedValue(0),
     };
 
+    const tripStopRepo = makeRepo();
+
     const repoByEntity = new Map<any, any>([
       [OrderEntity, orderRepo],
       [UserEntity, userRepo],
       [HubEntity, hubRepo],
       [TripEntity, tripRepo],
+      [TripStopEntity, tripStopRepo],
       [OrderInventoryTransactionEntity, txRepo],
     ]);
     const manager = {
@@ -197,6 +201,58 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
         initialStatus: 'DRAFT',
       } as any);
       expect(txRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('WarehouseService.appendOrderToTrip', () => {
+    it('appends an en-route cargo order to an existing tripCode with TRANSFER ledger', async () => {
+      tripRepo.find.mockResolvedValue([
+        {
+          id: 50,
+          tripCode: 'SD10',
+          licensePlate: '29E-012.45',
+          driverName: 'Bác Tài',
+          originHubId: 1,
+          destinationHubId: 2,
+        },
+      ]);
+      hubRepo.findOne.mockResolvedValue({ id: 2, name: 'Polaris Hub - Hưng Yên' });
+
+      const result = await warehouseService.appendOrderToTrip(warehouseUser, 'SD10', {
+        goodsDescription: 'Hạt nhựa công nghiệp',
+        totalQuantity: 30,
+        totalWeight: 600,
+        totalVolume: 3,
+        destinationHubId: 2,
+        notes: 'Bốc thêm dọc đường tại Đà Nẵng',
+      });
+
+      expect(result.tripCode).toBe('SD10');
+      expect(orderRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          goodsDescription: 'Hạt nhựa công nghiệp',
+          totalQuantity: 30,
+          currentTripCode: 'SD10',
+          status: 'IN_TRANSIT',
+        }),
+      );
+      expect(tripRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tripCode: 'SD10',
+          licensePlate: '29E-012.45',
+          driverName: 'Bác Tài',
+          type: 'TRANSFER',
+          status: 'IN_TRANSIT',
+        }),
+      );
+      expect(txRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: InventoryTransactionType.TRANSFER,
+          tripCode: 'SD10',
+          licensePlate: '29E-012.45',
+          quantity: 30,
+        }),
+      );
     });
   });
 

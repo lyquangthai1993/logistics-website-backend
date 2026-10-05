@@ -27,6 +27,7 @@ import {
   QuickCreateInboundOrderDto,
   BatchQuickCreateInboundDto,
 } from './dto/quick-create-inbound-order.dto';
+import { AppendOrderToTripDto } from './dto/append-order-to-trip.dto';
 import { Throttle } from '@nestjs/throttler';
 import { ConfirmOutboundDto } from './dto/confirm-outbound.dto';
 
@@ -164,6 +165,21 @@ export class WarehouseController {
     @Param('tripCode') tripCode: string,
   ) {
     return this.warehouseService.getTripManifest(req.user, tripCode);
+  }
+
+  @Post('trips/:tripCode/append-order')
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Bốc thêm đơn hàng dọc đường vào chuyến xe đang chạy (SD...)',
+  })
+  @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
+  async appendOrderToTrip(
+    @Request() req: any,
+    @Param('tripCode') tripCode: string,
+    @Body() dto: AppendOrderToTripDto,
+  ) {
+    return this.warehouseService.appendOrderToTrip(req.user, tripCode, dto);
   }
 
   @Post('inbound/quick-create')
