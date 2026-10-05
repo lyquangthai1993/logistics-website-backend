@@ -2711,11 +2711,39 @@ export class WarehouseService {
         const expectedQuantity = loaded > 0 ? loaded : Number(o.totalQuantity) || 0;
         const inTransitQuantity = loaded > 0 ? Math.max(0, loaded - receivedAll) : 0;
 
-        const isForCurrentHub = viewerHubId
-          ? o.destinationHubId === viewerHubId ||
-            !o.destinationHubId ||
-            !stopHubIds.has(o.destinationHubId)
-          : true;
+        let isForCurrentHub = true;
+        if (viewerHubId) {
+          if (o.destinationHubId) {
+            isForCurrentHub =
+              o.destinationHubId === viewerHubId || !stopHubIds.has(o.destinationHubId);
+          } else if (o.destinationHub) {
+            const destLower = o.destinationHub.trim().toLowerCase();
+            // Support logistics abbreviations: ĐN = Đà Nẵng, HY = Hưng Yên, HCM = TP. Hồ Chí Minh
+            const isDestDaNang =
+              destLower === 'đn' ||
+              destLower === 'dn' ||
+              destLower.includes('đà nẵng') ||
+              destLower.includes('da nang');
+            const isDestHungYen =
+              destLower === 'hy' ||
+              destLower.includes('hưng yên') ||
+              destLower.includes('hung yen');
+            const isDestHcm =
+              destLower === 'hcm' ||
+              destLower === 'sgn' ||
+              destLower.includes('hồ chí minh') ||
+              destLower.includes('sài gòn');
+
+            // Standard hub IDs: 1 = HCM, 2 = Đà Nẵng, 3 = Hưng Yên
+            if (isDestDaNang && viewerHubId !== 2) {
+              isForCurrentHub = false;
+            } else if (isDestHungYen && viewerHubId !== 3) {
+              isForCurrentHub = false;
+            } else if (isDestHcm && viewerHubId !== 1) {
+              isForCurrentHub = false;
+            }
+          }
+        }
 
         let pickupAddress = o.originHub || '';
         let deliveryAddress = '';
