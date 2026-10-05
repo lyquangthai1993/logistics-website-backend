@@ -104,4 +104,18 @@ export class ConfirmOutboundDto {
   @IsOptional()
   @IsString()
   driverName?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-05', description: 'Ngày xuất (YYYY-MM-DD)' })
+  @IsOptional()
+  @IsString()
+  dispatchDate?: string;
+
+  @ApiPropertyOptional({
+    example: 'SD32',
+    description:
+      'Mã chuyến nháp đã lưu (Chờ xử lý). Lưu nháp: ghi đè nội dung nháp; Xác nhận xuất: dùng lại mã chuyến này.',
+  })
+  @IsOptional()
+  @IsString()
+  draftTripCode?: string;
 }

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -84,6 +85,35 @@ export class WarehouseController {
     @Query('toDate') toDate?: string,
   ) {
     return this.warehouseService.getKpiStats(req.user, { fromDate, toDate });
+  }
+
+  @Get('outbound-trips')
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @ApiOperation({
+    summary:
+      'Bảng chuyến xe xuất kho (SD...) của kho hiện tại: Chờ xử lý (nháp) / Đã xử lý, lọc phụ Xuất khách / Luân chuyển',
+  })
+  @ApiQuery({ name: 'status', required: false, enum: ['ALL', 'PENDING', 'COMPLETED'] })
+  @ApiQuery({ name: 'type', required: false, enum: ['ALL', 'CUSTOMER', 'TRANSFER'] })
+  async getOutboundTrips(
+    @Request() req: any,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('type') type?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.warehouseService.getOutboundTrips(req.user, {
+      search,
+      status,
+      type,
+      fromDate,
+      toDate,
+      page,
+      limit,
+    });
   }
 
   @Get('inbound-trips')
@@ -177,5 +207,31 @@ export class WarehouseController {
     @Body() dto: ConfirmOutboundDto,
   ) {
     return this.warehouseService.confirmOutbound(req.user, dto);
+  }
+
+  @Post('outbound/draft')
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Lưu nháp phiếu xuất kho (chuyến SD... Chờ xử lý, chưa trừ tồn kho). Gửi draftTripCode để cập nhật nháp cũ.',
+  })
+  async saveOutboundDraft(
+    @Request() req: any,
+    @Body() dto: ConfirmOutboundDto,
+  ) {
+    return this.warehouseService.saveOutboundDraft(req.user, dto);
+  }
+
+  @Delete('outbound/drafts/:tripCode')
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Hủy chuyến nháp xuất kho (chỉ chuyến chưa xuất)' })
+  @ApiParam({ name: 'tripCode', type: String, example: 'SD32' })
+  async cancelOutboundDraft(
+    @Request() req: any,
+    @Param('tripCode') tripCode: string,
+  ) {
+    return this.warehouseService.cancelOutboundDraft(req.user, tripCode);
   }
 }

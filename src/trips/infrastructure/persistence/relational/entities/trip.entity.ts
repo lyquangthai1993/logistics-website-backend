@@ -57,6 +57,10 @@ export class TripEntity extends AbstractBaseEntity {
   @Column({ type: 'float', nullable: false, default: 0 })
   volumeAllocated: number;
 
+  /** Planned package count of this order line on the trip (set for outbound draft trips). */
+  @Column({ type: 'int', nullable: true })
+  quantityAllocated: number | null;
+
   @Column({ type: Number, nullable: false, default: 1 })
   sequenceNumber: number;
 

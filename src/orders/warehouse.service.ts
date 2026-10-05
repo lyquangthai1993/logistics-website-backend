@@ -1371,14 +1371,20 @@ export class WarehouseService {
       }
 
       const originHubId = actingOriginId;
-      const tripCode = await this.ledgerService.generateTripCode(manager);
+      // Confirming a saved draft ("Chờ xử lý"): keep its SD code, drop the planned lines
+      const draftCode = normalizeTripCode(dto.draftTripCode);
+      if (draftCode) {
+        await this.discardOutboundDraftLines(manager, draftCode, userHubId);
+      }
+      const tripCode =
+        draftCode || (await this.ledgerService.generateTripCode(manager));
       const invoiceCode = await this.ledgerService.generateInvoiceCode(
         isTransfer ? InventoryTransactionType.TRANSFER : InventoryTransactionType.OUTBOUND,
         originHubId,
         manager,
       );
       const dispatchDate =
-        (dto as any).dispatchDate || new Date().toISOString().split('T')[0];
+        dto.dispatchDate || new Date().toISOString().split('T')[0];
 
       let createdTrip: TripEntity | undefined;
 
@@ -1572,6 +1578,188 @@ export class WarehouseService {
   }
 
   /**
+   * Validates that `tripCode` is an outbound draft of the acting hub (planned lines only, no
+   * dispatch invoice yet) and soft-deletes its planned lines. Trip stops are kept so the caller
+   * can either complete the origin stop (confirm) or drop it (cancel).
+   */
+  private async discardOutboundDraftLines(
+    manager: EntityManager,
+    tripCode: string,
+    userHubId: number | null,
+  ): Promise<TripEntity[]> {
+    const tripRepo = manager.getRepository(TripEntity);
+    const lines = await tripRepo.find({ where: { tripCode } });
+    if (lines.length === 0) {
+      throw new NotFoundException(`Không tìm thấy chuyến nháp ${tripCode}`);
+    }
+    const isDraft = lines.every(
+      (t) =>
+        t.status === 'PENDING' &&
+        t.quantityAllocated !== null &&
+        t.quantityAllocated !== undefined &&
+        (t.type === 'OUTBOUND' || t.type === 'TRANSFER'),
+    );
+    const dispatched = await manager.query(
+      `SELECT 1 FROM "order_inventory_transaction"
+       WHERE "tripCode" = $1 AND "type" IN ('OUTBOUND', 'TRANSFER') AND "deletedAt" IS NULL LIMIT 1`,
+      [tripCode],
+    );
+    if (!isDraft || dispatched.length > 0) {
+      throw new UnprocessableEntityException(
+        `Chuyến ${tripCode} đã xuất kho, không còn là phiếu nháp.`,
+      );
+    }
+    if (userHubId && lines.some((t) => t.originHubId !== userHubId)) {
+      throw new UnprocessableEntityException(
+        `Chuyến nháp ${tripCode} không thuộc kho của bạn.`,
+      );
+    }
+    await tripRepo.softDelete(lines.map((t) => t.id));
+    return lines;
+  }
+
+  /**
+   * Save an outbound note as a draft trip ("Chờ xử lý").
+   * - Allocates (or keeps, when `draftTripCode` is given) one SD trip code.
+   * - Stores planned lines (quantity / kg / m³) on `trip` rows; NO dispatch invoice is written,
+   *   so hub stock and Master Contract fields are untouched.
+   * - Origin trip stop of the acting hub = PENDING; receiving hubs get their stops on confirm.
+   */
+  async saveOutboundDraft(
+    user: UserEntity,
+    dto: ConfirmOutboundDto,
+  ): Promise<{ tripCode: string; orderCount: number }> {
+    const targetOrderIds =
+      dto.items && dto.items.length > 0
+        ? dto.items.map((i) => i.orderId)
+        : dto.orderIds || [];
+    if (targetOrderIds.length === 0) {
+      throw new NotFoundException('Vui lòng chọn ít nhất 1 dòng hàng để lưu nháp');
+    }
+
+    const userHubId = (await this.resolveUserHubId(user)) ?? null;
+
+    return this.dataSource.transaction(async (manager) => {
+      const orderRepo = manager.getRepository(OrderEntity);
+      const tripRepo = manager.getRepository(TripEntity);
+
+      const orders = await orderRepo.find({ where: { id: In(targetOrderIds) } });
+      if (orders.length === 0) {
+        throw new NotFoundException('Không tìm thấy đơn hàng nào để lưu nháp');
+      }
+
+      const draftCode = normalizeTripCode(dto.draftTripCode);
+      if (draftCode) {
+        await this.discardOutboundDraftLines(manager, draftCode, userHubId);
+      }
+      const tripCode =
+        draftCode || (await this.ledgerService.generateTripCode(manager));
+
+      const actingOriginId =
+        userHubId ?? orders[0].currentHubId ?? orders[0].originHubId ?? null;
+      const isTransferMode = dto.mode === OutboundMode.TRANSFER;
+      const dispatchDate =
+        dto.dispatchDate || new Date().toISOString().split('T')[0];
+
+      for (const order of orders) {
+        const item = dto.items?.find((i) => i.orderId === order.id);
+        const actingHubId =
+          userHubId ?? order.currentHubId ?? order.originHubId ?? null;
+        const hubStock = actingHubId
+          ? await this.ledgerService.getHubStock(order.id, actingHubId, manager)
+          : null;
+        const availableQty =
+          hubStock !== null
+            ? hubStock
+            : (order.remainingQuantity ?? order.totalQuantity ?? 0);
+        const qty =
+          item?.quantityToExport !== undefined
+            ? Number(item.quantityToExport)
+            : availableQty;
+        if (qty <= 0) {
+          throw new UnprocessableEntityException(
+            `Đơn hàng ${order.orderCode}: Số lượng xuất phải lớn hơn 0.`,
+          );
+        }
+        if (qty > availableQty) {
+          throw new UnprocessableEntityException(
+            `Mã đơn ${order.orderCode}: Số lượng xuất (${qty}) vượt quá tồn kho khả dụng tại kho (${availableQty} kiện).`,
+          );
+        }
+
+        const destHubId =
+          item?.destinationHubId ?? dto.destinationHubId ?? null;
+        const tripDestHubId =
+          destHubId && destHubId !== actingHubId ? destHubId : null;
+        const isTransferLine = isTransferMode || !!tripDestHubId;
+
+        await tripRepo.save(
+          tripRepo.create({
+            orderId: order.id,
+            tripCode,
+            originHubId: actingHubId ?? actingOriginId,
+            destinationHubId: tripDestHubId,
+            type: isTransferLine ? 'TRANSFER' : 'OUTBOUND',
+            licensePlate: dto.licensePlate?.trim() || null,
+            driverName: dto.driverName?.trim() || null,
+            status: 'PENDING',
+            pickupDate: dispatchDate,
+            quantityAllocated: qty,
+            weightAllocated: Number(
+              item?.weightToExport ??
+                this.proportional(order.totalWeight, qty, order.totalQuantity),
+            ),
+            volumeAllocated: Number(
+              item?.volumeToExport ??
+                this.proportional(order.totalVolume, qty, order.totalQuantity),
+            ),
+            notes: isTransferLine
+              ? `[NHÁP XUẤT KHO - LUÂN CHUYỂN] Dự kiến xuất ${qty} kiện`
+              : `[NHÁP XUẤT KHO - GIAO KHÁCH] Dự kiến xuất ${qty} kiện`,
+          }),
+        );
+      }
+
+      if (actingOriginId) {
+        await this.ledgerService.upsertTripStop(
+          {
+            tripCode,
+            hubId: actingOriginId,
+            status: TripStopStatus.PENDING,
+            stopType: TripStopType.ORIGIN,
+            stopSequence: 1,
+            userId: user.id,
+          },
+          manager,
+        );
+      }
+
+      return { tripCode, orderCount: orders.length };
+    });
+  }
+
+  /** Cancel an outbound draft trip: drops its planned lines and its trip stops. */
+  async cancelOutboundDraft(
+    user: UserEntity,
+    tripCodeParam: string,
+  ): Promise<{ tripCode: string; cancelled: boolean }> {
+    const tripCode = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
+    if (!tripCode) {
+      throw new NotFoundException('Không tìm thấy chuyến nháp');
+    }
+    const userHubId = (await this.resolveUserHubId(user)) ?? null;
+    await this.dataSource.transaction(async (manager) => {
+      await this.discardOutboundDraftLines(manager, tripCode, userHubId);
+      await manager.query(
+        `UPDATE "trip_stop" SET "deletedAt" = NOW()
+         WHERE "tripCode" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL`,
+        [tripCode],
+      );
+    });
+    return { tripCode, cancelled: true };
+  }
+
+  /**
    * Get KPI metrics for warehouse dashboard cards & tab counters (hub-scoped statuses).
    */
   async getKpiStats(
@@ -1670,6 +1858,340 @@ export class WarehouseService {
       completedOutbound,
       completedOutboundToday: completedOutbound,
     };
+  }
+
+  /**
+   * Outbound board: logical trips (SD...) of the viewer hub, one row per trip.
+   *  - Đã xử lý (COMPLETED): dispatched — OUTBOUND/TRANSFER invoices issued by this hub.
+   *  - Chờ xử lý (PENDING): saved draft — planned lines on `trip` (quantityAllocated), no invoice.
+   * A trip is "Luân chuyển" when any line is a TRANSFER, otherwise "Xuất khách".
+   * Status tab counters (all / pending / completed), type sub-filter counters (customer / transfer)
+   * and rows all come from the same CTE (1:1 parity with what is rendered).
+   * Date range applies to the dispatch time (or draft save time) at this hub.
+   */
+  async getOutboundTrips(
+    user: UserEntity,
+    query: {
+      search?: string;
+      status?: string;
+      type?: string;
+      fromDate?: string;
+      toDate?: string;
+      page?: number;
+      limit?: number;
+    },
+  ): Promise<{ data: any[]; meta: any }> {
+    const page = Math.max(1, Number(query?.page) || 1);
+    const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const params: any[] = [];
+    const bind = (value: unknown) => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+
+    const dispatchTypes = `('${InventoryTransactionType.OUTBOUND}', '${InventoryTransactionType.TRANSFER}')`;
+    const txWhere: string[] = [
+      `tx."deletedAt" IS NULL`,
+      `tx."type" IN ${dispatchTypes}`,
+      `tx."tripCode" IS NOT NULL`,
+      `tx."tripCode" <> ''`,
+      `o."deletedAt" IS NULL`,
+    ];
+    const draftWhere: string[] = [
+      `t."deletedAt" IS NULL`,
+      `o."deletedAt" IS NULL`,
+      `t."status" = 'PENDING'`,
+      `t."type" IN ('OUTBOUND', 'TRANSFER')`,
+      `t."quantityAllocated" IS NOT NULL`,
+      `t."tripCode" IS NOT NULL`,
+      `t."tripCode" <> ''`,
+      `NOT EXISTS (SELECT 1 FROM "order_inventory_transaction" dtx WHERE dtx."tripCode" = t."tripCode" AND dtx."type" IN ${dispatchTypes} AND dtx."deletedAt" IS NULL)`,
+    ];
+
+    if (useHubContext && userHubId) {
+      const p = bind(userHubId);
+      txWhere.push(`tx."hubId" = ${p}`);
+      draftWhere.push(`t."originHubId" = ${p}`);
+    }
+    if (query?.search && query.search.trim()) {
+      const p = bind(`%${query.search.trim()}%`);
+      txWhere.push(
+        `(tx."tripCode" ILIKE ${p} OR tx."licensePlate" ILIKE ${p} OR tx."driverName" ILIKE ${p} OR o."orderCode" ILIKE ${p} OR o."goodsDescription" ILIKE ${p} OR EXISTS (SELECT 1 FROM "trip" st WHERE st."tripCode" = tx."tripCode" AND st."deletedAt" IS NULL AND (st."licensePlate" ILIKE ${p} OR st."driverName" ILIKE ${p})))`,
+      );
+      draftWhere.push(
+        `(t."tripCode" ILIKE ${p} OR t."licensePlate" ILIKE ${p} OR t."driverName" ILIKE ${p} OR o."orderCode" ILIKE ${p} OR o."goodsDescription" ILIKE ${p})`,
+      );
+    }
+    if (query?.fromDate) {
+      const p = bind(new Date(`${query.fromDate}T00:00:00`).toISOString());
+      txWhere.push(`tx."createdAt" >= ${p}`);
+      draftWhere.push(`t."createdAt" >= ${p}`);
+    }
+    if (query?.toDate) {
+      const p = bind(new Date(`${query.toDate}T23:59:59.999`).toISOString());
+      txWhere.push(`tx."createdAt" <= ${p}`);
+      draftWhere.push(`t."createdAt" <= ${p}`);
+    }
+
+    const groupedCte = `WITH base AS (
+        SELECT tx."tripCode" AS "tripCode",
+               (tx."type" = '${InventoryTransactionType.TRANSFER}') AS "isTransfer",
+               tx."createdAt" AS "at",
+               'COMPLETED' AS "status"
+        FROM "order_inventory_transaction" tx
+        JOIN "order" o ON o.id = tx."orderId"
+        WHERE ${txWhere.join(' AND ')}
+        UNION ALL
+        SELECT t."tripCode", (t."type" = 'TRANSFER'), t."createdAt", 'PENDING'
+        FROM "trip" t
+        JOIN "order" o ON o.id = t."orderId"
+        WHERE ${draftWhere.join(' AND ')}
+      ), g AS (
+        SELECT "tripCode",
+               BOOL_OR("isTransfer") AS "isTransfer",
+               MAX("at") AS "dispatchedAt",
+               MIN("status") AS "status"
+        FROM base
+        GROUP BY "tripCode"
+      )`;
+
+    const statusUpper = query?.status?.toUpperCase();
+    const statusCond =
+      statusUpper === 'PENDING' || statusUpper === 'COMPLETED'
+        ? `g."status" = '${statusUpper}'`
+        : 'TRUE';
+    const typeUpper = query?.type?.toUpperCase();
+    const typeCond =
+      typeUpper === 'CUSTOMER'
+        ? 'NOT g."isTransfer"'
+        : typeUpper === 'TRANSFER'
+          ? 'g."isTransfer"'
+          : 'TRUE';
+
+    const countRows = await this.dataSource.query(
+      `${groupedCte}
+       SELECT COUNT(*) FILTER (WHERE ${typeCond})::int AS "allCount",
+              COUNT(*) FILTER (WHERE g."status" = 'PENDING' AND ${typeCond})::int AS "pendingCount",
+              COUNT(*) FILTER (WHERE g."status" = 'COMPLETED' AND ${typeCond})::int AS "completedCount",
+              COUNT(*) FILTER (WHERE ${statusCond})::int AS "typeAllCount",
+              COUNT(*) FILTER (WHERE NOT g."isTransfer" AND ${statusCond})::int AS "customerCount",
+              COUNT(*) FILTER (WHERE g."isTransfer" AND ${statusCond})::int AS "transferCount",
+              COUNT(*) FILTER (WHERE ${statusCond} AND ${typeCond})::int AS "total"
+       FROM g`,
+      params,
+    );
+    const c = countRows?.[0] ?? {};
+    const total = Number(c.total) || 0;
+    const meta = {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+      allCount: Number(c.allCount) || 0,
+      pendingCount: Number(c.pendingCount) || 0,
+      completedCount: Number(c.completedCount) || 0,
+      typeAllCount: Number(c.typeAllCount) || 0,
+      customerCount: Number(c.customerCount) || 0,
+      transferCount: Number(c.transferCount) || 0,
+    };
+
+    const pageRows: Array<{
+      tripCode: string;
+      isTransfer: boolean;
+      dispatchedAt: string;
+      status: 'PENDING' | 'COMPLETED';
+    }> = await this.dataSource.query(
+      `${groupedCte}
+       SELECT g."tripCode", g."isTransfer", g."dispatchedAt", g."status"
+       FROM g
+       WHERE ${statusCond} AND ${typeCond}
+       ORDER BY CASE WHEN g."status" = 'PENDING' THEN 0 ELSE 1 END,
+                g."dispatchedAt" DESC, g."tripCode" DESC
+       LIMIT ${limit} OFFSET ${skip}`,
+      params,
+    );
+    if (pageRows.length === 0) {
+      return { data: [], meta };
+    }
+
+    const completedCodes = pageRows
+      .filter((r) => r.status === 'COMPLETED')
+      .map((r) => r.tripCode);
+    const pendingCodes = pageRows
+      .filter((r) => r.status === 'PENDING')
+      .map((r) => r.tripCode);
+
+    // Dispatch invoices of the page's dispatched trips at the viewer hub
+    let dispatchTxs: OrderInventoryTransactionEntity[] = [];
+    if (completedCodes.length > 0) {
+      const txQb = this.transactionRepository
+        .createQueryBuilder('tx')
+        .leftJoinAndSelect('tx.hub', 'hub')
+        .where('tx.deletedAt IS NULL')
+        .andWhere('tx.type IN (:...types)', {
+          types: [
+            InventoryTransactionType.OUTBOUND,
+            InventoryTransactionType.TRANSFER,
+          ],
+        })
+        .andWhere('tx.tripCode IN (:...completedCodes)', { completedCodes })
+        .orderBy('tx.id', 'ASC');
+      if (useHubContext && userHubId) {
+        txQb.andWhere('tx.hubId = :userHubId', { userHubId });
+      }
+      dispatchTxs = await txQb.getMany();
+    }
+
+    // Planned lines of the page's draft trips
+    const draftLines =
+      pendingCodes.length > 0
+        ? await this.tripRepository
+            .createQueryBuilder('t')
+            .leftJoinAndSelect('t.originHub', 'draftOriginHub')
+            .where('t.deletedAt IS NULL')
+            .andWhere('t.tripCode IN (:...pendingCodes)', { pendingCodes })
+            .andWhere(`t.status = 'PENDING'`)
+            .andWhere('t.quantityAllocated IS NOT NULL')
+            .orderBy('t.id', 'ASC')
+            .getMany()
+        : [];
+
+    const orderIds = Array.from(
+      new Set([
+        ...dispatchTxs.map((t) => t.orderId),
+        ...draftLines.map((t) => t.orderId),
+      ]),
+    );
+    const orderEntities =
+      orderIds.length > 0
+        ? await this.orderRepository
+            .createQueryBuilder('order')
+            .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+            .leftJoinAndSelect(
+              'order.destinationHubEntity',
+              'destinationHubEntity',
+            )
+            .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
+            .leftJoinAndSelect('order.trips', 'trips')
+            .leftJoinAndSelect('trips.originHub', 'tripOriginHub')
+            .leftJoinAndSelect(
+              'order.inventoryTransactions',
+              'inventoryTransactions',
+            )
+            .leftJoinAndSelect(
+              'inventoryTransactions.hub',
+              'inventoryTransactionHub',
+            )
+            .where('order.deletedAt IS NULL')
+            .andWhere('order.id IN (:...orderIds)', { orderIds })
+            .getMany()
+        : [];
+    const enriched = await this.enrichWarehouseRows(
+      orderEntities,
+      userHubId,
+      useHubContext,
+    );
+    const orderById = new Map<number, any>(
+      enriched.map((o) => [Number(o.id), o]),
+    );
+
+    const data = pageRows.map((row) => {
+      const isDraft = row.status === 'PENDING';
+      const sourceLines: Array<{
+        orderId: number;
+        quantity: number;
+        weight: number;
+        volume: number;
+        invoiceCode: string | null;
+        destinationHubId: number | null;
+      }> = isDraft
+        ? draftLines
+            .filter((t) => t.tripCode === row.tripCode)
+            .map((t) => ({
+              orderId: t.orderId,
+              quantity: Number(t.quantityAllocated) || 0,
+              weight: Number(t.weightAllocated) || 0,
+              volume: Number(t.volumeAllocated) || 0,
+              invoiceCode: null,
+              destinationHubId: t.destinationHubId ?? null,
+            }))
+        : dispatchTxs
+            .filter((t) => t.tripCode === row.tripCode)
+            .map((t) => ({
+              orderId: t.orderId,
+              quantity: Number(t.quantity) || 0,
+              weight: Number(t.weight) || 0,
+              volume: Number(t.volume) || 0,
+              invoiceCode: t.invoiceCode,
+              destinationHubId: null,
+            }));
+
+      const orders: any[] = [];
+      let totalQuantity = 0;
+      let totalWeight = 0;
+      let totalVolume = 0;
+      for (const line of sourceLines) {
+        totalQuantity += line.quantity;
+        totalWeight += line.weight;
+        totalVolume += line.volume;
+        const order = orderById.get(Number(line.orderId));
+        if (!order) continue;
+        const existing = orders.find((x) => x.id === order.id);
+        if (existing) {
+          existing.exportedQuantity += line.quantity;
+          existing.exportedWeight += line.weight;
+          existing.exportedVolume += line.volume;
+          continue;
+        }
+        orders.push({
+          ...order,
+          exportedQuantity: line.quantity,
+          exportedWeight: line.weight,
+          exportedVolume: line.volume,
+          dispatchInvoiceCode: line.invoiceCode,
+          plannedDestinationHubId: line.destinationHubId,
+        });
+      }
+
+      const firstDraft = isDraft
+        ? draftLines.find((t) => t.tripCode === row.tripCode)
+        : undefined;
+      const firstTx = isDraft
+        ? undefined
+        : dispatchTxs.find((t) => t.tripCode === row.tripCode);
+      const tripRecord =
+        firstDraft ??
+        orders
+          .flatMap((o) => o.trips ?? [])
+          .find((t: any) => t?.tripCode === row.tripCode);
+
+      return {
+        tripCode: row.tripCode,
+        type: row.isTransfer ? 'TRANSFER' : 'CUSTOMER',
+        isTransfer: !!row.isTransfer,
+        isDraft,
+        /** Status of this trip at the dispatching hub: PENDING = Chờ xử lý (nháp), COMPLETED = Đã xử lý. */
+        status: row.status,
+        licensePlate: tripRecord?.licensePlate || firstTx?.licensePlate || '',
+        driverName: tripRecord?.driverName || firstTx?.driverName || '',
+        dispatchDate: tripRecord?.pickupDate || row.dispatchedAt,
+        dispatchedAt: row.dispatchedAt,
+        invoiceCode: firstTx?.invoiceCode || null,
+        destinationHubId: firstDraft?.destinationHubId ?? null,
+        dispatchHubId: firstTx?.hubId ?? firstDraft?.originHubId ?? null,
+        dispatchHubName: firstTx?.hub?.name || firstDraft?.originHub?.name || '',
+        totalQuantity,
+        totalWeight: Math.round(totalWeight * 1000) / 1000,
+        totalVolume: Math.round(totalVolume * 1000) / 1000,
+        notes: isDraft ? '' : tripRecord?.notes || '',
+        orders,
+      };
+    });
+
+    return { data, meta };
   }
 
   /**

@@ -9,6 +9,7 @@ export class Trip {
   estimatedDeliveryDate?: string | null;
   weightAllocated: number;
   volumeAllocated: number;
+  quantityAllocated?: number | null;
   sequenceNumber: number;
   assignedByUserId?: number | null;
   notes?: string | null;
