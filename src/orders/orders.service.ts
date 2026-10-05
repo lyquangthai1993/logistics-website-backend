@@ -330,6 +330,7 @@ export class OrdersService {
           'destinationHubEntity',
           'currentHubEntity',
         ],
+        order: { id: 'DESC' },
       });
     }
 
