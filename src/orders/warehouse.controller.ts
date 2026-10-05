@@ -120,19 +120,28 @@ export class WarehouseController {
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @ApiOperation({
     summary:
-      'Danh sách chuyến xe dừng tại kho hiện tại với trạng thái theo kho (Chờ xử lý / Đã xử lý)',
+      'Danh sách chuyến xe dừng tại kho hiện tại với trạng thái theo kho (Chờ xử lý / Đã xử lý) và phân loại nguồn',
   })
   @ApiQuery({ name: 'status', required: false, enum: ['PENDING', 'COMPLETED'] })
+  @ApiQuery({ name: 'type', required: false, enum: ['CUSTOMER', 'TRANSFER'] })
+  @ApiQuery({ name: 'fromDate', required: false, type: String })
+  @ApiQuery({ name: 'toDate', required: false, type: String })
   async getInboundTrips(
     @Request() req: any,
     @Query('search') search?: string,
     @Query('status') status?: string,
+    @Query('type') type?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
     return this.warehouseService.getInboundTrips(req.user, {
       search,
       status,
+      type,
+      fromDate,
+      toDate,
       page,
       limit,
     });

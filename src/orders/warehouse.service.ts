@@ -2198,61 +2198,134 @@ export class WarehouseService {
    * List logical trips (grouped by SD trip code) that stop at the current hub,
    * with the hub-scoped trip status: PENDING (Chờ xử lý) / COMPLETED (Đã xử lý).
    */
+  /**
+   * List inbound trips stopping at the viewer hub with per-hub status (PENDING = Chờ xử lý, COMPLETED = Đã xử lý)
+   * and source classification (CUSTOMER = Khách gửi trực tiếp, TRANSFER = Luân chuyển liên Hub).
+   * Backed by trip_stop CTE query for 1:1 counter parity.
+   */
   async getInboundTrips(
     user: UserEntity,
     query: {
       search?: string;
       status?: string;
+      type?: string;
+      fromDate?: string;
+      toDate?: string;
       page?: number;
       limit?: number;
     },
   ): Promise<{ data: any[]; meta: any }> {
     const page = Math.max(1, Number(query?.page) || 1);
-    const limit = Math.max(1, Math.min(50, Number(query?.limit) || 10));
+    const limit = Math.max(1, Math.min(50, Number(query?.limit) || 15));
     const skip = (page - 1) * limit;
 
-    const userHubId = await this.resolveUserHubId(user);
+    const userHubId = (await this.resolveUserHubId(user)) ?? null;
     const params: any[] = [];
-    const where: string[] = [`ts."deletedAt" IS NULL`];
+    const bind = (v: any) => {
+      params.push(v);
+      return `$${params.length}`;
+    };
 
-    if (user.role?.id === RoleEnum.WAREHOUSE_MANAGER && userHubId) {
-      params.push(userHubId);
-      where.push(`ts."hubId" = $${params.length}`);
-      // Origin stops are outbound trips of this hub, not inbound
-      where.push(`ts."stopType" <> 'ORIGIN'`);
-    }
+    const where: string[] = [`ts."deletedAt" IS NULL`, `ts."stopType" <> 'ORIGIN'`];
 
-    const statusUpper = query?.status?.toUpperCase();
-    if (statusUpper === 'PENDING' || statusUpper === 'COMPLETED') {
-      params.push(statusUpper);
-      where.push(`ts."status" = $${params.length}`);
+    if (userHubId) {
+      where.push(`ts."hubId" = ${bind(userHubId)}`);
     }
 
     if (query?.search && query.search.trim()) {
-      params.push(`%${query.search.trim()}%`);
-      const p = `$${params.length}`;
+      const p = bind(`%${query.search.trim()}%`);
       where.push(
-        `(ts."tripCode" ILIKE ${p} OR EXISTS (SELECT 1 FROM "trip" st WHERE st."tripCode" = ts."tripCode" AND st."deletedAt" IS NULL AND (st."licensePlate" ILIKE ${p} OR st."driverName" ILIKE ${p})))`,
+        `(ts."tripCode" ILIKE ${p} OR EXISTS (SELECT 1 FROM "trip" st WHERE st."tripCode" = ts."tripCode" AND st."deletedAt" IS NULL AND (st."licensePlate" ILIKE ${p} OR st."driverName" ILIKE ${p})) OR EXISTS (SELECT 1 FROM "trip" st JOIN "order" so ON so.id = st."orderId" WHERE st."tripCode" = ts."tripCode" AND st."deletedAt" IS NULL AND (so."orderCode" ILIKE ${p} OR so."goodsDescription" ILIKE ${p})))`,
       );
+    }
+
+    if (query?.fromDate) {
+      const fromIso = new Date(`${query.fromDate}T00:00:00`).toISOString();
+      where.push(`ts."createdAt" >= ${bind(fromIso)}`);
+    }
+
+    if (query?.toDate) {
+      const toIso = new Date(`${query.toDate}T23:59:59.999`).toISOString();
+      where.push(`ts."createdAt" <= ${bind(toIso)}`);
     }
 
     const whereSql = where.join(' AND ');
 
-    const totalRows = await this.dataSource.query(
-      `SELECT COUNT(*)::int AS "total" FROM "trip_stop" ts WHERE ${whereSql}`,
+    const baseCte = `WITH base AS (
+      SELECT ts."tripCode",
+             ts."status",
+             ts."hubId",
+             ts."createdAt",
+             (
+               CASE
+                 WHEN ts."stopType" = 'TRANSIT' THEN TRUE
+                 WHEN EXISTS (SELECT 1 FROM "trip" t WHERE t."tripCode" = ts."tripCode" AND t."type" = 'TRANSFER' AND t."deletedAt" IS NULL) THEN TRUE
+                 WHEN (SELECT COUNT(DISTINCT all_ts."hubId") FROM "trip_stop" all_ts WHERE all_ts."tripCode" = ts."tripCode" AND all_ts."deletedAt" IS NULL) > 1 THEN TRUE
+                 ELSE FALSE
+               END
+             ) AS "isTransfer"
+      FROM "trip_stop" ts
+      WHERE ${whereSql}
+    )`;
+
+    const statusUpper = query?.status?.toUpperCase();
+    const statusCond =
+      statusUpper === 'PENDING' || statusUpper === 'COMPLETED'
+        ? `b."status" = '${statusUpper}'`
+        : 'TRUE';
+    const typeUpper = query?.type?.toUpperCase();
+    const typeCond =
+      typeUpper === 'CUSTOMER'
+        ? 'NOT b."isTransfer"'
+        : typeUpper === 'TRANSFER'
+          ? 'b."isTransfer"'
+          : 'TRUE';
+
+    const countRows = await this.dataSource.query(
+      `${baseCte}
+       SELECT
+         COUNT(*)::int AS "allCount",
+         COUNT(*) FILTER (WHERE b."status" = 'PENDING')::int AS "pendingCount",
+         COUNT(*) FILTER (WHERE b."status" = 'COMPLETED')::int AS "completedCount",
+         COUNT(*) FILTER (WHERE ${statusCond})::int AS "typeAllCount",
+         COUNT(*) FILTER (WHERE NOT b."isTransfer" AND ${statusCond})::int AS "customerCount",
+         COUNT(*) FILTER (WHERE b."isTransfer" AND ${statusCond})::int AS "transferCount",
+         COUNT(*) FILTER (WHERE ${statusCond} AND ${typeCond})::int AS "total"
+       FROM base b`,
       params,
     );
-    const total = Number(totalRows?.[0]?.total) || 0;
+    const c = countRows?.[0] ?? {};
+    const total = Number(c.total) || 0;
+    const meta = {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+      allCount: Number(c.allCount) || 0,
+      pendingCount: Number(c.pendingCount) || 0,
+      completedCount: Number(c.completedCount) || 0,
+      typeAllCount: Number(c.typeAllCount) || 0,
+      customerCount: Number(c.customerCount) || 0,
+      transferCount: Number(c.transferCount) || 0,
+    };
 
-    const rows: any[] = await this.dataSource.query(
-      `SELECT ts."tripCode", ts."status", ts."stopType", ts."hubId", ts."processedAt", ts."createdAt",
+    const pageRows: any[] = await this.dataSource.query(
+      `${baseCte}
+       SELECT ts."tripCode",
+              ts."status",
+              ts."stopType",
+              ts."hubId",
+              ts."processedAt",
+              ts."createdAt",
+              b."isTransfer",
               h."name" AS "hubName",
               (SELECT oh."name" FROM "trip_stop" os JOIN "hub" oh ON oh.id = os."hubId"
-                WHERE os."tripCode" = ts."tripCode" AND os."stopType" = 'ORIGIN' AND os."deletedAt" IS NULL
-                LIMIT 1) AS "originHubName",
+               WHERE os."tripCode" = ts."tripCode" AND os."stopType" = 'ORIGIN' AND os."deletedAt" IS NULL
+               LIMIT 1) AS "originHubName",
               agg."firstTripId", agg."licensePlate", agg."driverName", agg."pickupDate",
-              agg."ordersCount", agg."ordersForHubCount", agg."totalWeight", agg."totalVolume"
-       FROM "trip_stop" ts
+              agg."ordersCount", agg."ordersForHubCount", agg."totalWeight", agg."totalVolume", agg."totalQuantity"
+       FROM base b
+       JOIN "trip_stop" ts ON ts."tripCode" = b."tripCode" AND ts."hubId" = b."hubId" AND ts."deletedAt" IS NULL
        JOIN "hub" h ON h.id = ts."hubId"
        LEFT JOIN LATERAL (
          SELECT MIN(t.id) AS "firstTripId",
@@ -2265,45 +2338,96 @@ export class WarehouseService {
                      OR NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" = o."destinationHubId" AND ds."deletedAt" IS NULL)
                 )::int AS "ordersForHubCount",
                 COALESCE(SUM(t."weightAllocated"), 0) AS "totalWeight",
-                COALESCE(SUM(t."volumeAllocated"), 0) AS "totalVolume"
+                COALESCE(SUM(t."volumeAllocated"), 0) AS "totalVolume",
+                COALESCE(SUM(COALESCE(t."quantityAllocated", o."totalQuantity", 1)), 0) AS "totalQuantity"
          FROM "trip" t
-         JOIN "order" o ON o.id = t."orderId"
+         JOIN "order" o ON o.id = t."orderId" AND o."deletedAt" IS NULL
          WHERE t."tripCode" = ts."tripCode" AND t."deletedAt" IS NULL
        ) agg ON true
-       WHERE ${whereSql}
-       ORDER BY CASE WHEN ts."status" = 'PENDING' THEN 0 ELSE 1 END, ts."createdAt" DESC
+       WHERE ${statusCond} AND ${typeCond}
+       ORDER BY CASE WHEN b."status" = 'PENDING' THEN 0 ELSE 1 END, ts."createdAt" DESC
        LIMIT ${limit} OFFSET ${skip}`,
       params,
     );
 
-    const formatted = rows.map((r) => ({
-      id: r.firstTripId != null ? Number(r.firstTripId) : null,
-      tripCode: r.tripCode,
-      vehicleLicensePlate: r.licensePlate || '',
-      driverName: r.driverName || '',
-      pickupDate: r.pickupDate || null,
-      /** Hub-scoped trip status: PENDING = Chờ xử lý, COMPLETED = Đã xử lý */
-      status: r.status,
-      hubStatus: r.status,
-      stopType: r.stopType,
-      hubId: Number(r.hubId),
-      originHub: r.originHubName || '',
-      destinationHub: r.hubName || '',
-      ordersCount: Number(r.ordersCount) || 0,
-      remainingOrdersCount: Number(r.ordersForHubCount) || 0,
-      totalWeight: Number(r.totalWeight) || 0,
-      totalVolume: Number(r.totalVolume) || 0,
-      processedAt: r.processedAt,
-    }));
+    if (pageRows.length === 0) {
+      return { data: [], meta };
+    }
+
+    const tripCodes = pageRows.map((r) => r.tripCode);
+    const ordersByTripCode = new Map<string, any[]>();
+
+    if (tripCodes.length > 0) {
+      const orders = await this.orderRepository
+        .createQueryBuilder('order')
+        .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+        .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
+        .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
+        .leftJoinAndSelect('order.trips', 'trips')
+        .leftJoinAndSelect('order.inventoryTransactions', 'inventoryTransactions')
+        .leftJoinAndSelect('inventoryTransactions.hub', 'inventoryTransactionHub')
+        .where('order.deletedAt IS NULL')
+        .andWhere('trips.tripCode IN (:...tripCodes)', { tripCodes })
+        .getMany();
+
+      for (const order of orders) {
+        for (const trip of order.trips || []) {
+          if (trip.tripCode && tripCodes.includes(trip.tripCode)) {
+            const list = ordersByTripCode.get(trip.tripCode) || [];
+            if (!list.some((o) => o.id === order.id)) {
+              list.push(order);
+              ordersByTripCode.set(trip.tripCode, list);
+            }
+          }
+        }
+      }
+    }
+
+    const formatted = pageRows.map((r) => {
+      const tripOrders = ordersByTripCode.get(r.tripCode) || [];
+      const descs = Array.from(
+        new Set(tripOrders.map((x) => x.goodsDescription).filter(Boolean)),
+      );
+      const goodsDesc =
+        descs.length === 1
+          ? descs[0]
+          : descs.length > 1
+            ? `${descs[0]} (+${descs.length - 1} loại hàng)`
+            : 'Hàng hóa tổng quan';
+
+      const receiveDateStr =
+        r.pickupDate || (r.createdAt ? new Date(r.createdAt).toISOString().split('T')[0] : undefined);
+
+      return {
+        id: r.firstTripId != null ? Number(r.firstTripId) : null,
+        groupKey: r.tripCode,
+        tripCode: r.tripCode,
+        vehicleLicensePlate: r.licensePlate || 'CHƯA GÁN XE',
+        licensePlate: r.licensePlate || 'CHƯA GÁN XE',
+        driverName: r.driverName || '',
+        pickupDate: r.pickupDate || null,
+        receiveDate: receiveDateStr,
+        status: r.status,
+        hubStatus: r.status,
+        stopType: r.stopType,
+        hubId: Number(r.hubId),
+        originHub: r.originHubName || '',
+        destinationHub: r.hubName || '',
+        isTransfer: !!r.isTransfer,
+        ordersCount: Number(r.ordersCount) || tripOrders.length,
+        remainingOrdersCount: Number(r.ordersForHubCount) || 0,
+        totalQuantity: Number(r.totalQuantity) || 0,
+        totalWeight: Math.round(Number(r.totalWeight) * 100) / 100,
+        totalVolume: Math.round(Number(r.totalVolume) * 1000) / 1000,
+        goodsDescription: goodsDesc,
+        processedAt: r.processedAt,
+        orders: tripOrders,
+      };
+    });
 
     return {
       data: formatted,
-      meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit) || 1,
-      },
+      meta,
     };
   }
 
