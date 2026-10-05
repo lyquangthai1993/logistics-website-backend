@@ -6,7 +6,13 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, In, EntityManager, SelectQueryBuilder } from 'typeorm';
+import {
+  Repository,
+  DataSource,
+  In,
+  EntityManager,
+  SelectQueryBuilder,
+} from 'typeorm';
 import { OrderEntity } from './infrastructure/persistence/relational/entities/order.entity';
 import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
 import { UserEntity } from '../users/infrastructure/persistence/relational/entities/user.entity';
@@ -99,7 +105,9 @@ export class WarehouseService {
   /**
    * Helper to resolve hubId from user entity or DB when missing on JWT payload.
    */
-  private async resolveUserHubId(user: UserEntity): Promise<number | null | undefined> {
+  private async resolveUserHubId(
+    user: UserEntity,
+  ): Promise<number | null | undefined> {
     if (user.hubId) return user.hubId;
     if (!user.id) return undefined;
     const dbUser = await this.userRepository.findOne({
@@ -120,7 +128,11 @@ export class WarehouseService {
   }
 
   /** Proportional share of a contract metric for a partial quantity. */
-  private proportional(total: number | null | undefined, qty: number, totalQty: number | null | undefined): number {
+  private proportional(
+    total: number | null | undefined,
+    qty: number,
+    totalQty: number | null | undefined,
+  ): number {
     const t = Number(total) || 0;
     const tq = Number(totalQty) || 0;
     if (!tq || qty >= tq) return t;
@@ -190,14 +202,19 @@ export class WarehouseService {
 
     const flowUpper = query?.flow?.toUpperCase();
     const isAllStatus = !query?.status || query.status.toUpperCase() === 'ALL';
-    const searchTerm = query?.search?.trim() ? `%${query.search.trim()}%` : null;
+    const searchTerm = query?.search?.trim()
+      ? `%${query.search.trim()}%`
+      : null;
     const idFilter = (query?.ids || '')
       .split(',')
       .map((s) => Number(s.trim()))
       .filter((n) => Number.isInteger(n) && n > 0);
     const groupByOrderCode = query?.groupBy === 'orderCode';
     const waitingOrStored = sqlList([...WAITING_STATUSES, ...STORED_STATUSES]);
-    const storedOrDispatched = sqlList([...STORED_STATUSES, ...DISPATCHED_STATUSES]);
+    const storedOrDispatched = sqlList([
+      ...STORED_STATUSES,
+      ...DISPATCHED_STATUSES,
+    ]);
 
     /**
      * Filters shared by the list, group and counter queries (everything except the status tab),
@@ -205,10 +222,15 @@ export class WarehouseService {
      */
     const applyScope = (q: SelectQueryBuilder<OrderEntity>) => {
       if (useHubContext) {
-        q.andWhere(this.ledgerService.hubScopeSql()).setParameter('userHubId', userHubId);
+        q.andWhere(this.ledgerService.hubScopeSql()).setParameter(
+          'userHubId',
+          userHubId,
+        );
       }
       if (flowUpper === 'OUTBOUND_LOOKUP') {
-        q.andWhere(`${statusExpr} IN (${sqlList([...STORED_STATUSES, 'DRAFT'])})`);
+        q.andWhere(
+          `${statusExpr} IN (${sqlList([...STORED_STATUSES, 'DRAFT'])})`,
+        );
       } else if (isAllStatus && flowUpper === 'INBOUND') {
         // Only items physically in or inbound to the warehouse (exclude departed ones)
         q.andWhere(`${statusExpr} IN (${waitingOrStored})`);
@@ -227,15 +249,21 @@ export class WarehouseService {
       }
       if (query?.fromDate) {
         const from = new Date(`${query.fromDate}T00:00:00`);
-        q.andWhere('(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)', {
-          fromDate: from.toISOString(),
-        });
+        q.andWhere(
+          '(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)',
+          {
+            fromDate: from.toISOString(),
+          },
+        );
       }
       if (query?.toDate) {
         const to = new Date(`${query.toDate}T23:59:59.999`);
-        q.andWhere('(order.createdAt <= :toDate OR order.updatedAt <= :toDate)', {
-          toDate: to.toISOString(),
-        });
+        q.andWhere(
+          '(order.createdAt <= :toDate OR order.updatedAt <= :toDate)',
+          {
+            toDate: to.toISOString(),
+          },
+        );
       }
       return q;
     };
@@ -255,10 +283,14 @@ export class WarehouseService {
           q.andWhere(`${statusExpr} IN (${sqlList(WAITING_STATUSES)})`);
           break;
         case 'CUSTOMER':
-          q.andWhere(`${statusExpr} IN (${waitingOrStored}) AND NOT ${TRANSFER_INBOUND_SQL}`);
+          q.andWhere(
+            `${statusExpr} IN (${waitingOrStored}) AND NOT ${TRANSFER_INBOUND_SQL}`,
+          );
           break;
         case 'TRANSFER':
-          q.andWhere(`${statusExpr} IN (${waitingOrStored}) AND ${TRANSFER_INBOUND_SQL}`);
+          q.andWhere(
+            `${statusExpr} IN (${waitingOrStored}) AND ${TRANSFER_INBOUND_SQL}`,
+          );
           break;
         case 'COMPLETED_INBOUND':
           q.andWhere(`${statusExpr} IN (${sqlList(DISPATCHED_STATUSES)})`);
@@ -281,8 +313,14 @@ export class WarehouseService {
         .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
         .leftJoinAndSelect('order.trips', 'trips')
         .leftJoinAndSelect('trips.originHub', 'tripOriginHub')
-        .leftJoinAndSelect('order.inventoryTransactions', 'inventoryTransactions')
-        .leftJoinAndSelect('inventoryTransactions.hub', 'inventoryTransactionHub')
+        .leftJoinAndSelect(
+          'order.inventoryTransactions',
+          'inventoryTransactions',
+        )
+        .leftJoinAndSelect(
+          'inventoryTransactions.hub',
+          'inventoryTransactionHub',
+        )
         .where('order.deletedAt IS NULL');
 
     // Dynamic counts for status tabs based on current hub scope
@@ -296,11 +334,14 @@ export class WarehouseService {
     if (searchTerm) countQb.leftJoin('order.trips', 'trips');
     applyScope(countQb);
 
-    const countRows: Array<{ id: number; oc: string; hs: string }> = await countQb.getRawMany();
+    const countRows: Array<{ id: number; oc: string; hs: string }> =
+      await countQb.getRawMany();
     // Grouped view counts order codes (a code is in a tab when any of its rows is)
     const bucketCount = (pred: (hs: string) => boolean) => {
       const rows = countRows.filter((r) => pred(r.hs));
-      return groupByOrderCode ? new Set(rows.map((r) => r.oc)).size : rows.length;
+      return groupByOrderCode
+        ? new Set(rows.map((r) => r.oc)).size
+        : rows.length;
     };
     const allCount = bucketCount(() => true);
     const storedCount = bucketCount((hs) => STORED_STATUSES.includes(hs));
@@ -340,7 +381,11 @@ export class WarehouseService {
       0,
     );
 
-    const enrichedData = await this.enrichWarehouseRows(data, userHubId, useHubContext);
+    const enrichedData = await this.enrichWarehouseRows(
+      data,
+      userHubId,
+      useHubContext,
+    );
 
     return {
       data: enrichedData as any,
@@ -387,7 +432,11 @@ export class WarehouseService {
       return {
         ...item,
         pickupAddress: pickupAddr || item.originHubEntity?.name || '',
-        deliveryAddress: deliveryAddr || item.destinationHub || item.destinationHubEntity?.name || '',
+        deliveryAddress:
+          deliveryAddr ||
+          item.destinationHub ||
+          item.destinationHubEntity?.name ||
+          '',
         /** Status seen from the viewer's hub (falls back to global status). */
         hubStatus: view?.hubStatus ?? item.status,
         /** Available stock at the viewer's hub (ledger based); null without hub context. */
@@ -403,8 +452,12 @@ export class WarehouseService {
    */
   private async getOrdersGroupedByCode(ctx: {
     createListQb: () => SelectQueryBuilder<OrderEntity>;
-    applyScope: (q: SelectQueryBuilder<OrderEntity>) => SelectQueryBuilder<OrderEntity>;
-    applyStatusFilter: (q: SelectQueryBuilder<OrderEntity>) => SelectQueryBuilder<OrderEntity>;
+    applyScope: (
+      q: SelectQueryBuilder<OrderEntity>,
+    ) => SelectQueryBuilder<OrderEntity>;
+    applyStatusFilter: (
+      q: SelectQueryBuilder<OrderEntity>,
+    ) => SelectQueryBuilder<OrderEntity>;
     searchTerm: string | null;
     page: number;
     limit: number;
@@ -443,7 +496,11 @@ export class WarehouseService {
         .orderBy('order.createdAt', 'ASC')
         .getMany();
     }
-    const enriched = await this.enrichWarehouseRows(members, ctx.userHubId, ctx.useHubContext);
+    const enriched = await this.enrichWarehouseRows(
+      members,
+      ctx.userHubId,
+      ctx.useHubContext,
+    );
 
     const byCode = new Map<string, any[]>();
     for (const row of enriched) {
@@ -480,7 +537,14 @@ export class WarehouseService {
       items.reduce((s, it) => s + (Number(pick(it)) || 0), 0);
     const round3 = (n: number) => Math.round(n * 1000) / 1000;
     const distinctJoin = (pick: (it: any) => string | null | undefined) =>
-      Array.from(new Set(items.map(pick).map((v) => v?.trim()).filter(Boolean))).join(', ');
+      Array.from(
+        new Set(
+          items
+            .map(pick)
+            .map((v) => v?.trim())
+            .filter(Boolean),
+        ),
+      ).join(', ');
 
     // A code is "Lưu kho" while any row is still held here; "Đã xuất kho" only when none is.
     const statuses: string[] = items.map((it) => it.hubStatus ?? it.status);
@@ -493,30 +557,90 @@ export class WarehouseService {
     const tripMap = new Map<string, any>();
     for (const it of items) {
       for (const t of it.trips ?? []) {
-        const key = t.tripCode || `id-${t.id}`;
+        const key = t.tripCode || t.licensePlate || `id-${t.id}`;
         if (!tripMap.has(key)) tripMap.set(key, t);
       }
+      if (it.vehicleLicensePlate && !tripMap.has(it.vehicleLicensePlate)) {
+        tripMap.set(it.vehicleLicensePlate, {
+          tripCode: it.currentTripCode || null,
+          licensePlate: it.vehicleLicensePlate,
+          driverName: it.driverName || null,
+        });
+      }
+      for (const tx of it.inventoryTransactions ?? []) {
+        if (tx.licensePlate) {
+          const key = tx.tripCode || tx.licensePlate;
+          if (!tripMap.has(key)) {
+            tripMap.set(key, {
+              tripCode: tx.tripCode || null,
+              licensePlate: tx.licensePlate,
+              driverName: tx.driverName || null,
+            });
+          }
+        }
+      }
     }
-    const trips = Array.from(tripMap.values()).sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+    const trips = Array.from(tripMap.values()).sort(
+      (a, b) => (b.id ?? 0) - (a.id ?? 0),
+    );
 
-    const hasHubStock = items.some((it) => it.hubStock !== null && it.hubStock !== undefined);
+    const hasHubStock = items.some(
+      (it) => it.hubStock !== null && it.hubStock !== undefined,
+    );
+    const rawStock = hasHubStock
+      ? sum((it) => it.hubStock)
+      : sum((it) => it.remainingQuantity);
+    const totalInbound = sum((it) => it.inboundQuantity || 0);
+    const totalOutbound = sum((it) => it.outboundQuantity || 0);
+    const rawTotalQty = sum((it) => it.totalQuantity);
+
+    // Standardize ratio: total packages must at least cover total received and active stock
+    const normalizedTotalQty = Math.max(rawTotalQty, totalInbound, rawStock);
+    const normalizedHubStock = hasHubStock
+      ? Math.max(0, Math.min(rawStock, normalizedTotalQty))
+      : null;
+
+    // Normalize member items so each individual line also satisfies stock <= total quantity
+    const normalizedItems = items.map((it) => {
+      const itStock =
+        it.hubStock !== null && it.hubStock !== undefined
+          ? Number(it.hubStock)
+          : Number(it.remainingQuantity) || 0;
+      const itInbound = Number(it.inboundQuantity) || 0;
+      const itTotal = Math.max(
+        Number(it.totalQuantity) || 0,
+        itInbound,
+        itStock,
+      );
+      return {
+        ...it,
+        totalQuantity: itTotal,
+        hubStock:
+          it.hubStock !== null && it.hubStock !== undefined
+            ? Math.max(0, Math.min(itStock, itTotal))
+            : null,
+      };
+    });
 
     return {
       ...first,
       orderCode,
       goodsDescription: distinctJoin((it) => it.goodsDescription),
-      totalQuantity: sum((it) => it.totalQuantity),
-      inboundQuantity: sum((it) => it.inboundQuantity),
-      outboundQuantity: sum((it) => it.outboundQuantity),
-      remainingQuantity: sum((it) => it.remainingQuantity),
+      totalQuantity: normalizedTotalQty,
+      inboundQuantity: Math.max(totalInbound, normalizedTotalQty),
+      outboundQuantity: totalOutbound,
+      remainingQuantity:
+        normalizedHubStock ?? Math.max(0, normalizedTotalQty - totalOutbound),
       totalWeight: round3(sum((it) => it.totalWeight)),
       totalVolume: round3(sum((it) => it.totalVolume)),
-      hubStock: hasHubStock ? sum((it) => it.hubStock) : null,
+      hubStock: normalizedHubStock,
       hubStatus,
-      destinationHub: distinctJoin((it) => it.destinationHub || it.destinationHubEntity?.name),
+      destinationHub: distinctJoin(
+        (it) => it.destinationHub || it.destinationHubEntity?.name,
+      ),
       trips,
       lineCount: items.length,
-      items,
+      items: normalizedItems,
     };
   }
 
@@ -562,7 +686,10 @@ export class WarehouseService {
       let finalOrderCode = dto.orderCode?.trim();
       if (isPlaceholderCode(finalOrderCode)) {
         // Server generates canonical orderCode atomically
-        finalOrderCode = await this.orderCodeService.generateOrderCode(userWithHub, manager);
+        finalOrderCode = await this.orderCodeService.generateOrderCode(
+          userWithHub,
+          manager,
+        );
       }
 
       let destinationHubName: string | null = null;
@@ -602,13 +729,16 @@ export class WarehouseService {
 
       const plate = dto.licensePlate?.trim().toUpperCase();
       const driver = dto.driverName?.trim() || null;
-      const date = dto.receiveDate?.trim() || new Date().toISOString().split('T')[0];
+      const date =
+        dto.receiveDate?.trim() || new Date().toISOString().split('T')[0];
 
       const pickupAddr = dto.pickupAddress?.trim() || originHubName || 'Hub';
-      const deliveryAddr = dto.deliveryAddress?.trim() || destinationHubName || 'Điểm đến';
+      const deliveryAddr =
+        dto.deliveryAddress?.trim() || destinationHubName || 'Điểm đến';
 
       const finalTripCode = plate
-        ? normalizeTripCode(dto.tripCode) || (await this.ledgerService.generateTripCode(manager))
+        ? normalizeTripCode(dto.tripCode) ||
+          (await this.ledgerService.generateTripCode(manager))
         : null;
 
       const order = orderRepo.create({
@@ -662,7 +792,9 @@ export class WarehouseService {
             {
               tripCode: finalTripCode,
               hubId: originHubId,
-              status: isDraft ? TripStopStatus.PENDING : TripStopStatus.COMPLETED,
+              status: isDraft
+                ? TripStopStatus.PENDING
+                : TripStopStatus.COMPLETED,
               stopType: TripStopType.DESTINATION,
               stopSequence: 1,
               userId: user.id,
@@ -723,14 +855,17 @@ export class WarehouseService {
     invoiceCode?: string | null;
   }> {
     if (!dto.items || dto.items.length === 0) {
-      throw new UnprocessableEntityException('Danh sách hàng nhập kho không được để trống');
+      throw new UnprocessableEntityException(
+        'Danh sách hàng nhập kho không được để trống',
+      );
     }
 
     const userWithHub = await this.loadUserWithHub(user);
 
     const plate = dto.licensePlate.trim().toUpperCase();
     const driver = dto.driverName?.trim() || null;
-    const date = dto.receiveDate?.trim() || new Date().toISOString().split('T')[0];
+    const date =
+      dto.receiveDate?.trim() || new Date().toISOString().split('T')[0];
 
     const savedOrders: OrderEntity[] = [];
     let sharedTripCode = '';
@@ -758,7 +893,10 @@ export class WarehouseService {
       for (const item of dto.items) {
         let finalOrderCode = item.orderCode?.trim();
         if (isPlaceholderCode(finalOrderCode)) {
-          finalOrderCode = await this.orderCodeService.generateOrderCode(userWithHub, manager);
+          finalOrderCode = await this.orderCodeService.generateOrderCode(
+            userWithHub,
+            manager,
+          );
         }
 
         let destinationHubName: string | null = null;
@@ -790,7 +928,8 @@ export class WarehouseService {
             : 0;
 
         const pickupAddr = item.pickupAddress?.trim() || originHubName || 'Hub';
-        const deliveryAddr = item.deliveryAddress?.trim() || destinationHubName || 'Điểm đến';
+        const deliveryAddr =
+          item.deliveryAddress?.trim() || destinationHubName || 'Điểm đến';
 
         const order = orderRepo.create({
           orderCode: finalOrderCode,
@@ -861,7 +1000,9 @@ export class WarehouseService {
               volume: vol,
               licensePlate: plate,
               driverName: driver,
-              notes: item.notes?.trim() || `Tiếp nhận xe ${plate} - ${sharedTripCode}`,
+              notes:
+                item.notes?.trim() ||
+                `Tiếp nhận xe ${plate} - ${sharedTripCode}`,
               destination: item.deliveryAddress || destinationHubName || null,
               performedByUserId: user.id,
             }),
@@ -876,7 +1017,9 @@ export class WarehouseService {
           {
             tripCode: sharedTripCode,
             hubId: originHubId,
-            status: allDraft ? TripStopStatus.PENDING : TripStopStatus.COMPLETED,
+            status: allDraft
+              ? TripStopStatus.PENDING
+              : TripStopStatus.COMPLETED,
             stopType: TripStopType.DESTINATION,
             stopSequence: 1,
             userId: user.id,
@@ -936,14 +1079,17 @@ export class WarehouseService {
       const firstTrip = existingTrips[0];
       const licensePlate = firstTrip.licensePlate || 'CHƯA GÁN XE';
       const driverName = firstTrip.driverName || null;
-      const pickupDate = firstTrip.pickupDate || new Date().toISOString().split('T')[0];
+      const pickupDate =
+        firstTrip.pickupDate || new Date().toISOString().split('T')[0];
 
       // 2. Điểm đến (Destination Hub)
       let destinationHubName: string | null = null;
       let destinationHubId: number | null = dto.destinationHubId ?? null;
 
       if (destinationHubId) {
-        const destHub = await hubRepo.findOne({ where: { id: destinationHubId } });
+        const destHub = await hubRepo.findOne({
+          where: { id: destinationHubId },
+        });
         if (destHub) {
           destinationHubName = destHub.name;
         }
@@ -951,7 +1097,9 @@ export class WarehouseService {
         // Fallback: Lấy đích đến của chuyến xe hiện tại
         destinationHubId = firstTrip.destinationHubId;
         if (destinationHubId) {
-          const destHub = await hubRepo.findOne({ where: { id: destinationHubId } });
+          const destHub = await hubRepo.findOne({
+            where: { id: destinationHubId },
+          });
           if (destHub) {
             destinationHubName = destHub.name;
           }
@@ -961,14 +1109,18 @@ export class WarehouseService {
       // 3. Mã đơn hàng
       let finalOrderCode = dto.orderCode?.trim();
       if (isPlaceholderCode(finalOrderCode)) {
-        finalOrderCode = await this.orderCodeService.generateOrderCode(userWithHub, manager);
+        finalOrderCode = await this.orderCodeService.generateOrderCode(
+          userWithHub,
+          manager,
+        );
       }
 
       const qty = Math.max(1, Number(dto.totalQuantity) || 1);
       const weight = Math.max(0, Number(dto.totalWeight) || 0);
       const vol = Math.max(0, Number(dto.totalVolume) || 0);
       const pickupAddr = dto.pickupAddress?.trim() || originHubName;
-      const deliveryAddr = dto.deliveryAddress?.trim() || destinationHubName || 'Điểm đến';
+      const deliveryAddr =
+        dto.deliveryAddress?.trim() || destinationHubName || 'Điểm đến';
 
       // 4. Tạo OrderEntity - Hàng được bốc lên xe đang chạy -> status IN_TRANSIT
       const order = orderRepo.create({
@@ -989,7 +1141,9 @@ export class WarehouseService {
         destinationHubId,
         province: dto.province?.trim() || null,
         accompanyingDocs: dto.accompanyingDocs?.trim() || null,
-        notes: dto.notes?.trim() || `Bốc thêm dọc đường tại ${originHubName} lên xe ${licensePlate} (${tripCode})`,
+        notes:
+          dto.notes?.trim() ||
+          `Bốc thêm dọc đường tại ${originHubName} lên xe ${licensePlate} (${tripCode})`,
         status: 'IN_TRANSIT',
         createdByUserId: user.id,
         isExternalVehicleNeeded: false,
@@ -1055,9 +1209,11 @@ export class WarehouseService {
 
       // Kho nhận hàng: Chờ xử lý (PENDING) để kho nhận kiểm đếm dỡ hàng
       if (destinationHubId && destinationHubId !== originHubId) {
-        const existingDestStop = await manager.getRepository(TripStopEntity).findOne({
-          where: { tripCode, hubId: destinationHubId },
-        });
+        const existingDestStop = await manager
+          .getRepository(TripStopEntity)
+          .findOne({
+            where: { tripCode, hubId: destinationHubId },
+          });
         if (!existingDestStop) {
           // Lấy sequence lớn nhất để xếp cuối
           const maxSeqRow = await manager.query(
@@ -1119,11 +1275,15 @@ export class WarehouseService {
       rows = body.orders;
       tripId = body.tripId;
     } else {
-      throw new UnprocessableEntityException('Dữ liệu tiếp nhận kho không hợp lệ');
+      throw new UnprocessableEntityException(
+        'Dữ liệu tiếp nhận kho không hợp lệ',
+      );
     }
 
     if (rows.length === 0) {
-      throw new UnprocessableEntityException('Vui lòng chọn ít nhất 1 dòng hàng để tiếp nhận');
+      throw new UnprocessableEntityException(
+        'Vui lòng chọn ít nhất 1 dòng hàng để tiếp nhận',
+      );
     }
 
     const userWithHub = await this.userRepository.findOne({
@@ -1132,7 +1292,8 @@ export class WarehouseService {
     });
     const hubId = userWithHub?.hubId ?? null;
     const hubName = userWithHub?.hub?.name || 'Kho';
-    const isSuperAdmin = (userWithHub?.role?.id ?? user.role?.id) === RoleEnum.SUPER_ADMIN;
+    const isSuperAdmin =
+      (userWithHub?.role?.id ?? user.role?.id) === RoleEnum.SUPER_ADMIN;
 
     const targetStatus = body?.targetStatus || 'INBOUND';
     const isKeepStatus = targetStatus === 'KEEP';
@@ -1140,7 +1301,8 @@ export class WarehouseService {
       ?.trim()
       .toUpperCase();
     const inboundDriver = (body?.driverName || '')?.trim();
-    const inboundDate = body?.receiveDate || new Date().toISOString().split('T')[0];
+    const inboundDate =
+      body?.receiveDate || new Date().toISOString().split('T')[0];
 
     return this.dataSource.transaction(async (manager) => {
       const orderRepo = manager.getRepository(OrderEntity);
@@ -1204,7 +1366,10 @@ export class WarehouseService {
 
           if (isEditableDraft) {
             // ── Draft of this hub: contract still editable ──
-            if (row.totalQuantity !== undefined && Number(row.totalQuantity) > 0) {
+            if (
+              row.totalQuantity !== undefined &&
+              Number(row.totalQuantity) > 0
+            ) {
               found.totalQuantity = Number(row.totalQuantity);
             }
             if (row.totalWeight !== undefined && Number(row.totalWeight) >= 0) {
@@ -1217,10 +1382,16 @@ export class WarehouseService {
               found.goodsDescription = String(row.goodsDescription).trim();
             }
             if (row.deliveryAddress || row.pickupAddress) {
-              const currentOrigin = row.pickupAddress?.trim() || found.originHub || hubName || 'Hub';
+              const currentOrigin =
+                row.pickupAddress?.trim() ||
+                found.originHub ||
+                hubName ||
+                'Hub';
               const currentDelivery =
                 row.deliveryAddress?.trim() ||
-                (found.route?.includes('→') ? found.route.split('→')[1]?.trim() : '') ||
+                (found.route?.includes('→')
+                  ? found.route.split('→')[1]?.trim()
+                  : '') ||
                 'Điểm đến';
               found.route = `${currentOrigin} → ${currentDelivery}`;
             }
@@ -1248,7 +1419,8 @@ export class WarehouseService {
             }
           } else if (!isKeepStatus) {
             // ── Locked contract: record an Inbound Receipt, never touch contract fields ──
-            rowTripCode = sharedTripCode || normalizeTripCode(found.currentTripCode);
+            rowTripCode =
+              sharedTripCode || normalizeTripCode(found.currentTripCode);
 
             if (rowTripCode && hubId) {
               const already = await txRepo.findOne({
@@ -1268,11 +1440,16 @@ export class WarehouseService {
 
             let inTransit: number | null = null;
             if (rowTripCode) {
-              const t = await this.ledgerService.getInTransitQuantity(found.id, rowTripCode, manager);
+              const t = await this.ledgerService.getInTransitQuantity(
+                found.id,
+                rowTripCode,
+                manager,
+              );
               if (t.loaded > 0) inTransit = t.inTransit;
             }
             expectedQty =
-              row.expectedQuantity !== undefined && row.expectedQuantity !== null
+              row.expectedQuantity !== undefined &&
+              row.expectedQuantity !== null
                 ? Number(row.expectedQuantity)
                 : inTransit;
 
@@ -1292,14 +1469,24 @@ export class WarehouseService {
             actualWeight =
               row.actualWeight !== undefined
                 ? Number(row.actualWeight) || 0
-                : this.proportional(found.totalWeight, actualQty, found.totalQuantity);
+                : this.proportional(
+                    found.totalWeight,
+                    actualQty,
+                    found.totalQuantity,
+                  );
             actualVolume =
               row.actualVolume !== undefined
                 ? Number(row.actualVolume) || 0
-                : this.proportional(found.totalVolume, actualQty, found.totalQuantity);
+                : this.proportional(
+                    found.totalVolume,
+                    actualQty,
+                    found.totalQuantity,
+                  );
 
-            found.inboundQuantity = (Number(found.inboundQuantity) || 0) + actualQty;
-            found.remainingQuantity = (Number(found.remainingQuantity) || 0) + actualQty;
+            found.inboundQuantity =
+              (Number(found.inboundQuantity) || 0) + actualQty;
+            found.remainingQuantity =
+              (Number(found.remainingQuantity) || 0) + actualQty;
             found.status = 'INBOUND';
             found.currentHubId = hubId;
             if (
@@ -1329,14 +1516,19 @@ export class WarehouseService {
           let newOrderCode = row.orderCode?.trim();
           if (!hasSpecificCode || !newOrderCode) {
             newOrderCode = userWithHub
-              ? await this.orderCodeService.generateOrderCode(userWithHub, manager)
+              ? await this.orderCodeService.generateOrderCode(
+                  userWithHub,
+                  manager,
+                )
               : `ORD-${Date.now()}`;
           }
 
           const initQty = Number(row.totalQuantity) || 1;
           const newOrder = orderRepo.create({
             orderCode: newOrderCode,
-            goodsDescription: (row.goodsDescription || 'Hàng gom luân chuyển').trim(),
+            goodsDescription: (
+              row.goodsDescription || 'Hàng gom luân chuyển'
+            ).trim(),
             totalQuantity: initQty,
             inboundQuantity: initQty,
             outboundQuantity: 0,
@@ -1344,7 +1536,8 @@ export class WarehouseService {
             totalWeight: Number(row.totalWeight) || 0,
             totalVolume: Number(row.totalVolume) || 0,
             route: `${row.pickupAddress?.trim() || hubName || 'Hub'} → ${row.deliveryAddress || 'Điểm giao'}`,
-            originHub: row.pickupAddress?.trim() || userWithHub?.hub?.name || null,
+            originHub:
+              row.pickupAddress?.trim() || userWithHub?.hub?.name || null,
             originHubId: hubId,
             currentHubId: hubId,
             destinationHub: row.destinationHub || null,
@@ -1409,7 +1602,8 @@ export class WarehouseService {
 
         // Inbound Receipt invoice (one shared receipt code per confirmation)
         if (!isKeepStatus && actualQty > 0) {
-          const discrepancy = expectedQty !== null ? actualQty - expectedQty : 0;
+          const discrepancy =
+            expectedQty !== null ? actualQty - expectedQty : 0;
           const code = await ensureInvoiceCode();
           await txRepo.save(
             txRepo.create({
@@ -1443,7 +1637,9 @@ export class WarehouseService {
 
       // Vehicle info corrections on the trip allocation rows (operational, not contract)
       if (sharedTripCode && (inboundPlate || inboundDriver || inboundDate)) {
-        const existingTrips = await tripRepo.find({ where: { tripCode: sharedTripCode } });
+        const existingTrips = await tripRepo.find({
+          where: { tripCode: sharedTripCode },
+        });
         for (const t of existingTrips) {
           if (inboundPlate) t.licensePlate = inboundPlate;
           if (inboundDriver) t.driverName = inboundDriver;
@@ -1454,7 +1650,9 @@ export class WarehouseService {
       if (tripId) {
         const trip = await tripRepo.findOne({ where: { id: tripId } });
         if (trip && !isKeepStatus) {
-          trip.notes = (trip.notes ? `${trip.notes} · ` : '') + `Đã dỡ hàng tại ${hubName}`;
+          trip.notes =
+            (trip.notes ? `${trip.notes} · ` : '') +
+            `Đã dỡ hàng tại ${hubName}`;
           await tripRepo.save(trip);
         }
       }
@@ -1466,7 +1664,9 @@ export class WarehouseService {
             {
               tripCode: code,
               hubId,
-              status: isKeepStatus ? TripStopStatus.PENDING : TripStopStatus.COMPLETED,
+              status: isKeepStatus
+                ? TripStopStatus.PENDING
+                : TripStopStatus.COMPLETED,
               stopType: TripStopType.DESTINATION,
               stopSequence: 1,
               userId: user.id,
@@ -1539,18 +1739,26 @@ export class WarehouseService {
       }
 
       // Auto-detect isTransfer if mode is TRANSFER OR any item/order has a destination hub different from origin
-      const actingOriginId = userHubId ?? orders[0].currentHubId ?? orders[0].originHubId ?? null;
+      const actingOriginId =
+        userHubId ?? orders[0].currentHubId ?? orders[0].originHubId ?? null;
       const hasTransferItem = orders.some((order) => {
         const item = dto.items?.find((i) => i.orderId === order.id);
-        const destId = item?.destinationHubId ?? dto.destinationHubId ?? order.destinationHubId;
+        const destId =
+          item?.destinationHubId ??
+          dto.destinationHubId ??
+          order.destinationHubId;
         return destId && destId !== actingOriginId;
       });
       const isTransfer = dto.mode === OutboundMode.TRANSFER || hasTransferItem;
 
       const primaryTargetHubId =
         dto.destinationHubId ||
-        dto.items?.find((i) => i.destinationHubId && i.destinationHubId !== actingOriginId)?.destinationHubId ||
-        orders.find((o) => o.destinationHubId && o.destinationHubId !== actingOriginId)?.destinationHubId ||
+        dto.items?.find(
+          (i) => i.destinationHubId && i.destinationHubId !== actingOriginId,
+        )?.destinationHubId ||
+        orders.find(
+          (o) => o.destinationHubId && o.destinationHubId !== actingOriginId,
+        )?.destinationHubId ||
         null;
 
       let destHubName = '';
@@ -1572,7 +1780,9 @@ export class WarehouseService {
       const tripCode =
         draftCode || (await this.ledgerService.generateTripCode(manager));
       const invoiceCode = await this.ledgerService.generateInvoiceCode(
-        isTransfer ? InventoryTransactionType.TRANSFER : InventoryTransactionType.OUTBOUND,
+        isTransfer
+          ? InventoryTransactionType.TRANSFER
+          : InventoryTransactionType.OUTBOUND,
         originHubId,
         manager,
       );
@@ -1592,9 +1802,10 @@ export class WarehouseService {
         const availableQty =
           hubStock !== null
             ? hubStock
-            : order.remainingQuantity !== undefined && order.remainingQuantity !== null
+            : order.remainingQuantity !== undefined &&
+                order.remainingQuantity !== null
               ? order.remainingQuantity
-              : (order.totalQuantity || 0);
+              : order.totalQuantity || 0;
 
         const qtyToExport =
           item && item.quantityToExport !== undefined
@@ -1633,7 +1844,9 @@ export class WarehouseService {
             : null);
         if (itemDestHubId && itemDestHubId !== actingHubId) {
           order.destinationHubId = itemDestHubId;
-          const destHub = await hubRepo.findOne({ where: { id: itemDestHubId } });
+          const destHub = await hubRepo.findOne({
+            where: { id: itemDestHubId },
+          });
           if (destHub) {
             order.destinationHub = destHub.name;
           }
@@ -1648,11 +1861,19 @@ export class WarehouseService {
 
         const weight = Number(
           item?.weightToExport ??
-            this.proportional(order.totalWeight, qtyToExport, order.totalQuantity),
+            this.proportional(
+              order.totalWeight,
+              qtyToExport,
+              order.totalQuantity,
+            ),
         );
         const volume = Number(
           item?.volumeToExport ??
-            this.proportional(order.totalVolume, qtyToExport, order.totalQuantity),
+            this.proportional(
+              order.totalVolume,
+              qtyToExport,
+              order.totalQuantity,
+            ),
         );
 
         const orderTargetHubName =
@@ -1676,7 +1897,11 @@ export class WarehouseService {
             tripCode,
             originHubId: actingHubId,
             destinationHubId: tripDestHubId,
-            type: tripDestHubId ? 'TRANSFER' : isTransfer ? 'TRANSFER' : 'OUTBOUND',
+            type: tripDestHubId
+              ? 'TRANSFER'
+              : isTransfer
+                ? 'TRANSFER'
+                : 'OUTBOUND',
             licensePlate: dto.licensePlate || 'Xe xuất kho',
             driverName: dto.driverName || 'Tài xế giao hàng',
             status: 'IN_TRANSIT',
@@ -1708,7 +1933,7 @@ export class WarehouseService {
             driverName: dto.driverName || null,
             destination: isTransfer
               ? orderTargetHubName
-              : (order.destinationHub || order.province || 'Giao khách'),
+              : order.destinationHub || order.province || 'Giao khách',
             performedByUserId: user.id,
             notes: isTransfer
               ? `Xuất ${qtyToExport} kiện luân chuyển đến ${orderTargetHubName} trên chuyến ${tripCode}`
@@ -1740,9 +1965,7 @@ export class WarehouseService {
               dto.destinationHubId ?? null,
               ...(dto.items?.map((i) => i.destinationHubId) ?? []),
               ...saved.map((o) => o.destinationHubId),
-            ].filter(
-              (h): h is number => !!h && h !== originHubId,
-            ),
+            ].filter((h): h is number => !!h && h !== originHubId),
           ),
         );
         for (let i = 0; i < targets.length; i++) {
@@ -1752,7 +1975,9 @@ export class WarehouseService {
               hubId: targets[i],
               status: TripStopStatus.PENDING,
               stopType:
-                i === targets.length - 1 ? TripStopType.DESTINATION : TripStopType.TRANSIT,
+                i === targets.length - 1
+                  ? TripStopType.DESTINATION
+                  : TripStopType.TRANSIT,
               stopSequence: i + 2,
             },
             manager,
@@ -1827,7 +2052,9 @@ export class WarehouseService {
         ? dto.items.map((i) => i.orderId)
         : dto.orderIds || [];
     if (targetOrderIds.length === 0) {
-      throw new NotFoundException('Vui lòng chọn ít nhất 1 dòng hàng để lưu nháp');
+      throw new NotFoundException(
+        'Vui lòng chọn ít nhất 1 dòng hàng để lưu nháp',
+      );
     }
 
     const userHubId = (await this.resolveUserHubId(user)) ?? null;
@@ -1836,7 +2063,9 @@ export class WarehouseService {
       const orderRepo = manager.getRepository(OrderEntity);
       const tripRepo = manager.getRepository(TripEntity);
 
-      const orders = await orderRepo.find({ where: { id: In(targetOrderIds) } });
+      const orders = await orderRepo.find({
+        where: { id: In(targetOrderIds) },
+      });
       if (orders.length === 0) {
         throw new NotFoundException('Không tìm thấy đơn hàng nào để lưu nháp');
       }
@@ -1984,26 +2213,41 @@ export class WarehouseService {
       .createQueryBuilder('order')
       .select('order.id', 'id')
       .addSelect(statusExpr, 'hs')
-      .addSelect(`CASE WHEN ${TRANSFER_INBOUND_SQL} THEN 1 ELSE 0 END`, 'isTransferIn')
-      .addSelect(`CASE WHEN ${TRANSFER_OUTBOUND_SQL} THEN 1 ELSE 0 END`, 'isTransferOut')
+      .addSelect(
+        `CASE WHEN ${TRANSFER_INBOUND_SQL} THEN 1 ELSE 0 END`,
+        'isTransferIn',
+      )
+      .addSelect(
+        `CASE WHEN ${TRANSFER_OUTBOUND_SQL} THEN 1 ELSE 0 END`,
+        'isTransferOut',
+      )
       .where('order.deletedAt IS NULL');
 
     if (useHubContext) {
-      qb.andWhere(this.ledgerService.hubScopeSql()).setParameter('userHubId', userHubId);
+      qb.andWhere(this.ledgerService.hubScopeSql()).setParameter(
+        'userHubId',
+        userHubId,
+      );
     }
 
     if (query?.fromDate) {
       const from = new Date(`${query.fromDate}T00:00:00`);
-      qb.andWhere('(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)', {
-        fromDate: from.toISOString(),
-      });
+      qb.andWhere(
+        '(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)',
+        {
+          fromDate: from.toISOString(),
+        },
+      );
     }
 
     if (query?.toDate) {
       const to = new Date(`${query.toDate}T23:59:59.999`);
-      qb.andWhere('(order.createdAt <= :toDate OR order.updatedAt <= :toDate)', {
-        toDate: to.toISOString(),
-      });
+      qb.andWhere(
+        '(order.createdAt <= :toDate OR order.updatedAt <= :toDate)',
+        {
+          toDate: to.toISOString(),
+        },
+      );
     }
 
     const rows = await qb.getRawMany();
@@ -2375,7 +2619,8 @@ export class WarehouseService {
         invoiceCode: firstTx?.invoiceCode || null,
         destinationHubId: firstDraft?.destinationHubId ?? null,
         dispatchHubId: firstTx?.hubId ?? firstDraft?.originHubId ?? null,
-        dispatchHubName: firstTx?.hub?.name || firstDraft?.originHub?.name || '',
+        dispatchHubName:
+          firstTx?.hub?.name || firstDraft?.originHub?.name || '',
         totalQuantity,
         totalWeight: Math.round(totalWeight * 1000) / 1000,
         totalVolume: Math.round(totalVolume * 1000) / 1000,
@@ -2419,7 +2664,10 @@ export class WarehouseService {
       return `$${params.length}`;
     };
 
-    const where: string[] = [`ts."deletedAt" IS NULL`, `ts."stopType" <> 'ORIGIN'`];
+    const where: string[] = [
+      `ts."deletedAt" IS NULL`,
+      `ts."stopType" <> 'ORIGIN'`,
+    ];
 
     if (userHubId) {
       where.push(`ts."hubId" = ${bind(userHubId)}`);
@@ -2557,8 +2805,14 @@ export class WarehouseService {
         .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
         .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
         .leftJoinAndSelect('order.trips', 'trips')
-        .leftJoinAndSelect('order.inventoryTransactions', 'inventoryTransactions')
-        .leftJoinAndSelect('inventoryTransactions.hub', 'inventoryTransactionHub')
+        .leftJoinAndSelect(
+          'order.inventoryTransactions',
+          'inventoryTransactions',
+        )
+        .leftJoinAndSelect(
+          'inventoryTransactions.hub',
+          'inventoryTransactionHub',
+        )
         .where('order.deletedAt IS NULL')
         .andWhere('trips.tripCode IN (:...tripCodes)', { tripCodes })
         .getMany();
@@ -2589,7 +2843,10 @@ export class WarehouseService {
             : 'Hàng hóa tổng quan';
 
       const receiveDateStr =
-        r.pickupDate || (r.createdAt ? new Date(r.createdAt).toISOString().split('T')[0] : undefined);
+        r.pickupDate ||
+        (r.createdAt
+          ? new Date(r.createdAt).toISOString().split('T')[0]
+          : undefined);
 
       return {
         id: r.firstTripId != null ? Number(r.firstTripId) : null,
@@ -2708,14 +2965,17 @@ export class WarehouseService {
               )
               .reduce((a, s) => a + Number(s.qty), 0)
           : 0;
-        const expectedQuantity = loaded > 0 ? loaded : Number(o.totalQuantity) || 0;
-        const inTransitQuantity = loaded > 0 ? Math.max(0, loaded - receivedAll) : 0;
+        const expectedQuantity =
+          loaded > 0 ? loaded : Number(o.totalQuantity) || 0;
+        const inTransitQuantity =
+          loaded > 0 ? Math.max(0, loaded - receivedAll) : 0;
 
         let isForCurrentHub = true;
         if (viewerHubId) {
           if (o.destinationHubId) {
             isForCurrentHub =
-              o.destinationHubId === viewerHubId || !stopHubIds.has(o.destinationHubId);
+              o.destinationHubId === viewerHubId ||
+              !stopHubIds.has(o.destinationHubId);
           } else if (o.destinationHub) {
             const destLower = o.destinationHub.trim().toLowerCase();
             // Support logistics abbreviations: ĐN = Đà Nẵng, HY = Hưng Yên, HCM = TP. Hồ Chí Minh
@@ -2749,7 +3009,8 @@ export class WarehouseService {
         let deliveryAddress = '';
         if (o.route && o.route.includes('→')) {
           const parts = o.route.split('→');
-          if (!pickupAddress || pickupAddress === 'Hub') pickupAddress = parts[0]?.trim() || '';
+          if (!pickupAddress || pickupAddress === 'Hub')
+            pickupAddress = parts[0]?.trim() || '';
           deliveryAddress = parts[1]?.trim() || '';
         }
 
@@ -2758,7 +3019,10 @@ export class WarehouseService {
           ...o,
           pickupAddress: pickupAddress || o.originHubEntity?.name || '',
           deliveryAddress:
-            deliveryAddress || o.destinationHub || o.destinationHubEntity?.name || '',
+            deliveryAddress ||
+            o.destinationHub ||
+            o.destinationHubEntity?.name ||
+            '',
           tripId: t.id,
           weightAllocated: Number(t.weightAllocated) || 0,
           volumeAllocated: Number(t.volumeAllocated) || 0,
