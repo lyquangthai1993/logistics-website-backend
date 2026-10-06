@@ -4,7 +4,9 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { HomeService } from './home.service';
 
 @ApiTags('Home')
-@Controller()
+@Controller({
+  version: '1',
+})
 export class HomeController {
   constructor(private readonly service: HomeService) {}
 
@@ -13,7 +15,7 @@ export class HomeController {
     return this.service.appInfo();
   }
 
-  @Get(['health', 'api/v1/health'])
+  @Get('health')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Public Health Check Endpoint',

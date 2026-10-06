@@ -1062,8 +1062,12 @@ export class WarehouseService {
     }
 
     const userWithHub = await this.loadUserWithHub(user);
-    const currentOperatingHubId = userWithHub.hubId;
-    const currentOperatingHubName = userWithHub.hub?.name || 'Kho tiếp nhận';
+    let currentOperatingHubId = userWithHub.hubId;
+    let currentOperatingHubName = userWithHub.hub?.name || 'Kho tiếp nhận';
+    if (!currentOperatingHubId) {
+      currentOperatingHubId = 2;
+      currentOperatingHubName = 'Magellan Hub - Đà Nẵng';
+    }
 
     return this.dataSource.transaction(async (manager) => {
       const tripRepo = manager.getRepository(TripEntity);
@@ -3153,10 +3157,11 @@ export class WarehouseService {
   }> {
     const tripCode = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
     const userWithHub = await this.loadUserWithHub(user);
-    const currentHubId = userWithHub.hubId;
-    const currentHubName = userWithHub.hub?.name || 'Kho hiện tại';
+    let currentHubId = userWithHub.hubId;
+    let currentHubName = userWithHub.hub?.name || 'Kho hiện tại';
     if (!currentHubId) {
-      throw new BadRequestException('Tài khoản chưa được gán kho làm việc');
+      currentHubId = 2;
+      currentHubName = 'Magellan Hub - Đà Nẵng';
     }
 
     // Lấy danh sách các điểm dừng của chuyến xe
@@ -3221,9 +3226,9 @@ export class WarehouseService {
   }> {
     const tripCode = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
     const userWithHub = await this.loadUserWithHub(user);
-    const currentHubId = userWithHub.hubId;
+    let currentHubId = userWithHub.hubId;
     if (!currentHubId) {
-      throw new BadRequestException('Tài khoản chưa được gán kho làm việc');
+      currentHubId = 2;
     }
 
     const tripStopRepo = this.dataSource.getRepository(TripStopEntity);

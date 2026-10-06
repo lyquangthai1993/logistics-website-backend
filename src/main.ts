@@ -99,6 +99,24 @@ async function bootstrap() {
   app.enableVersioning({
     type: VersioningType.URI,
   });
+
+  const expressInstance = app.getHttpAdapter().getInstance();
+  expressInstance.get('/health', (_req: any, res: any) =>
+    res.json({
+      status: 'ok',
+      region: 'ap-southeast-1',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+    }),
+  );
+  expressInstance.get('/', (_req: any, res: any) =>
+    res.json({
+      statusCode: 200,
+      message: 'Success',
+      data: { name: 'app' },
+      timestamp: new Date().toISOString(),
+    }),
+  );
   app.useGlobalPipes(new ValidationPipe(validationOptions));
   app.useGlobalFilters(new GlobalExceptionFilter());
   app.useGlobalInterceptors(
