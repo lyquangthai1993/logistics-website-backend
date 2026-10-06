@@ -43,30 +43,39 @@ export class AppendOrderToTripDto {
   @Min(0, { message: 'Số khối phải lớn hơn hoặc bằng 0' })
   totalVolume?: number;
 
-  @ApiPropertyOptional({ example: 'Magellan Hub - Đà Nẵng', description: 'Địa chỉ nhận/nơi bốc' })
+  @ApiPropertyOptional({
+    example: 'Cây xăng Hòa Cầm, QL1A',
+    description: 'Điểm bốc hàng dọc đường (nhập tay)',
+  })
   @IsOptional()
   @IsString()
   pickupAddress?: string;
 
   @ApiPropertyOptional({
-    example: DeliveryDestinationMode.HUB_L1,
+    example: DeliveryDestinationMode.DIRECT_CUSTOMER,
     enum: DeliveryDestinationMode,
   })
   @IsOptional()
   @IsEnum(DeliveryDestinationMode)
   deliveryMode?: DeliveryDestinationMode;
 
-  @ApiPropertyOptional({ example: '123 Nguyễn Huệ, Q.1, TP.HCM' })
+  @ApiPropertyOptional({
+    example: '123 Nguyễn Huệ, Hải Châu, Đà Nẵng',
+    description: 'Điểm giao của khách (Địa chỉ giao hàng)',
+  })
   @IsOptional()
   @IsString()
   deliveryAddress?: string;
 
-  @ApiPropertyOptional({ example: 'Hưng Yên', description: 'Tỉnh/Thành phố nhận hàng' })
+  @ApiPropertyOptional({ example: 'Đà Nẵng', description: 'Tỉnh/Thành phố nhận hàng của khách' })
   @IsOptional()
   @IsString()
   province?: string;
 
-  @ApiPropertyOptional({ example: 1, description: 'ID Hub đích dỡ hàng (Polaris Hub - Hưng Yên)' })
+  @ApiPropertyOptional({
+    example: 2,
+    description: 'ID Kho nhập hàng (mặc định lấy Kho hiện tại của tài khoản thao tác)',
+  })
   @IsOptional()
   @IsInt()
   @IsPositive()
