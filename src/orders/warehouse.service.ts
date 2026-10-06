@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
@@ -36,7 +37,10 @@ import {
   QuickCreateInboundOrderDto,
   BatchQuickCreateInboundDto,
 } from './dto/quick-create-inbound-order.dto';
-import { AppendOrderToTripDto } from './dto/append-order-to-trip.dto';
+import {
+  AppendOrderToTripDto,
+  AppendOrderMode,
+} from './dto/append-order-to-trip.dto';
 import { ConfirmOutboundDto, OutboundMode } from './dto/confirm-outbound.dto';
 
 export interface WarehouseOrdersResult {
@@ -1082,26 +1086,62 @@ export class WarehouseService {
       const pickupDate =
         firstTrip.pickupDate || new Date().toISOString().split('T')[0];
 
-      // 2. Điểm đến (Kho nhập hàng) - Mặc định là Kho hiện tại của tài khoản đang thao tác
-      const destinationHubId: number | null =
-        currentOperatingHubId ?? dto.destinationHubId ?? null;
-      let destinationHubName: string | null = currentOperatingHubName;
+      // 2. Phân loại chế độ bốc hàng: ROADSIDE_INBOUND hoặc HUB_OUTBOUND
+      const isHubOutbound = dto.appendMode === AppendOrderMode.HUB_OUTBOUND;
 
-      if (dto.destinationHubId && dto.destinationHubId !== currentOperatingHubId) {
+      let destinationHubId: number | null = null;
+      let destinationHubName: string | null = null;
+      let originHubId: number | null = null;
+      let originHubName: string = '';
+      let pickupAddr: string = '';
+      let deliveryAddr: string = '';
+
+      if (isHubOutbound) {
+        if (!dto.destinationHubId) {
+          throw new BadRequestException(
+            'Vui lòng chọn trạm đích dỡ hàng tiếp theo của chuyến xe',
+          );
+        }
+        if (dto.destinationHubId === currentOperatingHubId) {
+          throw new BadRequestException(
+            'Kho đích không thể trùng với kho xuất hàng hiện tại',
+          );
+        }
         const destHub = await hubRepo.findOne({
           where: { id: dto.destinationHubId },
         });
-        if (destHub) {
-          destinationHubName = destHub.name;
+        if (!destHub) {
+          throw new NotFoundException(
+            `Kho đích ID ${dto.destinationHubId} không tồn tại`,
+          );
         }
+        destinationHubId = dto.destinationHubId;
+        destinationHubName = destHub.name;
+        originHubId = currentOperatingHubId ?? null;
+        originHubName = currentOperatingHubName;
+        pickupAddr = originHubName;
+        deliveryAddr = dto.deliveryAddress?.trim() || destinationHubName;
+      } else {
+        // Mặc định: ROADSIDE_INBOUND (bốc hàng tự do ngoài đường về nhập Hub hiện tại)
+        destinationHubId = currentOperatingHubId ?? dto.destinationHubId ?? null;
+        destinationHubName = currentOperatingHubName;
+
+        if (dto.destinationHubId && dto.destinationHubId !== currentOperatingHubId) {
+          const destHub = await hubRepo.findOne({
+            where: { id: dto.destinationHubId },
+          });
+          if (destHub) {
+            destinationHubName = destHub.name;
+          }
+        }
+        originHubId = null;
+        pickupAddr = dto.pickupAddress?.trim() || 'Điểm bốc dọc đường';
+        originHubName = pickupAddr;
+        deliveryAddr =
+          dto.deliveryAddress?.trim() || destinationHubName || 'Điểm giao khách';
       }
 
-      // 3. Nơi bốc hàng dọc đường & Điểm giao của khách
-      const pickupAddr = dto.pickupAddress?.trim() || 'Điểm bốc dọc đường';
-      const deliveryAddr =
-        dto.deliveryAddress?.trim() || destinationHubName || 'Điểm giao khách';
-
-      // 4. Mã đơn hàng
+      // 3. Mã đơn hàng
       let finalOrderCode = dto.orderCode?.trim();
       if (isPlaceholderCode(finalOrderCode)) {
         finalOrderCode = await this.orderCodeService.generateOrderCode(
@@ -1114,49 +1154,79 @@ export class WarehouseService {
       const weight = Math.max(0, Number(dto.totalWeight) || 0);
       const vol = Math.max(0, Number(dto.totalVolume) || 0);
 
-      // 5. Tạo OrderEntity - Hàng bốc dọc đường chở về nhập kho hiện tại -> status IN_TRANSIT
-      const finalNotes =
-        [
-          dto.notes?.trim(),
-          dto.deliveryAddress?.trim()
-            ? `[Giao khách: ${dto.deliveryAddress.trim()}]`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(' - ') ||
-        `Bốc thêm dọc đường tại ${pickupAddr} chở về ${destinationHubName} trên xe ${licensePlate} (${tripCode})`;
+      // 4. Kiểm tra nếu đơn hàng đã lưu trong kho (dành cho HUB_OUTBOUND chọn từ tồn kho)
+      let savedOrder: OrderEntity;
+      const existingOrderInWarehouse =
+        isHubOutbound && dto.orderCode
+          ? await orderRepo.findOne({
+              where: {
+                orderCode: dto.orderCode.trim(),
+                deletedAt: null as any,
+              },
+            })
+          : null;
 
-      const order = orderRepo.create({
-        orderCode: finalOrderCode,
-        goodsDescription: dto.goodsDescription.trim(),
-        totalQuantity: qty,
-        inboundQuantity: 0,
-        outboundQuantity: qty,
-        remainingQuantity: qty,
-        totalWeight: weight,
-        totalVolume: vol,
-        route: `${pickupAddr} → ${deliveryAddr}`,
-        originHub: pickupAddr,
-        originHubId: null, // Bốc dọc đường ngoài mạng lưới Hub
-        currentHubId: null, // Hàng đang trên xe, chưa nhập kho
-        currentTripCode: tripCode,
-        destinationHub: destinationHubName,
-        destinationHubId,
-        province: dto.province?.trim() || null,
-        accompanyingDocs: dto.accompanyingDocs?.trim() || null,
-        notes: finalNotes,
-        status: 'IN_TRANSIT',
-        createdByUserId: user.id,
-        isExternalVehicleNeeded: false,
-      });
-      const savedOrder = await orderRepo.save(order);
+      if (existingOrderInWarehouse) {
+        existingOrderInWarehouse.currentTripCode = tripCode;
+        existingOrderInWarehouse.destinationHubId = destinationHubId;
+        existingOrderInWarehouse.destinationHub = destinationHubName;
+        existingOrderInWarehouse.status = 'IN_TRANSIT';
+        existingOrderInWarehouse.currentHubId = null;
+        if (dto.deliveryAddress?.trim()) {
+          existingOrderInWarehouse.notes = [
+            existingOrderInWarehouse.notes,
+            `[Giao khách: ${dto.deliveryAddress.trim()}]`,
+          ]
+            .filter(Boolean)
+            .join(' - ');
+        }
+        savedOrder = await orderRepo.save(existingOrderInWarehouse);
+      } else {
+        const finalNotes =
+          [
+            dto.notes?.trim(),
+            dto.deliveryAddress?.trim()
+              ? `[Giao khách: ${dto.deliveryAddress.trim()}]`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(' - ') ||
+          (isHubOutbound
+            ? `Xuất thêm từ ${originHubName} đi ${destinationHubName} trên xe ${licensePlate} (${tripCode})`
+            : `Bốc thêm dọc đường tại ${pickupAddr} chở về ${destinationHubName} trên xe ${licensePlate} (${tripCode})`);
 
-      // 6. Tạo TripEntity gán vào tripCode cũ
+        const order = orderRepo.create({
+          orderCode: finalOrderCode,
+          goodsDescription: dto.goodsDescription.trim(),
+          totalQuantity: qty,
+          inboundQuantity: 0,
+          outboundQuantity: qty,
+          remainingQuantity: qty,
+          totalWeight: weight,
+          totalVolume: vol,
+          route: `${pickupAddr} → ${deliveryAddr}`,
+          originHub: originHubName,
+          originHubId,
+          currentHubId: null, // Hàng đang trên xe, chưa nhập kho
+          currentTripCode: tripCode,
+          destinationHub: destinationHubName,
+          destinationHubId,
+          province: dto.province?.trim() || null,
+          accompanyingDocs: dto.accompanyingDocs?.trim() || null,
+          notes: finalNotes,
+          status: 'IN_TRANSIT',
+          createdByUserId: user.id,
+          isExternalVehicleNeeded: false,
+        });
+        savedOrder = await orderRepo.save(order);
+      }
+
+      // 5. Tạo TripEntity gán vào tripCode cũ
       const savedTrip = await tripRepo.save(
         tripRepo.create({
           orderId: savedOrder.id,
           tripCode,
-          originHubId: null,
+          originHubId,
           destinationHubId,
           type: 'TRANSFER',
           licensePlate,
@@ -1166,17 +1236,19 @@ export class WarehouseService {
           weightAllocated: weight,
           volumeAllocated: vol,
           quantityAllocated: qty,
-          notes: `[BỐC DỌC ĐƯỜNG] Xe ${licensePlate} bốc thêm ${qty} kiện tại ${pickupAddr} chở về ${destinationHubName}`,
+          notes: isHubOutbound
+            ? `[XUẤT TỪ HUB] Xe ${licensePlate} nhận thêm ${qty} kiện từ ${originHubName} đi ${destinationHubName}`
+            : `[BỐC DỌC ĐƯỜNG] Xe ${licensePlate} bốc thêm ${qty} kiện tại ${pickupAddr} chở về ${destinationHubName}`,
         }),
       );
-      savedOrder.trips = [savedTrip];
+      savedOrder.trips = [...(savedOrder.trips || []), savedTrip];
 
-      // 7. Ghi nhận giao dịch luân chuyển (TRANSFER) bốc lên xe
+      // 6. Ghi nhận giao dịch luân chuyển (TRANSFER) bốc lên xe
       await txRepo.save(
         txRepo.create({
           orderId: savedOrder.id,
           type: InventoryTransactionType.TRANSFER,
-          hubId: destinationHubId,
+          hubId: isHubOutbound ? originHubId : destinationHubId,
           tripId: savedTrip.id,
           tripCode,
           quantity: qty,
@@ -1187,13 +1259,15 @@ export class WarehouseService {
           volume: vol,
           licensePlate,
           driverName,
-          notes: `Bốc thêm hàng dọc đường tại ${pickupAddr} chở về ${destinationHubName} trên xe ${licensePlate} (Chuyến ${tripCode})`,
+          notes: isHubOutbound
+            ? `Xuất thêm hàng từ ${originHubName} đi ${destinationHubName} trên xe ${licensePlate} (Chuyến ${tripCode})`
+            : `Bốc thêm hàng dọc đường tại ${pickupAddr} chở về ${destinationHubName} trên xe ${licensePlate} (Chuyến ${tripCode})`,
           destination: deliveryAddr,
           performedByUserId: user.id,
         }),
       );
 
-      // 8. Bảo đảm điểm dừng (TripStopEntity) cho kho nhập hàng
+      // 7. Bảo đảm điểm dừng (TripStopEntity) cho kho xuất và kho đích
       if (destinationHubId) {
         const existingDestStop = await manager
           .getRepository(TripStopEntity)
@@ -1214,6 +1288,27 @@ export class WarehouseService {
               status: TripStopStatus.PENDING,
               stopType: TripStopType.DESTINATION,
               stopSequence: nextSeq,
+              userId: user.id,
+            },
+            manager,
+          );
+        }
+      }
+
+      if (isHubOutbound && originHubId) {
+        const existingOriginStop = await manager
+          .getRepository(TripStopEntity)
+          .findOne({
+            where: { tripCode, hubId: originHubId },
+          });
+        if (!existingOriginStop) {
+          await this.ledgerService.upsertTripStop(
+            {
+              tripCode,
+              hubId: originHubId,
+              status: TripStopStatus.COMPLETED,
+              stopType: TripStopType.TRANSIT,
+              stopSequence: 1,
               userId: user.id,
             },
             manager,
@@ -2791,14 +2886,6 @@ export class WarehouseService {
         .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
         .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
         .leftJoinAndSelect('order.trips', 'trips')
-        .leftJoinAndSelect(
-          'order.inventoryTransactions',
-          'inventoryTransactions',
-        )
-        .leftJoinAndSelect(
-          'inventoryTransactions.hub',
-          'inventoryTransactionHub',
-        )
         .where('order.deletedAt IS NULL')
         .andWhere('trips.tripCode IN (:...tripCodes)', { tripCodes })
         .getMany();
@@ -3048,6 +3135,123 @@ export class WarehouseService {
       /** PENDING = Chờ xử lý, COMPLETED = Đã xử lý, null = chuyến không dừng tại kho này */
       currentHubStatus: currentStop?.status ?? null,
       lines,
+    };
+  }
+
+  /**
+   * Lấy danh sách các đơn hàng đang lưu tại kho hiện tại sẵn sàng để xuất lên chuyến xe
+   */
+  async getAvailableOutboundOrders(
+    user: UserEntity,
+    tripCodeParam: string,
+  ): Promise<{
+    tripCode: string;
+    currentHubId: number | null;
+    currentHubName: string;
+    downstreamHubs: Array<{ id: number; name: string }>;
+    orders: OrderEntity[];
+  }> {
+    const tripCode = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
+    const userWithHub = await this.loadUserWithHub(user);
+    const currentHubId = userWithHub.hubId;
+    const currentHubName = userWithHub.hub?.name || 'Kho hiện tại';
+    if (!currentHubId) {
+      throw new BadRequestException('Tài khoản chưa được gán kho làm việc');
+    }
+
+    // Lấy danh sách các điểm dừng của chuyến xe
+    const stops: any[] = await this.dataSource.query(
+      `SELECT ts."hubId", h."name" AS "hubName", ts."stopSequence"
+       FROM "trip_stop" ts
+       JOIN "hub" h ON h.id = ts."hubId"
+       WHERE ts."tripCode" = $1 AND ts."deletedAt" IS NULL
+       ORDER BY ts."stopSequence" ASC, ts.id ASC`,
+      [tripCode],
+    );
+
+    const currentStop = stops.find((s) => Number(s.hubId) === currentHubId);
+    const currentSeq = currentStop ? Number(currentStop.stopSequence) : 0;
+
+    // Các trạm kế tiếp: sau trạm hiện tại
+    const downstreamStops = stops.filter(
+      (s) =>
+        Number(s.hubId) !== currentHubId &&
+        (!currentStop || Number(s.stopSequence) > currentSeq),
+    );
+
+    // Lấy các đơn hàng đang lưu kho tại kho hiện tại
+    const orderRepo = this.dataSource.getRepository(OrderEntity);
+    const orders = await orderRepo
+      .createQueryBuilder('order')
+      .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+      .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
+      .where('order.deletedAt IS NULL')
+      .andWhere('order.currentHubId = :currentHubId', { currentHubId })
+      .andWhere(
+        "order.status IN ('IN_WAREHOUSE', 'INBOUND', 'STORED', 'LUU_KHO')",
+      )
+      .orderBy('order.id', 'DESC')
+      .getMany();
+
+    return {
+      tripCode,
+      currentHubId,
+      currentHubName,
+      downstreamHubs: downstreamStops.map((s) => ({
+        id: Number(s.hubId),
+        name: s.hubName,
+      })),
+      orders,
+    };
+  }
+
+  /**
+   * Cập nhật tiến trình trạm trung chuyển (Transit Stop Lifecycle)
+   * Nhận payload { step: 'INBOUND' | 'OUTBOUND', action: 'CONFIRM' | 'SKIP' }
+   */
+  async updateTransitStep(
+    user: UserEntity,
+    tripCodeParam: string,
+    body: { step: 'INBOUND' | 'OUTBOUND'; action: 'CONFIRM' | 'SKIP' },
+  ): Promise<{
+    success: boolean;
+    tripCode: string;
+    status: string;
+    processedAt: Date;
+  }> {
+    const tripCode = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
+    const userWithHub = await this.loadUserWithHub(user);
+    const currentHubId = userWithHub.hubId;
+    if (!currentHubId) {
+      throw new BadRequestException('Tài khoản chưa được gán kho làm việc');
+    }
+
+    const tripStopRepo = this.dataSource.getRepository(TripStopEntity);
+    let stop = await tripStopRepo.findOne({
+      where: { tripCode, hubId: currentHubId },
+    });
+
+    const now = new Date();
+    if (!stop) {
+      stop = tripStopRepo.create({
+        tripCode,
+        hubId: currentHubId,
+        status: TripStopStatus.COMPLETED,
+        stopType: TripStopType.TRANSIT,
+        stopSequence: 99,
+        processedAt: now,
+      });
+    } else {
+      stop.status = TripStopStatus.COMPLETED;
+      stop.processedAt = now;
+    }
+    await tripStopRepo.save(stop);
+
+    return {
+      success: true,
+      tripCode,
+      status: stop.status,
+      processedAt: now,
     };
   }
 }

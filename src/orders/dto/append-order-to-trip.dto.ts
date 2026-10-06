@@ -11,7 +11,32 @@ import {
 } from 'class-validator';
 import { DeliveryDestinationMode } from './quick-create-inbound-order.dto';
 
+export enum AppendOrderMode {
+  ROADSIDE_INBOUND = 'ROADSIDE_INBOUND',
+  HUB_OUTBOUND = 'HUB_OUTBOUND',
+}
+
 export class AppendOrderToTripDto {
+  @ApiPropertyOptional({
+    enum: AppendOrderMode,
+    default: AppendOrderMode.ROADSIDE_INBOUND,
+    description:
+      'Chế độ bốc thêm: ROADSIDE_INBOUND (bốc dọc đường về nhập Hub hiện tại) hoặc HUB_OUTBOUND (xuất thêm từ Hub hiện tại lên xe đi trạm kế tiếp)',
+  })
+  @IsOptional()
+  @IsEnum(AppendOrderMode)
+  appendMode?: AppendOrderMode;
+
+  @ApiPropertyOptional({
+    example: 1,
+    description:
+      'ID Kho xuất hàng (chỉ dùng cho HUB_OUTBOUND, mặc định là kho hiện tại của tài khoản thao tác)',
+  })
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  originHubId?: number;
+
   @ApiPropertyOptional({
     example: 'HCM-LTV-2609-011',
     description: 'Mã vận đơn (nhập tự do hoặc để trống để hệ thống tự cấp)',

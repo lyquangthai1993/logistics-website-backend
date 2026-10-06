@@ -13,7 +13,7 @@ export class HomeController {
     return this.service.appInfo();
   }
 
-  @Get('health')
+  @Get(['health', 'api/v1/health'])
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Public Health Check Endpoint',
@@ -26,6 +26,7 @@ export class HomeController {
   healthCheck() {
     return {
       status: 'ok',
+      region: 'ap-southeast-1',
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
     };

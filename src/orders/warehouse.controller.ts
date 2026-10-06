@@ -171,7 +171,8 @@ export class WarehouseController {
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
-    summary: 'Bốc thêm đơn hàng dọc đường vào chuyến xe đang chạy (SD...)',
+    summary:
+      'Bốc thêm đơn hàng vào chuyến xe đang chạy (bốc dọc đường hoặc xuất từ Hub)',
   })
   @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
   async appendOrderToTrip(
@@ -180,6 +181,36 @@ export class WarehouseController {
     @Body() dto: AppendOrderToTripDto,
   ) {
     return this.warehouseService.appendOrderToTrip(req.user, tripCode, dto);
+  }
+
+  @Get('trips/:tripCode/available-outbound-orders')
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Lấy danh sách các đơn hàng đang lưu tại kho sẵn sàng xuất lên chuyến xe',
+  })
+  @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
+  async getAvailableOutboundOrders(
+    @Request() req: any,
+    @Param('tripCode') tripCode: string,
+  ) {
+    return this.warehouseService.getAvailableOutboundOrders(req.user, tripCode);
+  }
+
+  @Post('trips/:tripCode/transit-step')
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Cập nhật tiến trình trạm trung chuyển (Transit Stop Lifecycle)',
+  })
+  @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
+  async updateTransitStep(
+    @Request() req: any,
+    @Param('tripCode') tripCode: string,
+    @Body() body: { step: 'INBOUND' | 'OUTBOUND'; action: 'CONFIRM' | 'SKIP' },
+  ) {
+    return this.warehouseService.updateTransitStep(req.user, tripCode, body);
   }
 
   @Post('inbound/quick-create')
