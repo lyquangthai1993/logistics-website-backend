@@ -1990,8 +1990,8 @@ export class WarehouseService {
           order.destinationHubEntity = null;
           if (item?.deliveryAddress) {
             order.destinationHub = item.deliveryAddress;
-          } else if (order.deliveryAddress) {
-            order.destinationHub = order.deliveryAddress;
+          } else if (order.route && order.route.includes('→')) {
+            order.destinationHub = order.route.split('→')[1]?.trim() || null;
           } else if (order.province) {
             order.destinationHub = order.province;
           } else {
