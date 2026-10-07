@@ -3138,6 +3138,13 @@ export class WarehouseService {
           originalDeliveryAddress = deliveryAddress || resolvedDestHub || '';
         }
 
+        const effectiveDestHubId =
+          t.destinationHubId !== undefined && t.destinationHubId !== null
+            ? t.destinationHubId
+            : o.destinationHubId !== undefined && o.destinationHubId !== null
+              ? o.destinationHubId
+              : null;
+
         let deliveryMode: 'DIRECT_CUSTOMER' | 'HUB_L1' | 'XE_BO' = 'DIRECT_CUSTOMER';
         const destEntity = o.destinationHubEntity;
         if (
@@ -3150,7 +3157,7 @@ export class WarehouseService {
           deliveryMode = 'XE_BO';
         } else if (
           destEntity?.level === 1 ||
-          (o.destinationHubId && o.destinationHubId > 0) ||
+          (effectiveDestHubId && effectiveDestHubId > 0) ||
           destEntity
         ) {
           deliveryMode = 'HUB_L1';
@@ -3158,20 +3165,34 @@ export class WarehouseService {
           deliveryMode = 'DIRECT_CUSTOMER';
         }
 
+        let resolvedDestEntity: any = null;
+        if (effectiveDestHubId) {
+          if (destEntity && destEntity.id === effectiveDestHubId) {
+            resolvedDestEntity = {
+              id: destEntity.id,
+              name: destEntity.name,
+              code: destEntity.code,
+              level: destEntity.level ?? 1,
+              city: destEntity.city,
+            };
+          } else {
+            resolvedDestEntity = {
+              id: effectiveDestHubId,
+              name: resolvedDestHub || `Hub ${effectiveDestHubId}`,
+              code: null,
+              level: deliveryMode === 'XE_BO' ? 2 : 1,
+              city: null,
+            };
+          }
+        }
+
         const view = hubView.get(o.id);
         return {
           ...o,
           originHub: resolvedOriginHub,
           destinationHub: resolvedDestHub,
-          destinationHubEntity: o.destinationHubEntity
-            ? {
-                id: o.destinationHubEntity.id,
-                name: o.destinationHubEntity.name,
-                code: o.destinationHubEntity.code,
-                level: o.destinationHubEntity.level ?? 1,
-                city: o.destinationHubEntity.city,
-              }
-            : null,
+          destinationHubId: effectiveDestHubId,
+          destinationHubEntity: resolvedDestEntity,
           pickupAddress: pickupAddress || resolvedOriginHub || '',
           deliveryAddress: deliveryAddress || resolvedDestHub || '',
           originalDeliveryAddress:
@@ -3679,8 +3700,10 @@ export class WarehouseService {
         finalDeliveryAddress = hub.name;
 
         order.destinationHubId = hub.id;
+        order.destinationHubEntity = hub;
         order.destinationHub = hub.name;
         trip.destinationHubId = hub.id;
+        trip.destinationHub = hub;
 
         // Cập nhật tuyến lộ trình: origin -> hub.name
         if (order.route && order.route.includes('→')) {
@@ -3717,8 +3740,10 @@ export class WarehouseService {
         destHubName = null;
 
         order.destinationHubId = null;
+        order.destinationHubEntity = null;
         order.destinationHub = null;
         trip.destinationHubId = null;
+        trip.destinationHub = null as any;
 
         if (finalDeliveryAddress) {
           if (order.route && order.route.includes('→')) {
@@ -3732,8 +3757,22 @@ export class WarehouseService {
         }
       }
 
-      const savedOrder = await txOrderRepo.save(order);
-      const savedTrip = await txTripRepo.save(trip);
+      await txOrderRepo.update(order.id, {
+        destinationHubId: finalDestHubId,
+        destinationHub: destHubName,
+        route: order.route,
+      });
+      await txTripRepo.update(trip.id, {
+        destinationHubId: finalDestHubId,
+      });
+
+      const savedOrder = await txOrderRepo.findOne({
+        where: { id: order.id },
+        relations: ['originHubEntity', 'destinationHubEntity'],
+      }) || order;
+      const savedTrip = await txTripRepo.findOne({
+        where: { id: trip.id },
+      }) || trip;
 
       // Ghi nhận nhật ký giao dịch kho (Inventory Transaction Audit)
       const currentHubId =
