@@ -28,6 +28,7 @@ import {
   BatchQuickCreateInboundDto,
 } from './dto/quick-create-inbound-order.dto';
 import { AppendOrderToTripDto } from './dto/append-order-to-trip.dto';
+import { AppendStoredOrdersDto } from './dto/append-stored-orders.dto';
 import { Throttle } from '@nestjs/throttler';
 import { ConfirmOutboundDto } from './dto/confirm-outbound.dto';
 
@@ -43,12 +44,26 @@ export class WarehouseController {
   constructor(private readonly warehouseService: WarehouseService) {}
 
   @Get('orders')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER, RoleEnum.DISPATCHER, RoleEnum.FLEET_MANAGER)
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.WAREHOUSE_MANAGER,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+  )
   @ApiOperation({
-    summary: 'Tra cứu & danh sách hàng hóa trong kho (Freetext + Status + Pagination)',
+    summary:
+      'Tra cứu & danh sách hàng hóa trong kho (Freetext + Status + Pagination)',
   })
-  @ApiQuery({ name: 'flow', required: false, enum: ['INBOUND', 'OUTBOUND', 'OUTBOUND_LOOKUP'] })
-  @ApiQuery({ name: 'ids', required: false, description: 'Danh sách id đơn, phân tách dấu phẩy' })
+  @ApiQuery({
+    name: 'flow',
+    required: false,
+    enum: ['INBOUND', 'OUTBOUND', 'OUTBOUND_LOOKUP'],
+  })
+  @ApiQuery({
+    name: 'ids',
+    required: false,
+    description: 'Danh sách id đơn, phân tách dấu phẩy',
+  })
   @ApiQuery({ name: 'groupBy', required: false, enum: ['orderCode'] })
   async getOrders(
     @Request() req: any,
@@ -78,7 +93,8 @@ export class WarehouseController {
   @Get('kpi')
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @ApiOperation({
-    summary: 'Lấy chỉ số KPI tổng quan kho (Chờ nhập, Lưu kho, Chờ xuất, Đã xuất)',
+    summary:
+      'Lấy chỉ số KPI tổng quan kho (Chờ nhập, Lưu kho, Chờ xuất, Đã xuất)',
   })
   async getKpi(
     @Request() req: any,
@@ -94,8 +110,16 @@ export class WarehouseController {
     summary:
       'Bảng chuyến xe xuất kho (SD...) của kho hiện tại: Chờ xử lý (nháp) / Đã xử lý, lọc phụ Xuất khách / Luân chuyển',
   })
-  @ApiQuery({ name: 'status', required: false, enum: ['ALL', 'PENDING', 'COMPLETED'] })
-  @ApiQuery({ name: 'type', required: false, enum: ['ALL', 'CUSTOMER', 'TRANSFER'] })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['ALL', 'PENDING', 'COMPLETED'],
+  })
+  @ApiQuery({
+    name: 'type',
+    required: false,
+    enum: ['ALL', 'CUSTOMER', 'TRANSFER'],
+  })
   async getOutboundTrips(
     @Request() req: any,
     @Query('search') search?: string,
@@ -198,6 +222,25 @@ export class WarehouseController {
     return this.warehouseService.getAvailableOutboundOrders(req.user, tripCode);
   }
 
+  @Post('trips/:tripCode/append-stored-orders')
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Bốc hàng loạt đơn hàng lưu kho sẵn có lên chuyến xe xuất kho',
+  })
+  @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
+  async appendStoredOrdersToTrip(
+    @Request() req: any,
+    @Param('tripCode') tripCode: string,
+    @Body() dto: AppendStoredOrdersDto,
+  ) {
+    return this.warehouseService.appendStoredOrdersToTrip(
+      req.user,
+      tripCode,
+      dto,
+    );
+  }
+
   @Post('trips/:tripCode/transit-step')
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
@@ -230,7 +273,8 @@ export class WarehouseController {
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
-    summary: 'Tạo lô hàng nhập kho từ 1 xe (nhiều dòng hàng chung 1 chuyến xe / trip)',
+    summary:
+      'Tạo lô hàng nhập kho từ 1 xe (nhiều dòng hàng chung 1 chuyến xe / trip)',
   })
   async batchCreateInbound(
     @Request() req: any,
@@ -243,12 +287,10 @@ export class WarehouseController {
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Xác nhận dỡ hàng và nhập vào kho (chuyển trạng thái LƯU KHO / INBOUND)',
+    summary:
+      'Xác nhận dỡ hàng và nhập vào kho (chuyển trạng thái LƯU KHO / INBOUND)',
   })
-  async confirmInbound(
-    @Request() req: any,
-    @Body() body: any,
-  ) {
+  async confirmInbound(@Request() req: any, @Body() body: any) {
     return this.warehouseService.confirmInbound(req.user, body);
   }
 
@@ -258,10 +300,7 @@ export class WarehouseController {
   @ApiOperation({
     summary: 'Xác nhận xuất kho (Giao khách hàng hoặc Luân chuyển)',
   })
-  async confirmOutbound(
-    @Request() req: any,
-    @Body() dto: ConfirmOutboundDto,
-  ) {
+  async confirmOutbound(@Request() req: any, @Body() dto: ConfirmOutboundDto) {
     return this.warehouseService.confirmOutbound(req.user, dto);
   }
 

@@ -76,10 +76,8 @@ export class OperationalLedgerService {
     if (!hub) return 'HQ';
     if (hub.orderCodePrefix) return hub.orderCodePrefix;
     return (
-      hub.code
-        ?.replace(/^HUB-/, '')
-        .replace(/-01$/, '')
-        .replace(/-/g, '_') || 'HUB'
+      hub.code?.replace(/^HUB-/, '').replace(/-01$/, '').replace(/-/g, '_') ||
+      'HUB'
     );
   }
 
@@ -225,12 +223,14 @@ export class OperationalLedgerService {
       WHEN order.status IN (${draftList}) AND COALESCE(order.currentHubId, order.originHubId) = :userHubId THEN 'DRAFT'
       WHEN ${this.hubStockSql()} > 0 THEN 'INBOUND'
       WHEN ${this.pendingInboundSql()} THEN 'PENDING_INBOUND'
-      WHEN ${this.hubDispatchedSql()} THEN 'COMPLETED_INBOUND'
+      WHEN ${this.hubDispatchedSql()} AND ${this.hubStockSql()} <= 0 THEN 'COMPLETED_INBOUND'
+      WHEN (order.remainingQuantity = 0 OR order.outboundQuantity >= order.totalQuantity) THEN 'COMPLETED_INBOUND'
+      WHEN order.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE') AND ${this.hubStockSql()} <= 0 THEN 'COMPLETED_INBOUND'
       ELSE order.status END)`;
   }
 
   /** Visibility scope of a WAREHOUSE_MANAGER over orders. */
   hubScopeSql(): string {
-    return `(order.originHubId = :userHubId OR order.destinationHubId = :userHubId OR order.originHubId IS NULL OR order.currentHubId = :userHubId OR EXISTS (SELECT 1 FROM "order_inventory_transaction" sctx WHERE sctx."orderId" = order.id AND sctx."hubId" = :userHubId AND sctx."deletedAt" IS NULL) OR EXISTS (SELECT 1 FROM "trip_stop" scts WHERE scts."tripCode" = order.currentTripCode AND scts."hubId" = :userHubId AND scts."deletedAt" IS NULL))`;
+    return `(order.originHubId = :userHubId OR order.destinationHubId = :userHubId OR order.currentHubId = :userHubId OR EXISTS (SELECT 1 FROM "order_inventory_transaction" sctx WHERE sctx."orderId" = order.id AND sctx."hubId" = :userHubId AND sctx."deletedAt" IS NULL) OR EXISTS (SELECT 1 FROM "trip_stop" scts WHERE scts."tripCode" = order.currentTripCode AND scts."hubId" = :userHubId AND scts."deletedAt" IS NULL))`;
   }
 }
