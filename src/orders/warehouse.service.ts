@@ -3003,7 +3003,8 @@ export class WarehouseService {
     if (!code) {
       throw new NotFoundException('Không tìm thấy chuyến xe');
     }
-    const viewerHubId = (await this.resolveUserHubId(user)) ?? null;
+    const resolvedUserHubId = await this.resolveUserHubId(user);
+    const viewerHubId = resolvedUserHubId ?? 2;
 
     const baseQb = () =>
       this.tripRepository
