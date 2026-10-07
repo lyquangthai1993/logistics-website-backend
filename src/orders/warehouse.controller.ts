@@ -6,6 +6,8 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseIntPipe,
+  Patch,
   Post,
   Query,
   Request,
@@ -29,6 +31,7 @@ import {
 } from './dto/quick-create-inbound-order.dto';
 import { AppendOrderToTripDto } from './dto/append-order-to-trip.dto';
 import { AppendStoredOrdersDto } from './dto/append-stored-orders.dto';
+import { UpdateTripOrderDestinationDto } from './dto/update-trip-order-destination.dto';
 import { Throttle } from '@nestjs/throttler';
 import { ConfirmOutboundDto } from './dto/confirm-outbound.dto';
 
@@ -248,6 +251,29 @@ export class WarehouseController {
     return this.warehouseService.appendStoredOrdersToTrip(
       req.user,
       tripCode,
+      dto,
+    );
+  }
+
+  @Patch('trips/:tripCode/orders/:orderId/destination')
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Cập nhật hình thức giao hàng và đích đến cho đơn bốc lên chuyến xe (Giao khách, Hub Cấp 1, Tuyến Xe Bo)',
+  })
+  @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
+  @ApiParam({ name: 'orderId', type: Number, example: 101 })
+  async updateTripOrderDestination(
+    @Request() req: any,
+    @Param('tripCode') tripCode: string,
+    @Param('orderId', ParseIntPipe) orderId: number,
+    @Body() dto: UpdateTripOrderDestinationDto,
+  ) {
+    return this.warehouseService.updateTripOrderDestination(
+      req.user,
+      tripCode,
+      orderId,
       dto,
     );
   }

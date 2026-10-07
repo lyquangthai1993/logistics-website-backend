@@ -44,4 +44,17 @@ export class AppendStoredOrdersDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiPropertyOptional({
+    description: 'Danh sách đích đến riêng biệt cho từng đơn hàng (tùy chọn)',
+    example: [{ orderId: 101, destinationHubId: 3, deliveryAddress: 'Polaris Hub' }],
+  })
+  @IsOptional()
+  @IsArray()
+  orderDestinations?: Array<{
+    orderId: number;
+    destinationHubId?: number | null;
+    deliveryAddress?: string | null;
+    deliveryMode?: string;
+  }>;
 }

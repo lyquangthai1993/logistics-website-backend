@@ -45,6 +45,10 @@ import {
 } from './dto/append-order-to-trip.dto';
 import { AppendStoredOrdersDto } from './dto/append-stored-orders.dto';
 import { ConfirmOutboundDto, OutboundMode } from './dto/confirm-outbound.dto';
+import {
+  UpdateTripOrderDestinationDto,
+  DeliveryModeEnum,
+} from './dto/update-trip-order-destination.dto';
 
 export interface WarehouseOrdersResult {
   data: OrderEntity[];
@@ -3126,13 +3130,53 @@ export class WarehouseService {
         const resolvedDestHub =
           o.destinationHub || o.destinationHubEntity?.name || '';
 
+        let originalDeliveryAddress = '';
+        if (o.route && o.route.includes('→')) {
+          const parts = o.route.split('→');
+          originalDeliveryAddress = parts[1]?.trim() || '';
+        } else {
+          originalDeliveryAddress = deliveryAddress || resolvedDestHub || '';
+        }
+
+        let deliveryMode: 'DIRECT_CUSTOMER' | 'HUB_L1' | 'XE_BO' = 'DIRECT_CUSTOMER';
+        const destEntity = o.destinationHubEntity;
+        if (
+          destEntity?.level === 2 ||
+          destEntity?.code?.startsWith('HUB-BO-') ||
+          (o.destinationHub &&
+            (o.destinationHub.toLowerCase().includes('xe bo') ||
+              o.destinationHub.toLowerCase().includes('hub-bo')))
+        ) {
+          deliveryMode = 'XE_BO';
+        } else if (
+          destEntity?.level === 1 ||
+          (o.destinationHubId && o.destinationHubId > 0) ||
+          destEntity
+        ) {
+          deliveryMode = 'HUB_L1';
+        } else {
+          deliveryMode = 'DIRECT_CUSTOMER';
+        }
+
         const view = hubView.get(o.id);
         return {
           ...o,
           originHub: resolvedOriginHub,
           destinationHub: resolvedDestHub,
+          destinationHubEntity: o.destinationHubEntity
+            ? {
+                id: o.destinationHubEntity.id,
+                name: o.destinationHubEntity.name,
+                code: o.destinationHubEntity.code,
+                level: o.destinationHubEntity.level ?? 1,
+                city: o.destinationHubEntity.city,
+              }
+            : null,
           pickupAddress: pickupAddress || resolvedOriginHub || '',
           deliveryAddress: deliveryAddress || resolvedDestHub || '',
+          originalDeliveryAddress:
+            originalDeliveryAddress || deliveryAddress || resolvedDestHub || '',
+          deliveryMode,
           tripId: t.id,
           weightAllocated: Number(t.weightAllocated) || 0,
           volumeAllocated: Number(t.volumeAllocated) || 0,
@@ -3406,13 +3450,21 @@ export class WarehouseService {
         const weight = Number(order.totalWeight) || 0;
         const vol = Number(order.totalVolume) || 0;
 
+        const customDest = dto.orderDestinations?.find(
+          (d) => Number(d.orderId) === order.id,
+        );
         const orderDestHubId =
-          order.destinationHubId || dto.destinationHubId || null;
-        const orderDestHubName =
+          customDest?.destinationHubId !== undefined
+            ? customDest.destinationHubId
+            : order.destinationHubId || dto.destinationHubId || null;
+        let orderDestHubName =
           order.destinationHub ||
           destHubName ||
           order.destinationHubEntity?.name ||
           '';
+        if (customDest?.deliveryAddress) {
+          orderDestHubName = customDest.deliveryAddress;
+        }
 
         order.status = 'IN_TRANSIT';
         order.currentHubId = null;
@@ -3423,7 +3475,15 @@ export class WarehouseService {
           (Number(order.totalQuantity) || qty) - Number(order.outboundQuantity),
         );
 
-        if (dto.destinationHubId && !order.destinationHubId) {
+        if (customDest) {
+          if (customDest.destinationHubId) {
+            order.destinationHubId = customDest.destinationHubId;
+            order.destinationHub = orderDestHubName;
+          } else if (customDest.destinationHubId === null) {
+            order.destinationHubId = null;
+            order.destinationHub = null;
+          }
+        } else if (dto.destinationHubId && !order.destinationHubId) {
           order.destinationHubId = dto.destinationHubId;
           order.destinationHub = destHubName;
         }
@@ -3539,5 +3599,187 @@ export class WarehouseService {
       status: stop.status,
       processedAt: now,
     };
+  }
+
+  /**
+   * Cập nhật hình thức giao hàng và đích đến cho đơn bốc lên chuyến xe (Giao khách, Hub Cấp 1, Tuyến Xe Bo)
+   */
+  async updateTripOrderDestination(
+    user: UserEntity,
+    tripCodeParam: string,
+    orderId: number,
+    dto: UpdateTripOrderDestinationDto,
+  ): Promise<{
+    success: boolean;
+    tripCode: string;
+    orderId: number;
+    deliveryMode: string;
+    destinationHubId: number | null;
+    destinationHub: string | null;
+    deliveryAddress: string | null;
+    order: OrderEntity;
+    trip: TripEntity;
+  }> {
+    const tripCode = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
+    if (!tripCode) {
+      throw new BadRequestException('Mã chuyến xe không hợp lệ');
+    }
+
+    return await this.dataSource.transaction(async (manager) => {
+      const txTripRepo = manager.getRepository(TripEntity);
+      const txOrderRepo = manager.getRepository(OrderEntity);
+      const txHubRepo = manager.getRepository(HubEntity);
+      const txTripStopRepo = manager.getRepository(TripStopEntity);
+      const txInvRepo = manager.getRepository(OrderInventoryTransactionEntity);
+
+      // Verify trip allocation exists for this tripCode and orderId
+      const trip = await txTripRepo.findOne({
+        where: { tripCode, orderId, deletedAt: IsNull() },
+      });
+      if (!trip) {
+        throw new NotFoundException(
+          `Không tìm thấy liên kết giữa chuyến xe ${tripCode} và đơn hàng ID ${orderId}`,
+        );
+      }
+
+      // Verify order exists
+      const order = await txOrderRepo.findOne({
+        where: { id: orderId, deletedAt: IsNull() },
+        relations: ['originHubEntity', 'destinationHubEntity'],
+      });
+      if (!order) {
+        throw new NotFoundException(`Không tìm thấy đơn hàng ID ${orderId}`);
+      }
+
+      let destHubName: string | null = null;
+      let finalDestHubId: number | null = null;
+      let finalDeliveryAddress: string | null = dto.deliveryAddress?.trim() || null;
+
+      if (
+        dto.deliveryMode === DeliveryModeEnum.HUB_L1 ||
+        dto.deliveryMode === DeliveryModeEnum.XE_BO
+      ) {
+        if (!dto.destinationHubId) {
+          throw new BadRequestException(
+            'Cần cung cấp ID Hub đích cho hình thức giao hàng Hub Cấp 1 hoặc Tuyến Xe Bo',
+          );
+        }
+
+        const hub = await txHubRepo.findOne({
+          where: { id: dto.destinationHubId, deletedAt: IsNull() },
+        });
+        if (!hub) {
+          throw new NotFoundException(
+            `Không tìm thấy Hub đích với ID ${dto.destinationHubId}`,
+          );
+        }
+
+        finalDestHubId = hub.id;
+        destHubName = hub.name;
+        finalDeliveryAddress = hub.name;
+
+        order.destinationHubId = hub.id;
+        order.destinationHub = hub.name;
+        trip.destinationHubId = hub.id;
+
+        // Cập nhật tuyến lộ trình: origin -> hub.name
+        if (order.route && order.route.includes('→')) {
+          const originPart = order.route.split('→')[0]?.trim();
+          order.route = `${originPart} → ${hub.name}`;
+        } else if (order.originHub) {
+          order.route = `${order.originHub} → ${hub.name}`;
+        } else {
+          order.route = `Kho → ${hub.name}`;
+        }
+
+        // Tự động đảm bảo TripStopEntity tồn tại trên lộ trình xe nếu Hub đích chưa có trong trạm dừng
+        const existingStop = await txTripStopRepo.findOne({
+          where: { tripCode, hubId: hub.id, deletedAt: IsNull() },
+        });
+        if (!existingStop) {
+          const maxStop = await txTripStopRepo.findOne({
+            where: { tripCode, deletedAt: IsNull() },
+            order: { stopSequence: 'DESC' },
+          });
+          const nextSeq = (maxStop?.stopSequence ? Number(maxStop.stopSequence) : 1) + 1;
+          const newStop = txTripStopRepo.create({
+            tripCode,
+            hubId: hub.id,
+            stopSequence: nextSeq,
+            stopType: TripStopType.TRANSIT,
+            status: TripStopStatus.PENDING,
+          });
+          await txTripStopRepo.save(newStop);
+        }
+      } else {
+        // DIRECT_CUSTOMER
+        finalDestHubId = null;
+        destHubName = null;
+
+        order.destinationHubId = null;
+        order.destinationHub = null;
+        trip.destinationHubId = null;
+
+        if (finalDeliveryAddress) {
+          if (order.route && order.route.includes('→')) {
+            const originPart = order.route.split('→')[0]?.trim();
+            order.route = `${originPart} → ${finalDeliveryAddress}`;
+          } else if (order.originHub) {
+            order.route = `${order.originHub} → ${finalDeliveryAddress}`;
+          } else {
+            order.route = `Kho → ${finalDeliveryAddress}`;
+          }
+        }
+      }
+
+      const savedOrder = await txOrderRepo.save(order);
+      const savedTrip = await txTripRepo.save(trip);
+
+      // Ghi nhận nhật ký giao dịch kho (Inventory Transaction Audit)
+      const currentHubId =
+        (await this.resolveUserHubId(user)) ?? trip.originHubId ?? 2;
+      const userWithHub = await this.loadUserWithHub(user);
+      const currentHubName = userWithHub.hub?.name || 'Hub';
+      const allocatedQty =
+        Number(trip.quantityAllocated) ||
+        Number(order.remainingQuantity) ||
+        Number(order.totalQuantity) ||
+        1;
+
+      await txInvRepo.save(
+        txInvRepo.create({
+          orderId: order.id,
+          type: InventoryTransactionType.TRANSFER,
+          hubId: currentHubId,
+          tripId: trip.id,
+          tripCode,
+          quantity: allocatedQty,
+          expectedQuantity: allocatedQty,
+          discrepancyQuantity: 0,
+          remainingQuantity: 0,
+          weight: Number(trip.weightAllocated) || Number(order.totalWeight) || 0,
+          volume: Number(trip.volumeAllocated) || Number(order.totalVolume) || 0,
+          licensePlate: trip.licensePlate,
+          driverName: trip.driverName,
+          notes:
+            dto.notes ||
+            `[ĐIỀU CHUYỂN ĐÍCH] Cập nhật đích đến đơn ${order.orderCode} sang ${destHubName || finalDeliveryAddress || 'Giao khách'} (${dto.deliveryMode})`,
+          destination: destHubName || finalDeliveryAddress || '',
+          performedByUserId: user.id,
+        }),
+      );
+
+      return {
+        success: true,
+        tripCode,
+        orderId: order.id,
+        deliveryMode: dto.deliveryMode,
+        destinationHubId: finalDestHubId,
+        destinationHub: destHubName,
+        deliveryAddress: finalDeliveryAddress,
+        order: savedOrder,
+        trip: savedTrip,
+      };
+    });
   }
 }
