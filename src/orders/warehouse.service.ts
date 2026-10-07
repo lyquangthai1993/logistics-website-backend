@@ -1863,10 +1863,10 @@ export class WarehouseService {
         userHubId ?? orders[0].currentHubId ?? orders[0].originHubId ?? null;
       const hasTransferItem = orders.some((order) => {
         const item = dto.items?.find((i) => i.orderId === order.id);
+        if (item?.deliveryMode === 'DIRECT_CUSTOMER') return false;
         const destId =
           item?.destinationHubId ??
-          dto.destinationHubId ??
-          order.destinationHubId;
+          (dto.mode === OutboundMode.TRANSFER ? dto.destinationHubId : null);
         return destId && destId !== actingOriginId;
       });
       const isTransfer = dto.mode === OutboundMode.TRANSFER || hasTransferItem;
@@ -1957,12 +1957,27 @@ export class WarehouseService {
           order.status = 'INBOUND'; // Còn tồn kho, giữ LƯU KHO để xuất đợt tiếp theo
         }
 
-        const itemDestHubId =
-          item?.destinationHubId ??
-          (dto.destinationHubId && dto.destinationHubId !== actingHubId
-            ? dto.destinationHubId
-            : null);
-        if (itemDestHubId && itemDestHubId !== actingHubId) {
+        const isLineDirectCustomer =
+          item?.deliveryMode === 'DIRECT_CUSTOMER' ||
+          (!item?.destinationHubId &&
+            item?.deliveryMode !== 'HUB_L1' &&
+            item?.deliveryMode !== 'XE_BO' &&
+            dto.mode !== OutboundMode.TRANSFER);
+
+        const itemDestHubId = isLineDirectCustomer
+          ? null
+          : (item?.destinationHubId ??
+            (dto.mode === OutboundMode.TRANSFER &&
+            dto.destinationHubId &&
+            dto.destinationHubId !== actingHubId
+              ? dto.destinationHubId
+              : null));
+
+        if (
+          !isLineDirectCustomer &&
+          itemDestHubId &&
+          itemDestHubId !== actingHubId
+        ) {
           order.destinationHubId = itemDestHubId;
           const destHub = await hubRepo.findOne({
             where: { id: itemDestHubId },
@@ -1970,9 +1985,25 @@ export class WarehouseService {
           if (destHub) {
             order.destinationHub = destHub.name;
           }
+        } else if (isLineDirectCustomer) {
+          order.destinationHubId = null;
+          order.destinationHubEntity = null;
+          if (item?.deliveryAddress) {
+            order.destinationHub = item.deliveryAddress;
+          } else if (order.deliveryAddress) {
+            order.destinationHub = order.deliveryAddress;
+          } else if (order.province) {
+            order.destinationHub = order.province;
+          } else {
+            order.destinationHub = null;
+          }
         }
 
-        if (isTransfer) {
+        const isTransferLine =
+          !isLineDirectCustomer &&
+          (!!itemDestHubId || dto.mode === OutboundMode.TRANSFER);
+
+        if (isTransferLine) {
           order.currentTripCode = tripCode;
         }
         if (hubStockAfter === 0 && order.currentHubId === actingHubId) {
@@ -1997,19 +2028,18 @@ export class WarehouseService {
         );
 
         const orderTargetHubName =
-          order.destinationHub || destHubName || 'Kho đích';
-        const tripNotes = isTransfer
+          !isLineDirectCustomer && (order.destinationHub || destHubName)
+            ? order.destinationHub || destHubName
+            : 'Khách nhận';
+        const tripNotes = isTransferLine
           ? `[XUẤT KHO - LUÂN CHUYỂN] Xuất ${qtyToExport} kiện đến ${orderTargetHubName}`
           : `[XUẤT KHO - GIAO KHÁCH] Xuất ${qtyToExport} kiện giao khách`;
 
-        const tripDestHubId =
-          itemDestHubId && itemDestHubId !== actingHubId
+        const tripDestHubId = isLineDirectCustomer
+          ? null
+          : itemDestHubId && itemDestHubId !== actingHubId
             ? itemDestHubId
-            : primaryTargetHubId && primaryTargetHubId !== actingHubId
-              ? primaryTargetHubId
-              : order.destinationHubId && order.destinationHubId !== actingHubId
-                ? order.destinationHubId
-                : null;
+            : null;
 
         createdTrip = await tripRepo.save(
           tripRepo.create({
@@ -2017,11 +2047,7 @@ export class WarehouseService {
             tripCode,
             originHubId: actingHubId,
             destinationHubId: tripDestHubId,
-            type: tripDestHubId
-              ? 'TRANSFER'
-              : isTransfer
-                ? 'TRANSFER'
-                : 'OUTBOUND',
+            type: isTransferLine ? 'TRANSFER' : 'OUTBOUND',
             licensePlate: dto.licensePlate || 'Xe xuất kho',
             driverName: dto.driverName || 'Tài xế giao hàng',
             status: 'IN_TRANSIT',
@@ -2036,7 +2062,7 @@ export class WarehouseService {
         await txRepo.save(
           txRepo.create({
             orderId: order.id,
-            type: isTransfer
+            type: isTransferLine
               ? InventoryTransactionType.TRANSFER
               : InventoryTransactionType.OUTBOUND,
             invoiceCode,
@@ -2051,11 +2077,11 @@ export class WarehouseService {
             volume,
             licensePlate: dto.licensePlate || null,
             driverName: dto.driverName || null,
-            destination: isTransfer
+            destination: isTransferLine
               ? orderTargetHubName
               : order.destinationHub || order.province || 'Giao khách',
             performedByUserId: user.id,
-            notes: isTransfer
+            notes: isTransferLine
               ? `Xuất ${qtyToExport} kiện luân chuyển đến ${orderTargetHubName} trên chuyến ${tripCode}`
               : `Xuất ${qtyToExport} kiện giao khách trên chuyến ${tripCode}`,
           }),
@@ -2082,9 +2108,15 @@ export class WarehouseService {
         const targets = Array.from(
           new Set(
             [
-              dto.destinationHubId ?? null,
-              ...(dto.items?.map((i) => i.destinationHubId) ?? []),
-              ...saved.map((o) => o.destinationHubId),
+              dto.mode === OutboundMode.TRANSFER
+                ? (dto.destinationHubId ?? null)
+                : null,
+              ...(dto.items
+                ?.filter((i) => i.deliveryMode !== 'DIRECT_CUSTOMER')
+                .map((i) => i.destinationHubId) ?? []),
+              ...saved
+                .filter((o) => !!o.destinationHubId)
+                .map((o) => o.destinationHubId),
             ].filter((h): h is number => !!h && h !== originHubId),
           ),
         );
@@ -2229,11 +2261,22 @@ export class WarehouseService {
           );
         }
 
-        const destHubId =
-          item?.destinationHubId ?? dto.destinationHubId ?? null;
+        const isLineDirectCustomer =
+          item?.deliveryMode === 'DIRECT_CUSTOMER' ||
+          (!item?.destinationHubId &&
+            item?.deliveryMode !== 'HUB_L1' &&
+            item?.deliveryMode !== 'XE_BO' &&
+            !isTransferMode);
+
+        const destHubId = isLineDirectCustomer
+          ? null
+          : (item?.destinationHubId ??
+            (isTransferMode ? dto.destinationHubId : null) ??
+            null);
         const tripDestHubId =
           destHubId && destHubId !== actingHubId ? destHubId : null;
-        const isTransferLine = isTransferMode || !!tripDestHubId;
+        const isTransferLine =
+          !isLineDirectCustomer && (isTransferMode || !!tripDestHubId);
 
         await tripRepo.save(
           tripRepo.create({
@@ -2271,6 +2314,32 @@ export class WarehouseService {
             stopType: TripStopType.ORIGIN,
             stopSequence: 1,
             userId: user.id,
+          },
+          manager,
+        );
+      }
+
+      const draftTargets = Array.from(
+        new Set(
+          [
+            ...(dto.items
+              ?.filter((i) => i.deliveryMode !== 'DIRECT_CUSTOMER')
+              .map((i) => i.destinationHubId) ?? []),
+            isTransferMode ? (dto.destinationHubId ?? null) : null,
+          ].filter((h): h is number => !!h && h !== actingOriginId),
+        ),
+      );
+      for (let i = 0; i < draftTargets.length; i++) {
+        await this.ledgerService.upsertTripStop(
+          {
+            tripCode,
+            hubId: draftTargets[i],
+            status: TripStopStatus.PENDING,
+            stopType:
+              i === draftTargets.length - 1
+                ? TripStopType.DESTINATION
+                : TripStopType.TRANSIT,
+            stopSequence: i + 2,
           },
           manager,
         );
@@ -3038,7 +3107,6 @@ export class WarehouseService {
        ORDER BY ts."stopSequence" ASC, ts.id ASC`,
       [code],
     );
-    const stopHubIds = new Set<number>(stops.map((s) => Number(s.hubId)));
 
     const sums: any[] = await this.dataSource.query(
       `SELECT "orderId", "type", "hubId", COALESCE(SUM("quantity"), 0)::int AS "qty"
@@ -3064,7 +3132,11 @@ export class WarehouseService {
         const o = t.order;
         const mine = sums.filter((s) => Number(s.orderId) === o.id);
         const loaded = mine
-          .filter((s) => s.type === InventoryTransactionType.TRANSFER)
+          .filter(
+            (s) =>
+              s.type === InventoryTransactionType.TRANSFER ||
+              s.type === InventoryTransactionType.OUTBOUND,
+          )
           .reduce((a, s) => a + Number(s.qty), 0);
         const receivedAll = mine
           .filter((s) => s.type === InventoryTransactionType.INBOUND)
@@ -3079,16 +3151,82 @@ export class WarehouseService {
               .reduce((a, s) => a + Number(s.qty), 0)
           : 0;
         const expectedQuantity =
-          loaded > 0 ? loaded : Number(o.totalQuantity) || 0;
+          loaded > 0
+            ? loaded
+            : Number(t.quantityAllocated) > 0
+              ? Number(t.quantityAllocated)
+              : Number(o.totalQuantity) || 0;
         const inTransitQuantity =
           loaded > 0 ? Math.max(0, loaded - receivedAll) : 0;
 
-        let isForCurrentHub = true;
+        let pickupAddress = o.originHub || '';
+        let deliveryAddress = '';
+        if (o.route && o.route.includes('→')) {
+          const parts = o.route.split('→');
+          if (!pickupAddress || pickupAddress === 'Hub')
+            pickupAddress = parts[0]?.trim() || '';
+          deliveryAddress = parts[1]?.trim() || '';
+        }
+
+        const resolvedOriginHub = o.originHub || o.originHubEntity?.name || '';
+        let resolvedDestHub =
+          o.destinationHub || o.destinationHubEntity?.name || '';
+
+        let originalDeliveryAddress = '';
+        if (o.route && o.route.includes('→')) {
+          const parts = o.route.split('→');
+          originalDeliveryAddress = parts[1]?.trim() || '';
+        } else {
+          originalDeliveryAddress =
+            deliveryAddress || resolvedDestHub || o.province || '';
+        }
+
+        const rawDestHubId =
+          t.destinationHubId !== undefined && t.destinationHubId !== null
+            ? t.destinationHubId
+            : o.destinationHubId !== undefined && o.destinationHubId !== null
+              ? o.destinationHubId
+              : null;
+
+        let deliveryMode: 'DIRECT_CUSTOMER' | 'HUB_L1' | 'XE_BO' =
+          'DIRECT_CUSTOMER';
+        const destEntity = o.destinationHubEntity;
+
+        if (
+          t.type === 'OUTBOUND' ||
+          t.notes?.includes('[XUẤT KHO - GIAO KHÁCH]') ||
+          t.notes?.includes('[NHÁP XUẤT KHO - GIAO KHÁCH]') ||
+          (!rawDestHubId && !destEntity)
+        ) {
+          deliveryMode = 'DIRECT_CUSTOMER';
+        } else if (
+          destEntity?.level === 2 ||
+          destEntity?.code?.startsWith('HUB-BO-') ||
+          (o.destinationHub &&
+            (o.destinationHub.toLowerCase().includes('xe bo') ||
+              o.destinationHub.toLowerCase().includes('hub-bo')))
+        ) {
+          deliveryMode = 'XE_BO';
+        } else if (
+          destEntity?.level === 1 ||
+          (rawDestHubId && rawDestHubId > 0)
+        ) {
+          deliveryMode = 'HUB_L1';
+        } else {
+          deliveryMode = 'DIRECT_CUSTOMER';
+        }
+
+        const effectiveDestHubId =
+          deliveryMode === 'DIRECT_CUSTOMER' ? null : rawDestHubId;
+
+        // isForCurrentHub: Zero-Assumption principle
+        // DIRECT_CUSTOMER: hàng trên xe giao thẳng khách, KHÔNG dỡ vào kho trung chuyển viewerHubId
+        let isForCurrentHub = false;
         if (viewerHubId) {
-          if (o.destinationHubId) {
-            isForCurrentHub =
-              o.destinationHubId === viewerHubId ||
-              !stopHubIds.has(o.destinationHubId);
+          if (deliveryMode === 'DIRECT_CUSTOMER') {
+            isForCurrentHub = false;
+          } else if (effectiveDestHubId) {
+            isForCurrentHub = effectiveDestHubId === viewerHubId;
           } else if (o.destinationHub) {
             const destLower = o.destinationHub.trim().toLowerCase();
             // Support logistics abbreviations: ĐN = Đà Nẵng, HY = Hưng Yên, HCM = TP. Hồ Chí Minh
@@ -3108,62 +3246,14 @@ export class WarehouseService {
               destLower.includes('sài gòn');
 
             // Standard hub IDs: 1 = HCM, 2 = Đà Nẵng, 3 = Hưng Yên
-            if (isDestDaNang && viewerHubId !== 2) {
-              isForCurrentHub = false;
-            } else if (isDestHungYen && viewerHubId !== 3) {
-              isForCurrentHub = false;
-            } else if (isDestHcm && viewerHubId !== 1) {
-              isForCurrentHub = false;
+            if (isDestDaNang && viewerHubId === 2) {
+              isForCurrentHub = true;
+            } else if (isDestHungYen && viewerHubId === 3) {
+              isForCurrentHub = true;
+            } else if (isDestHcm && viewerHubId === 1) {
+              isForCurrentHub = true;
             }
           }
-        }
-
-        let pickupAddress = o.originHub || '';
-        let deliveryAddress = '';
-        if (o.route && o.route.includes('→')) {
-          const parts = o.route.split('→');
-          if (!pickupAddress || pickupAddress === 'Hub')
-            pickupAddress = parts[0]?.trim() || '';
-          deliveryAddress = parts[1]?.trim() || '';
-        }
-
-        const resolvedOriginHub = o.originHub || o.originHubEntity?.name || '';
-        const resolvedDestHub =
-          o.destinationHub || o.destinationHubEntity?.name || '';
-
-        let originalDeliveryAddress = '';
-        if (o.route && o.route.includes('→')) {
-          const parts = o.route.split('→');
-          originalDeliveryAddress = parts[1]?.trim() || '';
-        } else {
-          originalDeliveryAddress = deliveryAddress || resolvedDestHub || '';
-        }
-
-        const effectiveDestHubId =
-          t.destinationHubId !== undefined && t.destinationHubId !== null
-            ? t.destinationHubId
-            : o.destinationHubId !== undefined && o.destinationHubId !== null
-              ? o.destinationHubId
-              : null;
-
-        let deliveryMode: 'DIRECT_CUSTOMER' | 'HUB_L1' | 'XE_BO' = 'DIRECT_CUSTOMER';
-        const destEntity = o.destinationHubEntity;
-        if (
-          destEntity?.level === 2 ||
-          destEntity?.code?.startsWith('HUB-BO-') ||
-          (o.destinationHub &&
-            (o.destinationHub.toLowerCase().includes('xe bo') ||
-              o.destinationHub.toLowerCase().includes('hub-bo')))
-        ) {
-          deliveryMode = 'XE_BO';
-        } else if (
-          destEntity?.level === 1 ||
-          (effectiveDestHubId && effectiveDestHubId > 0) ||
-          destEntity
-        ) {
-          deliveryMode = 'HUB_L1';
-        } else {
-          deliveryMode = 'DIRECT_CUSTOMER';
         }
 
         let resolvedDestEntity: any = null;
@@ -3185,6 +3275,12 @@ export class WarehouseService {
               city: null,
             };
           }
+        }
+
+        if (deliveryMode === 'DIRECT_CUSTOMER') {
+          deliveryAddress =
+            deliveryAddress || originalDeliveryAddress || resolvedDestHub || '';
+          resolvedDestHub = deliveryAddress || 'Giao thẳng khách';
         }
 
         const view = hubView.get(o.id);
@@ -3675,7 +3771,8 @@ export class WarehouseService {
 
       let destHubName: string | null = null;
       let finalDestHubId: number | null = null;
-      let finalDeliveryAddress: string | null = dto.deliveryAddress?.trim() || null;
+      let finalDeliveryAddress: string | null =
+        dto.deliveryAddress?.trim() || null;
 
       if (
         dto.deliveryMode === DeliveryModeEnum.HUB_L1 ||
@@ -3725,7 +3822,8 @@ export class WarehouseService {
             where: { tripCode, deletedAt: IsNull() },
             order: { stopSequence: 'DESC' },
           });
-          const nextSeq = (maxStop?.stopSequence ? Number(maxStop.stopSequence) : 1) + 1;
+          const nextSeq =
+            (maxStop?.stopSequence ? Number(maxStop.stopSequence) : 1) + 1;
           const newStop = txTripStopRepo.create({
             tripCode,
             hubId: hub.id,
@@ -3742,9 +3840,11 @@ export class WarehouseService {
 
         order.destinationHubId = null;
         order.destinationHubEntity = null;
-        order.destinationHub = null;
+        order.destinationHub = finalDeliveryAddress || null;
         trip.destinationHubId = null;
         trip.destinationHub = null as any;
+        trip.type = 'OUTBOUND';
+        trip.notes = `[XUẤT KHO - GIAO KHÁCH] Giao thẳng khách tại ${finalDeliveryAddress || 'địa chỉ khách'}`;
 
         if (finalDeliveryAddress) {
           if (order.route && order.route.includes('→')) {
@@ -3760,26 +3860,28 @@ export class WarehouseService {
 
       await txOrderRepo.update(order.id, {
         destinationHubId: finalDestHubId,
-        destinationHub: destHubName,
+        destinationHub: order.destinationHub,
         route: order.route,
       });
       await txTripRepo.update(trip.id, {
         destinationHubId: finalDestHubId,
+        type: trip.type,
+        notes: trip.notes,
       });
 
-      const savedOrder = await txOrderRepo.findOne({
-        where: { id: order.id },
-        relations: ['originHubEntity', 'destinationHubEntity'],
-      }) || order;
-      const savedTrip = await txTripRepo.findOne({
-        where: { id: trip.id },
-      }) || trip;
+      const savedOrder =
+        (await txOrderRepo.findOne({
+          where: { id: order.id },
+          relations: ['originHubEntity', 'destinationHubEntity'],
+        })) || order;
+      const savedTrip =
+        (await txTripRepo.findOne({
+          where: { id: trip.id },
+        })) || trip;
 
       // Ghi nhận nhật ký giao dịch kho (Inventory Transaction Audit)
       const currentHubId =
         (await this.resolveUserHubId(user)) ?? trip.originHubId ?? 2;
-      const userWithHub = await this.loadUserWithHub(user);
-      const currentHubName = userWithHub.hub?.name || 'Hub';
       const allocatedQty =
         Number(trip.quantityAllocated) ||
         Number(order.remainingQuantity) ||
@@ -3797,8 +3899,10 @@ export class WarehouseService {
           expectedQuantity: allocatedQty,
           discrepancyQuantity: 0,
           remainingQuantity: 0,
-          weight: Number(trip.weightAllocated) || Number(order.totalWeight) || 0,
-          volume: Number(trip.volumeAllocated) || Number(order.totalVolume) || 0,
+          weight:
+            Number(trip.weightAllocated) || Number(order.totalWeight) || 0,
+          volume:
+            Number(trip.volumeAllocated) || Number(order.totalVolume) || 0,
           licensePlate: trip.licensePlate,
           driverName: trip.driverName,
           notes:

@@ -1,6 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  ArrayMinSize,
   IsArray,
   IsEnum,
   IsInt,
@@ -20,7 +19,10 @@ export class OutboundItemDto {
   @IsInt()
   orderId: number;
 
-  @ApiPropertyOptional({ example: 10, description: 'Số kiện xuất trong đợt này' })
+  @ApiPropertyOptional({
+    example: 10,
+    description: 'Số kiện xuất trong đợt này',
+  })
   @IsOptional()
   @IsInt()
   @IsPositive()
@@ -34,18 +36,27 @@ export class OutboundItemDto {
   @IsOptional()
   volumeToExport?: number;
 
-  @ApiPropertyOptional({ example: 2, description: 'ID Hub nhận trung chuyển của đơn này' })
+  @ApiPropertyOptional({
+    example: 2,
+    description:
+      'ID Hub nhận trung chuyển của đơn này (null nếu giao thẳng khách DIRECT_CUSTOMER)',
+  })
   @IsOptional()
   @IsInt()
   @IsPositive()
   destinationHubId?: number;
 
-  @ApiPropertyOptional({ example: 'HUB_L1' })
+  @ApiPropertyOptional({
+    example: 'DIRECT_CUSTOMER',
+    enum: ['DIRECT_CUSTOMER', 'HUB_L1', 'XE_BO'],
+    description:
+      'Hình thức giao hàng: DIRECT_CUSTOMER (giao thẳng khách), HUB_L1 (chuyển Hub cấp 1), XE_BO (chuyển tuyến xe bo)',
+  })
   @IsOptional()
   @IsString()
-  deliveryMode?: string;
+  deliveryMode?: 'DIRECT_CUSTOMER' | 'HUB_L1' | 'XE_BO' | string;
 
-  @ApiPropertyOptional({ example: 'Kho Hưng Yên' })
+  @ApiPropertyOptional({ example: 'Kho Hưng Yên hoặc địa chỉ khách' })
   @IsOptional()
   @IsString()
   deliveryAddress?: string;
@@ -105,7 +116,10 @@ export class ConfirmOutboundDto {
   @IsString()
   driverName?: string;
 
-  @ApiPropertyOptional({ example: '2026-10-05', description: 'Ngày xuất (YYYY-MM-DD)' })
+  @ApiPropertyOptional({
+    example: '2026-10-05',
+    description: 'Ngày xuất (YYYY-MM-DD)',
+  })
   @IsOptional()
   @IsString()
   dispatchDate?: string;
