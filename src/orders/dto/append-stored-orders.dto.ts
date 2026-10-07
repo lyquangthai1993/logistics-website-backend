@@ -30,6 +30,14 @@ export class AppendStoredOrdersDto {
   destinationHubId?: number;
 
   @ApiPropertyOptional({
+    description: 'ID kho xuất của tài khoản đang thao tác (tùy chọn)',
+    example: 2,
+  })
+  @IsOptional()
+  @IsInt({ message: 'ID kho xuất phải là số nguyên' })
+  hubId?: number;
+
+  @ApiPropertyOptional({
     description: 'Ghi chú xuất kho bổ sung',
     example: 'Xuất thêm từ kho lên xe đi tiếp',
   })

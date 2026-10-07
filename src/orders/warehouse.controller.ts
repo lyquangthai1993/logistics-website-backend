@@ -215,11 +215,22 @@ export class WarehouseController {
       'Lấy danh sách các đơn hàng đang lưu tại kho sẵn sàng xuất lên chuyến xe',
   })
   @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
+  @ApiQuery({
+    name: 'hubId',
+    required: false,
+    type: Number,
+    description: 'ID kho xuất của tài khoản đang thao tác',
+  })
   async getAvailableOutboundOrders(
     @Request() req: any,
     @Param('tripCode') tripCode: string,
+    @Query('hubId') hubId?: number,
   ) {
-    return this.warehouseService.getAvailableOutboundOrders(req.user, tripCode);
+    return this.warehouseService.getAvailableOutboundOrders(
+      req.user,
+      tripCode,
+      hubId ? Number(hubId) : undefined,
+    );
   }
 
   @Post('trips/:tripCode/append-stored-orders')

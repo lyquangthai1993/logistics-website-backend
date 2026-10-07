@@ -14,6 +14,7 @@ import {
   IsNull,
   EntityManager,
   SelectQueryBuilder,
+  Brackets,
 } from 'typeorm';
 import { OrderEntity } from './infrastructure/persistence/relational/entities/order.entity';
 import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
@@ -3180,6 +3181,7 @@ export class WarehouseService {
   async getAvailableOutboundOrders(
     user: UserEntity,
     tripCodeParam: string,
+    queryHubId?: number,
   ): Promise<{
     tripCode: string;
     currentHubId: number | null;
@@ -3189,8 +3191,24 @@ export class WarehouseService {
   }> {
     const tripCode = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
     const userWithHub = await this.loadUserWithHub(user);
-    let currentHubId = userWithHub.hubId;
+
+    // Ưu tiên 1: queryHubId từ frontend
+    // Ưu tiên 2: userWithHub.hubId của user
+    // Fallback: hubId = 2 (Magellan Hub - Đà Nẵng)
+    let currentHubId =
+      queryHubId && !isNaN(Number(queryHubId))
+        ? Number(queryHubId)
+        : userWithHub.hubId;
     let currentHubName = userWithHub.hub?.name || 'Kho hiện tại';
+
+    if (currentHubId && currentHubId !== userWithHub.hubId) {
+      const hubRepo = this.dataSource.getRepository(HubEntity);
+      const queriedHub = await hubRepo.findOne({ where: { id: currentHubId } });
+      if (queriedHub) {
+        currentHubName = queriedHub.name;
+      }
+    }
+
     if (!currentHubId) {
       currentHubId = 2;
       currentHubName = 'Magellan Hub - Đà Nẵng';
@@ -3198,7 +3216,7 @@ export class WarehouseService {
 
     // Lấy danh sách các điểm dừng của chuyến xe
     const stops: any[] = await this.dataSource.query(
-      `SELECT ts."hubId", h."name" AS "hubName", ts."stopSequence"
+      `SELECT ts."hubId", h."name" AS "hubName", ts."stopSequence", ts."status"
        FROM "trip_stop" ts
        JOIN "hub" h ON h.id = ts."hubId"
        WHERE ts."tripCode" = $1 AND ts."deletedAt" IS NULL
@@ -3206,28 +3224,77 @@ export class WarehouseService {
       [tripCode],
     );
 
-    const currentStop = stops.find((s) => Number(s.hubId) === currentHubId);
-    const currentSeq = currentStop ? Number(currentStop.stopSequence) : 0;
-
-    // Các trạm kế tiếp: sau trạm hiện tại
-    const downstreamStops = stops.filter(
-      (s) =>
-        Number(s.hubId) !== currentHubId &&
-        (!currentStop || Number(s.stopSequence) > currentSeq),
+    // Chuẩn hóa xác định trạm kế tiếp (downstreamHubs):
+    // Lấy mọi trạm khác trạm hiện tại và chưa hoàn tất (status != 'COMPLETED')
+    let downstreamStops = stops.filter(
+      (s) => Number(s.hubId) !== currentHubId && s.status !== 'COMPLETED',
     );
 
-    // Lấy các đơn hàng đang lưu kho tại kho hiện tại
+    // Nếu không có trạm nào chưa hoàn tất, lấy tất cả các trạm khác trạm hiện tại trong stops
+    if (downstreamStops.length === 0) {
+      downstreamStops = stops.filter((s) => Number(s.hubId) !== currentHubId);
+    }
+
+    // Nếu chuyến xe chưa có trạm dừng nào ngoài trạm hiện tại, lấy các Hub cấp 1/2 trên tuyến vận tải để thủ kho chọn linh hoạt
+    if (downstreamStops.length === 0) {
+      const hubRepo = this.dataSource.getRepository(HubEntity);
+      const otherHubs = await hubRepo.find({
+        where: { deletedAt: IsNull() },
+        order: { id: 'ASC' },
+        take: 10,
+      });
+      downstreamStops = otherHubs
+        .filter((h) => h.id !== currentHubId)
+        .map((h, idx) => ({
+          hubId: h.id,
+          hubName: h.name,
+          stopSequence: idx + 1,
+          status: 'PENDING',
+        }));
+    }
+
+    // Lấy các đơn hàng đang lưu kho tại kho hiện tại:
+    // Hỗ trợ cả currentHubId = :currentHubId, originHubId = :currentHubId, hoặc có tồn kho theo sổ cái
+    // Hỗ trợ status IN ('IN_WAREHOUSE', 'INBOUND', 'STORED', 'LUU_KHO') hoặc DRAFT/WAITING/PENDING tại originHub
     const orderRepo = this.dataSource.getRepository(OrderEntity);
     const orders = await orderRepo
       .createQueryBuilder('order')
       .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
       .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
       .where('order.deletedAt IS NULL')
-      .andWhere('order.currentHubId = :currentHubId', { currentHubId })
       .andWhere(
-        "order.status IN ('IN_WAREHOUSE', 'INBOUND', 'STORED', 'LUU_KHO')",
+        new Brackets((qb) => {
+          qb.where('order.currentHubId = :currentHubId', { currentHubId })
+            .orWhere(
+              '(order.currentHubId IS NULL AND order.originHubId = :currentHubId)',
+              { currentHubId },
+            )
+            .orWhere(
+              `EXISTS (
+                SELECT 1 FROM order_inventory_transaction tx 
+                WHERE tx."orderId" = order.id 
+                  AND tx."hubId" = :currentHubId 
+                  AND tx."deletedAt" IS NULL
+              )`,
+              { currentHubId },
+            );
+        }),
+      )
+      .andWhere(
+        new Brackets((qb) => {
+          qb.where(
+            "order.status IN ('IN_WAREHOUSE', 'INBOUND', 'STORED', 'LUU_KHO')",
+          ).orWhere(
+            "(order.status IN ('DRAFT', 'WAITING', 'PENDING') AND order.originHubId = :currentHubId)",
+            { currentHubId },
+          );
+        }),
       )
       .andWhere('COALESCE(order.remainingQuantity, order.totalQuantity) > 0')
+      .andWhere(
+        '(order.currentTripCode IS NULL OR order.currentTripCode != :tripCode)',
+        { tripCode },
+      )
       .orderBy('order.id', 'DESC')
       .getMany();
 
@@ -3266,8 +3333,21 @@ export class WarehouseService {
     }
 
     const userWithHub = await this.loadUserWithHub(user);
-    const currentHubId = userWithHub.hubId;
-    const currentHubName = userWithHub.hub?.name || 'Kho hiện tại';
+    let currentHubId = dto.hubId || userWithHub.hubId;
+    let currentHubName = userWithHub.hub?.name || 'Kho hiện tại';
+
+    if (currentHubId && currentHubId !== userWithHub.hubId) {
+      const hubRepo = this.dataSource.getRepository(HubEntity);
+      const queriedHub = await hubRepo.findOne({ where: { id: currentHubId } });
+      if (queriedHub) {
+        currentHubName = queriedHub.name;
+      }
+    }
+
+    if (!currentHubId) {
+      currentHubId = 2;
+      currentHubName = 'Magellan Hub - Đà Nẵng';
+    }
 
     // 1. Tìm thông tin chuyến xe đang có
     const tripRepo = this.dataSource.getRepository(TripEntity);
