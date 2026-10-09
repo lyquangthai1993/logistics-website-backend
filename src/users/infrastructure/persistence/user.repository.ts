@@ -43,4 +43,14 @@ export abstract class UserRepository {
   ): Promise<User | null>;
 
   abstract remove(id: User['id']): Promise<void>;
+
+  abstract restore(id: User['id']): Promise<void>;
+
+  abstract findByEmailWithDeleted(
+    email: User['email'],
+  ): Promise<NullableType<User>>;
+
+  abstract findByUsernameWithDeleted(
+    username: User['username'],
+  ): Promise<NullableType<User>>;
 }

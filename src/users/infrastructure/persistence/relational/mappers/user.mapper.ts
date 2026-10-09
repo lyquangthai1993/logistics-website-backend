@@ -87,6 +87,7 @@ export class UserMapper {
     persistenceEntity.role = role;
     persistenceEntity.status = status;
     persistenceEntity.hub = hub;
+    persistenceEntity.hubId = hub ? hub.id : null;
     persistenceEntity.createdAt = domainEntity.createdAt;
     persistenceEntity.updatedAt = domainEntity.updatedAt;
     persistenceEntity.deletedAt = domainEntity.deletedAt;

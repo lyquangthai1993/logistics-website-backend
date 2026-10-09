@@ -154,6 +154,37 @@ export class UsersService {
       hub = null;
     }
 
+    // Check if account existed but was soft-deleted -> Auto-restore and update
+    const deletedUserByEmail = createUserDto.email
+      ? await this.usersRepository.findByEmailWithDeleted(createUserDto.email)
+      : null;
+    const deletedUserByUsername = createUserDto.username
+      ? await this.usersRepository.findByUsernameWithDeleted(
+          createUserDto.username,
+        )
+      : null;
+    const softDeletedUser =
+      (deletedUserByEmail?.deletedAt ? deletedUserByEmail : null) ||
+      (deletedUserByUsername?.deletedAt ? deletedUserByUsername : null);
+
+    if (softDeletedUser) {
+      await this.usersRepository.restore(softDeletedUser.id);
+      const updated = await this.usersRepository.update(softDeletedUser.id, {
+        username: username ?? undefined,
+        email: email ?? undefined,
+        password: password ?? undefined,
+        firstName: createUserDto.firstName,
+        lastName: createUserDto.lastName,
+        photo,
+        role,
+        status,
+        hub,
+        provider: createUserDto.provider ?? AuthProvidersEnum.email,
+        socialId: createUserDto.socialId,
+      });
+      return updated!;
+    }
+
     return this.usersRepository.create({
       // Do not remove comment below.
       // <creating-property-payload />

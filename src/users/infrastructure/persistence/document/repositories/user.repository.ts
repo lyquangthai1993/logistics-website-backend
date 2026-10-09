@@ -140,4 +140,20 @@ export class UsersDocumentRepository implements UserRepository {
       _id: id.toString(),
     });
   }
+
+  async restore(id: User['id']): Promise<void> {
+    // Document database stub
+  }
+
+  async findByEmailWithDeleted(
+    email: User['email'],
+  ): Promise<NullableType<User>> {
+    return this.findByEmail(email);
+  }
+
+  async findByUsernameWithDeleted(
+    username: User['username'],
+  ): Promise<NullableType<User>> {
+    return this.findByUsername(username);
+  }
 }
