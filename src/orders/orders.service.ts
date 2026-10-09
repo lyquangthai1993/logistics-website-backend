@@ -176,6 +176,8 @@ export class OrdersService {
 
     const qb = this.orderRepository
       .createQueryBuilder('order')
+      .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+      .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
       .leftJoinAndSelect('order.trips', 'trips')
       .leftJoinAndSelect('trips.vehicle', 'vehicle')
       .leftJoinAndSelect('trips.driver', 'driver')

@@ -3367,6 +3367,14 @@ export class WarehouseService {
               city: null,
             };
           }
+        } else if (destEntity) {
+          resolvedDestEntity = {
+            id: destEntity.id,
+            name: destEntity.name,
+            code: destEntity.code,
+            level: destEntity.level ?? 1,
+            city: destEntity.city,
+          };
         }
 
         if (deliveryMode === 'DIRECT_CUSTOMER') {
