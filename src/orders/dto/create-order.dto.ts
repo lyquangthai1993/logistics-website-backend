@@ -57,7 +57,7 @@ export class CreateOrderDto {
   @ApiPropertyOptional({
     example: 3000,
     description:
-      'Tổng số lượng kiện/cái (không bắt buộc, để trống nếu là hàng xá/lô gom chung)',
+      'Tổng số lượng hàng hóa (thùng, kiện, bao, pallet... Không bắt buộc, để trống nếu là hàng xá/lô gom chung)',
   })
   @IsOptional()
   @IsNumber()
@@ -70,7 +70,7 @@ export class CreateOrderDto {
   @Min(0)
   totalWeight: number;
 
-  @ApiProperty({ example: 45.2, description: 'Tổng thể tích (m³)' })
+  @ApiProperty({ example: 45.2, description: 'Tổng thể tích (CBM - m³)' })
   @IsNotEmpty()
   @IsNumber()
   @Min(0)

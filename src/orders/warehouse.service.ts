@@ -51,7 +51,13 @@ import {
 } from './dto/update-trip-order-destination.dto';
 
 export interface WarehouseOrdersResult {
-  data: OrderEntity[];
+  data: Array<
+    OrderEntity & {
+      inboundDate?: string | null;
+      outboundDate?: string | null;
+      [key: string]: any;
+    }
+  >;
   meta: {
     total: number;
     page: number;
@@ -459,6 +465,59 @@ export class WarehouseService {
         deliveryAddr = parts[1]?.trim() || '';
       }
       const view = hubView.get(item.id);
+      const effectiveStatus = view?.hubStatus ?? item.status;
+      const effectiveStock =
+        view?.hubStock !== undefined && view?.hubStock !== null
+          ? view.hubStock
+          : item.remainingQuantity !== undefined && item.remainingQuantity !== null
+            ? item.remainingQuantity
+            : null;
+
+      const txs = (item.inventoryTransactions as any[]) || [];
+      const hubTxs = userHubId
+        ? txs.filter((t) => !t.hubId || Number(t.hubId) === Number(userHubId))
+        : txs;
+
+      const inboundTxs = hubTxs
+        .filter((t) => t.type === InventoryTransactionType.INBOUND)
+        .sort(
+          (a, b) =>
+            new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        );
+      const inboundDate =
+        inboundTxs.length > 0 ? inboundTxs[0].createdAt : item.createdAt;
+
+      // RÀNG BUỘC SỐNG CÒN: Khi đơn ở trạng thái Lưu kho / Đơn nháp hoặc còn tồn kho > 0,
+      // outboundDate BẮT BUỘC để trống (null)
+      const isStoredOrDraft =
+        STORED_STATUSES.includes(effectiveStatus) ||
+        effectiveStatus === 'DRAFT' ||
+        WAITING_STATUSES.includes(effectiveStatus) ||
+        (effectiveStock !== null && Number(effectiveStock) > 0);
+
+      let outboundDate: Date | string | null = null;
+      if (!isStoredOrDraft) {
+        const outboundTxs = hubTxs
+          .filter(
+            (t) =>
+              t.type === InventoryTransactionType.OUTBOUND ||
+              t.type === InventoryTransactionType.TRANSFER,
+          )
+          .sort(
+            (a, b) =>
+              new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+          );
+        if (outboundTxs.length > 0) {
+          outboundDate = outboundTxs[0].createdAt;
+        } else if (
+          item.status === 'COMPLETED_INBOUND' ||
+          item.status === 'DISPATCHED' ||
+          effectiveStatus === 'COMPLETED_INBOUND'
+        ) {
+          outboundDate = item.updatedAt || null;
+        }
+      }
+
       return {
         ...item,
         pickupAddress: pickupAddr || item.originHubEntity?.name || '',
@@ -468,10 +527,12 @@ export class WarehouseService {
           item.destinationHubEntity?.name ||
           '',
         /** Status seen from the viewer's hub (falls back to global status). */
-        hubStatus: view?.hubStatus ?? item.status,
+        hubStatus: effectiveStatus,
         /** Available stock at the viewer's hub (ledger based); null without hub context. */
         hubStock: view ? view.hubStock : null,
         isContractLocked: !DRAFT_LIKE_STATUSES.includes(item.status),
+        inboundDate: inboundDate ? new Date(inboundDate).toISOString() : null,
+        outboundDate: outboundDate ? new Date(outboundDate).toISOString() : null,
       };
     });
   }
@@ -652,6 +713,29 @@ export class WarehouseService {
       };
     });
 
+    const isStoredOrDraftGroup =
+      STORED_STATUSES.includes(hubStatus) ||
+      hubStatus === 'DRAFT' ||
+      WAITING_STATUSES.includes(hubStatus) ||
+      (normalizedHubStock !== null && normalizedHubStock > 0);
+
+    const validInboundDates = normalizedItems
+      .map((it) => it.inboundDate)
+      .filter(Boolean)
+      .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+    const groupInboundDate =
+      validInboundDates.length > 0 ? validInboundDates[0] : first.createdAt;
+
+    let groupOutboundDate: string | null = null;
+    if (!isStoredOrDraftGroup) {
+      const validOutboundDates = normalizedItems
+        .map((it) => it.outboundDate)
+        .filter(Boolean)
+        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+      groupOutboundDate =
+        validOutboundDates.length > 0 ? validOutboundDates[0] : null;
+    }
+
     return {
       ...first,
       orderCode,
@@ -671,6 +755,12 @@ export class WarehouseService {
       trips,
       lineCount: items.length,
       items: normalizedItems,
+      inboundDate: groupInboundDate
+        ? new Date(groupInboundDate).toISOString()
+        : null,
+      outboundDate: groupOutboundDate
+        ? new Date(groupOutboundDate).toISOString()
+        : null,
     };
   }
 
@@ -1264,7 +1354,7 @@ export class WarehouseService {
           tripCode,
           originHubId,
           destinationHubId,
-          type: 'TRANSFER',
+          type: isHubOutbound ? 'TRANSFER' : 'INBOUND',
           licensePlate,
           driverName,
           status: 'IN_TRANSIT',
@@ -1279,11 +1369,13 @@ export class WarehouseService {
       );
       savedOrder.trips = [...(savedOrder.trips || []), savedTrip];
 
-      // 6. Ghi nhận giao dịch luân chuyển (TRANSFER) bốc lên xe
+      // 6. Ghi nhận giao dịch luân chuyển (TRANSFER) bốc lên xe hoặc nhận tại Hub (INBOUND)
       await txRepo.save(
         txRepo.create({
           orderId: savedOrder.id,
-          type: InventoryTransactionType.TRANSFER,
+          type: isHubOutbound
+            ? InventoryTransactionType.TRANSFER
+            : InventoryTransactionType.INBOUND,
           hubId: isHubOutbound ? originHubId : null,
           tripId: savedTrip.id,
           tripCode,
@@ -3321,7 +3413,8 @@ export class WarehouseService {
       pickupDate: first.pickupDate || null,
       isTransfer:
         stops.length > 1 ||
-        sums.some((s) => s.type === InventoryTransactionType.TRANSFER),
+        sums.some((s) => s.type === InventoryTransactionType.TRANSFER) ||
+        trips.some((t) => t.type === 'TRANSFER'),
       stops: stops.map((s) => ({
         hubId: Number(s.hubId),
         hubName: s.hubName,

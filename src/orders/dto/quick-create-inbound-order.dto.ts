@@ -33,10 +33,10 @@ export class InboundOrderItemDto {
   @IsString()
   goodsDescription?: string;
 
-  @ApiPropertyOptional({ example: 50, description: 'Số thùng / số kiện' })
+  @ApiPropertyOptional({ example: 50, description: 'Số lượng hàng hóa (thùng, kiện, bao, pallet...)' })
   @IsOptional()
-  @IsInt({ message: 'Số thùng/kiện phải là số nguyên' })
-  @Min(1, { message: 'Số thùng/kiện phải lớn hơn hoặc bằng 1' })
+  @IsInt({ message: 'Số lượng phải là số nguyên' })
+  @Min(1, { message: 'Số lượng phải lớn hơn hoặc bằng 1' })
   totalQuantity?: number;
 
   @ApiPropertyOptional({ example: 1250, description: 'Số kg (Gross Weight)' })
@@ -45,10 +45,10 @@ export class InboundOrderItemDto {
   @Min(0, { message: 'Số kg phải lớn hơn hoặc bằng 0' })
   totalWeight?: number;
 
-  @ApiPropertyOptional({ example: 4.5, description: 'Số khối (m³ / CBM)' })
+  @ApiPropertyOptional({ example: 4.5, description: 'Thể tích (CBM - m³)' })
   @IsOptional()
-  @IsNumber({}, { message: 'Số khối m³ phải là số' })
-  @Min(0, { message: 'Số khối phải lớn hơn hoặc bằng 0' })
+  @IsNumber({}, { message: 'Thể tích CBM phải là số' })
+  @Min(0, { message: 'Thể tích CBM phải lớn hơn hoặc bằng 0' })
   totalVolume?: number;
 
   @ApiPropertyOptional({ example: 'KCN Thăng Long II, Hưng Yên' })

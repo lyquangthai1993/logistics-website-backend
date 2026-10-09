@@ -55,7 +55,7 @@ export class WarehouseController {
   )
   @ApiOperation({
     summary:
-      'Tra cứu & danh sách hàng hóa trong kho (Freetext + Status + Pagination)',
+      'Tra cứu & danh sách hàng hóa trong kho (Freetext + Status + Pagination, tách cột Số lượng, Khối lượng kg, Thể tích CBM)',
   })
   @ApiQuery({
     name: 'flow',

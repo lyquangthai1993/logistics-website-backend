@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 
 import { FindOptionsWhere, Repository, In } from 'typeorm';
@@ -19,10 +19,20 @@ export class UsersRelationalRepository implements UserRepository {
 
   async create(data: User): Promise<User> {
     const persistenceModel = UserMapper.toPersistence(data);
-    const newEntity = await this.usersRepository.save(
-      this.usersRepository.create(persistenceModel),
-    );
-    return UserMapper.toDomain(newEntity);
+    try {
+      const newEntity = await this.usersRepository.save(
+        this.usersRepository.create(persistenceModel),
+      );
+      const reloaded = await this.findById(newEntity.id);
+      return reloaded ?? UserMapper.toDomain(newEntity);
+    } catch (error: any) {
+      if (error?.code === '23505') {
+        throw new ConflictException(
+          'Email hoặc Tên đăng nhập này đã được sử dụng trên hệ thống. Vui lòng kiểm tra lại.',
+        );
+      }
+      throw error;
+    }
   }
 
   async findManyWithPagination({
@@ -144,5 +154,31 @@ export class UsersRelationalRepository implements UserRepository {
 
   async remove(id: User['id']): Promise<void> {
     await this.usersRepository.softDelete(id);
+  }
+
+  async restore(id: User['id']): Promise<void> {
+    await this.usersRepository.restore(id);
+  }
+
+  async findByEmailWithDeleted(
+    email: User['email'],
+  ): Promise<NullableType<User>> {
+    if (!email) return null;
+    const entity = await this.usersRepository.findOne({
+      where: { email },
+      withDeleted: true,
+    });
+    return entity ? UserMapper.toDomain(entity) : null;
+  }
+
+  async findByUsernameWithDeleted(
+    username: User['username'],
+  ): Promise<NullableType<User>> {
+    if (!username) return null;
+    const entity = await this.usersRepository.findOne({
+      where: { username },
+      withDeleted: true,
+    });
+    return entity ? UserMapper.toDomain(entity) : null;
   }
 }
