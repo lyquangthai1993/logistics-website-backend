@@ -296,23 +296,6 @@ export class WarehouseService {
 
     // Status Filter (Standard Uppercase Enum Keys) — applied on the hub-scoped status
     const applyStatusFilter = (q: SelectQueryBuilder<OrderEntity>) => {
-      if (
-        isExport &&
-        (!query?.status ||
-          query.status.toUpperCase() === 'ALL' ||
-          query.status.toUpperCase() === 'INBOUND' ||
-          query.status.toUpperCase() === 'STORED' ||
-          query.status.toUpperCase() === 'LUU_KHO' ||
-          query.status.toUpperCase() === 'IN_WAREHOUSE')
-      ) {
-        q.andWhere(`${statusExpr} IN (${sqlList(STORED_STATUSES)})`);
-        if (useHubContext) {
-          q.andWhere(`${this.ledgerService.hubStockSql()} > 0`);
-        } else {
-          q.andWhere('COALESCE(order.remainingQuantity, 0) > 0');
-        }
-        return q;
-      }
       if (isAllStatus) return q;
       const statusUpper = query.status!.toUpperCase();
       switch (statusUpper) {
