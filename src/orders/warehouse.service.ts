@@ -206,11 +206,20 @@ export class WarehouseService {
       ids?: string;
       /** `orderCode`: one row per order code with aggregated metrics (Đơn hàng kho). */
       groupBy?: string;
+      /** Export mode flag: bypasses the 100-row pagination limit to extract all stored orders. */
+      isExport?: string | boolean;
     },
   ): Promise<WarehouseOrdersResult> {
-    const page = Math.max(1, Number(query?.page) || 1);
-    const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
-    const skip = (page - 1) * limit;
+    const isExport =
+      query?.isExport === true ||
+      query?.isExport === 'true' ||
+      query?.isExport === '1';
+
+    const page = isExport ? 1 : Math.max(1, Number(query?.page) || 1);
+    const limit = isExport
+      ? Math.max(1, Number(query?.limit) || 5000)
+      : Math.max(1, Math.min(100, Number(query?.limit) || 20));
+    const skip = isExport ? 0 : (page - 1) * limit;
 
     const { userHubId, useHubContext } = await this.resolveHubContext(user);
     const statusExpr = useHubContext
@@ -287,12 +296,30 @@ export class WarehouseService {
 
     // Status Filter (Standard Uppercase Enum Keys) — applied on the hub-scoped status
     const applyStatusFilter = (q: SelectQueryBuilder<OrderEntity>) => {
+      if (
+        isExport &&
+        (!query?.status ||
+          query.status.toUpperCase() === 'ALL' ||
+          query.status.toUpperCase() === 'INBOUND' ||
+          query.status.toUpperCase() === 'STORED' ||
+          query.status.toUpperCase() === 'LUU_KHO' ||
+          query.status.toUpperCase() === 'IN_WAREHOUSE')
+      ) {
+        q.andWhere(`${statusExpr} IN (${sqlList(STORED_STATUSES)})`);
+        if (useHubContext) {
+          q.andWhere(`${this.ledgerService.hubStockSql()} > 0`);
+        } else {
+          q.andWhere('COALESCE(order.remainingQuantity, 0) > 0');
+        }
+        return q;
+      }
       if (isAllStatus) return q;
       const statusUpper = query.status!.toUpperCase();
       switch (statusUpper) {
         case 'INBOUND':
         case 'STORED':
         case 'IN_WAREHOUSE':
+        case 'LUU_KHO':
           q.andWhere(`${statusExpr} IN (${sqlList(STORED_STATUSES)})`);
           if (useHubContext) {
             q.andWhere(`${this.ledgerService.hubStockSql()} > 0`);
@@ -337,6 +364,7 @@ export class WarehouseService {
         .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
         .leftJoinAndSelect('order.trips', 'trips')
         .leftJoinAndSelect('trips.originHub', 'tripOriginHub')
+        .leftJoinAndSelect('trips.destinationHub', 'tripDestinationHub')
         .leftJoinAndSelect(
           'order.inventoryTransactions',
           'inventoryTransactions',
@@ -469,7 +497,8 @@ export class WarehouseService {
       const effectiveStock =
         view?.hubStock !== undefined && view?.hubStock !== null
           ? view.hubStock
-          : item.remainingQuantity !== undefined && item.remainingQuantity !== null
+          : item.remainingQuantity !== undefined &&
+              item.remainingQuantity !== null
             ? item.remainingQuantity
             : null;
 
@@ -532,7 +561,9 @@ export class WarehouseService {
         hubStock: view ? view.hubStock : null,
         isContractLocked: !DRAFT_LIKE_STATUSES.includes(item.status),
         inboundDate: inboundDate ? new Date(inboundDate).toISOString() : null,
-        outboundDate: outboundDate ? new Date(outboundDate).toISOString() : null,
+        outboundDate: outboundDate
+          ? new Date(outboundDate).toISOString()
+          : null,
       };
     });
   }

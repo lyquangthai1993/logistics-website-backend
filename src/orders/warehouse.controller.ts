@@ -68,6 +68,13 @@ export class WarehouseController {
     description: 'Danh sách id đơn, phân tách dấu phẩy',
   })
   @ApiQuery({ name: 'groupBy', required: false, enum: ['orderCode'] })
+  @ApiQuery({
+    name: 'isExport',
+    required: false,
+    type: Boolean,
+    description:
+      'Chế độ trích xuất toàn bộ dữ liệu đơn hàng lưu kho (bỏ qua giới hạn phân trang 100)',
+  })
   async getOrders(
     @Request() req: any,
     @Query('search') search?: string,
@@ -79,6 +86,7 @@ export class WarehouseController {
     @Query('toDate') toDate?: string,
     @Query('ids') ids?: string,
     @Query('groupBy') groupBy?: string,
+    @Query('isExport') isExport?: string | boolean,
   ) {
     return this.warehouseService.getOrders(req.user, {
       search,
@@ -90,6 +98,7 @@ export class WarehouseController {
       toDate,
       ids,
       groupBy,
+      isExport,
     });
   }
 
