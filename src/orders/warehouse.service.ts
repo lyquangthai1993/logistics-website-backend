@@ -69,6 +69,7 @@ export interface WarehouseOrdersResult {
     allCount?: number;
     storedCount?: number;
     draftCount?: number;
+    dispatchedCount?: number;
     inboundTotal?: number;
     outboundTotal?: number;
   };
@@ -393,6 +394,10 @@ export class WarehouseService {
       (hs, stock) => STORED_STATUSES.includes(hs) && stock > 0,
     );
     const draftCount = bucketCount((hs) => WAITING_STATUSES.includes(hs));
+    const dispatchedCount = bucketCount(
+      (hs) =>
+        DISPATCHED_STATUSES.includes(hs) || hs === 'COMPLETED_INBOUND',
+    );
 
     if (groupByOrderCode) {
       return this.getOrdersGroupedByCode({
@@ -405,7 +410,7 @@ export class WarehouseService {
         skip,
         userHubId,
         useHubContext,
-        counts: { allCount, storedCount, draftCount },
+        counts: { allCount, storedCount, draftCount, dispatchedCount },
       });
     }
 
@@ -447,6 +452,7 @@ export class WarehouseService {
         allCount,
         storedCount,
         draftCount,
+        dispatchedCount,
       },
     };
   }
@@ -569,7 +575,12 @@ export class WarehouseService {
     skip: number;
     userHubId: number | null;
     useHubContext: boolean;
-    counts: { allCount: number; storedCount: number; draftCount: number };
+    counts: {
+      allCount: number;
+      storedCount: number;
+      draftCount: number;
+      dispatchedCount?: number;
+    };
   }): Promise<WarehouseOrdersResult> {
     const groupQb = this.orderRepository
       .createQueryBuilder('order')
