@@ -1,4 +1,4 @@
-name: Railway Backend Deployment
+name: Railway Backend Deployment Pipeline
 
 on:
   push:
@@ -23,13 +23,73 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  # -------------------------------------------------------------
+  # STAGE 1: PREFLIGHT & ENVIRONMENT CONFIGURATION
+  # -------------------------------------------------------------
+  stage-1-preflight:
+    name: "🔍 1. Chuẩn bị Môi trường & Token"
+    runs-on: ubuntu-latest
+    outputs:
+      env_name: ${{ steps.setup.outputs.env_name }}
+      target_url: ${{ steps.setup.outputs.target_url }}
+    steps:
+      - name: Setup Environment Variables
+        id: setup
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.environment }}" != "auto" ]; then
+            ENV_NAME="${{ inputs.environment }}"
+          elif [ "${{ github.ref_name }}" = "master" ] || [ "${{ github.ref_name }}" = "main" ]; then
+            ENV_NAME="production"
+          else
+            ENV_NAME="dev"
+          fi
+
+          if [ "$ENV_NAME" = "production" ]; then
+            TARGET_URL="https://backend-tms-core-production.up.railway.app/api/v1/health"
+          else
+            TARGET_URL="https://backend-tms-core-dev.up.railway.app/api/v1/health"
+          fi
+
+          echo "env_name=$ENV_NAME" >> $GITHUB_OUTPUT
+          echo "target_url=$TARGET_URL" >> $GITHUB_OUTPUT
+          echo "🎯 Target Environment: $ENV_NAME"
+          echo "🌐 Health Endpoint: $TARGET_URL"
+
+  # -------------------------------------------------------------
+  # STAGE 2: BUILD VERIFICATION & COMPILATION
+  # -------------------------------------------------------------
+  stage-2-quality-gate:
+    name: "🧪 2. Kiểm tra Biên dịch NestJS"
+    needs: stage-1-preflight
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci --prefer-offline
+
+      - name: Run NestJS Build Verification
+        run: npm run build
+
+  # -------------------------------------------------------------
+  # STAGE 3: RAILWAY CLOUD DEPLOYMENT
+  # -------------------------------------------------------------
+  stage-3-deploy-cloud:
+    name: "🚀 3. Triển khai Railway Cloud"
+    needs: [stage-1-preflight, stage-2-quality-gate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -37,41 +97,58 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Determine Environment & Token
-        id: env-setup
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.environment }}" != "auto" ]; then
-            TARGET_ENV="${{ inputs.environment }}"
-          elif [ "${{ github.ref_name }}" = "master" ] || [ "${{ github.ref_name }}" = "main" ]; then
-            TARGET_ENV="production"
-          else
-            TARGET_ENV="dev"
-          fi
-          echo "env_name=$TARGET_ENV" >> $GITHUB_OUTPUT
-
-      - name: Deploy Backend to Railway
+      - name: Deploy Backend Container
         env:
-          RAILWAY_TOKEN: ${{ steps.env-setup.outputs.env_name == 'production' && secrets.RAILWAY_PROD_TOKEN || secrets.RAILWAY_DEV_TOKEN }}
+          RAILWAY_TOKEN: ${{ needs.stage-1-preflight.outputs.env_name == 'production' && secrets.RAILWAY_PROD_TOKEN || secrets.RAILWAY_DEV_TOKEN }}
         run: |
-          echo "🚀 Deploying backend-tms-core to ${{ steps.env-setup.outputs.env_name }}..."
-          railway up --service backend-tms-core --environment "${{ steps.env-setup.outputs.env_name }}"
+          echo "🚀 Bắt đầu triển khai backend-tms-core lên ${{ needs.stage-1-preflight.outputs.env_name }}..."
+          railway up --service backend-tms-core --environment "${{ needs.stage-1-preflight.outputs.env_name }}"
 
-      - name: Verify Backend Deployment Health
+  # -------------------------------------------------------------
+  # STAGE 4: LIVE HEALTH CHECK
+  # -------------------------------------------------------------
+  stage-4-health-check:
+    name: "🌐 4. Kiểm tra Live API Health"
+    needs: [stage-1-preflight, stage-3-deploy-cloud]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe API Health Endpoint
         run: |
-          if [ "${{ steps.env-setup.outputs.env_name }}" = "production" ]; then
-            TARGET_URL="https://backend-tms-core-production.up.railway.app/api/v1/health"
-          else
-            TARGET_URL="https://backend-tms-core-dev.up.railway.app/api/v1/health"
-          fi
-          echo "🔍 Verifying backend health at $TARGET_URL..."
+          TARGET_URL="${{ needs.stage-1-preflight.outputs.target_url }}"
+          echo "🔍 Kiểm tra phản hồi trực tiếp từ $TARGET_URL..."
           for i in {1..12}; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" -m 10 "$TARGET_URL" || true)
-            echo "Attempt $i: HTTP Status $STATUS"
+            echo "Lần thử $i/12: HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then
-              echo "✅ Backend is healthy and responding with HTTP 200!"
+              echo "✅ Backend API đã LIVE và phản hồi HTTP 200 OK!"
               exit 0
             fi
             sleep 10
           done
-          echo "⚠️ Health check timed out after 120s"
+          echo "❌ Quá thời gian chờ phản hồi từ health endpoint ($TARGET_URL)"
           exit 1
+
+  # -------------------------------------------------------------
+  # STAGE 5: DEPLOYMENT REPORT & AUDIT SUMMARY
+  # -------------------------------------------------------------
+  stage-5-summary:
+    name: "📋 5. Tổng kết Deployment"
+    needs: [stage-1-preflight, stage-2-quality-gate, stage-3-deploy-cloud, stage-4-health-check]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate GitHub Step Summary
+        run: |
+          STATUS="${{ needs.stage-4-health-check.result == 'success' && '🟢 HOÀN TẤT & LIVE' || '🔴 THẤT BẠI' }}"
+          cat << EOF >> $GITHUB_STEP_SUMMARY
+          # 🚀 Báo Cáo Triển Khai Backend TMS Core
+          | Hạng mục | Chi tiết |
+          |---|---|
+          | **Trạng thái** | $STATUS |
+          | **Môi trường** | \`${{ needs.stage-1-preflight.outputs.env_name }}\` |
+          | **Dịch vụ** | \`backend-tms-core\` (NestJS 11) |
+          | **Health API** | \`${{ needs.stage-1-preflight.outputs.target_url }}\` |
+          | **Commit SHA** | \`${{ github.sha }}\` |
+          | **Nhánh Git** | \`${{ github.ref_name }}\` |
+          | **Runtime** | Node.js 22 LTS |
+          EOF
