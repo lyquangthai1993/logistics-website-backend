@@ -32,7 +32,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
@@ -54,4 +54,24 @@ jobs:
           RAILWAY_TOKEN: ${{ steps.env-setup.outputs.env_name == 'production' && secrets.RAILWAY_PROD_TOKEN || secrets.RAILWAY_DEV_TOKEN }}
         run: |
           echo "🚀 Deploying backend-tms-core to ${{ steps.env-setup.outputs.env_name }}..."
-          railway up --service backend-tms-core --environment "${{ steps.env-setup.outputs.env_name }}" --detach
+          railway up --service backend-tms-core --environment "${{ steps.env-setup.outputs.env_name }}"
+
+      - name: Verify Backend Deployment Health
+        run: |
+          if [ "${{ steps.env-setup.outputs.env_name }}" = "production" ]; then
+            TARGET_URL="https://backend-tms-core-production.up.railway.app/api/v1/health"
+          else
+            TARGET_URL="https://backend-tms-core-dev.up.railway.app/api/v1/health"
+          fi
+          echo "🔍 Verifying backend health at $TARGET_URL..."
+          for i in {1..12}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" -m 10 "$TARGET_URL" || true)
+            echo "Attempt $i: HTTP Status $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Backend is healthy and responding with HTTP 200!"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "⚠️ Health check timed out after 120s"
+          exit 1
