@@ -56,11 +56,33 @@ jobs:
           echo "🌐 Health Endpoint: $TARGET_URL"
 
   # -------------------------------------------------------------
-  # STAGE 2: RAILWAY CLOUD DEPLOYMENT
+  # STAGE 2: BUILD VERIFICATION & COMPILATION
   # -------------------------------------------------------------
-  stage-2-deploy-cloud:
-    name: "🚀 2. Triển khai Railway Cloud"
+  stage-2-quality-gate:
+    name: "🧪 2. Kiểm tra Biên dịch NestJS"
     needs: stage-1-preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: npm ci --prefer-offline
+
+      - name: Run NestJS Build Verification
+        run: npm run build
+
+  # -------------------------------------------------------------
+  # STAGE 3: RAILWAY CLOUD DEPLOYMENT
+  # -------------------------------------------------------------
+  stage-3-deploy-cloud:
+    name: "🚀 3. Triển khai Railway Cloud"
+    needs: [stage-1-preflight, stage-2-quality-gate]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -82,11 +104,11 @@ jobs:
           railway up --service backend-tms-core --environment "${{ needs.stage-1-preflight.outputs.env_name }}"
 
   # -------------------------------------------------------------
-  # STAGE 3: LIVE HEALTH CHECK
+  # STAGE 4: LIVE HEALTH CHECK
   # -------------------------------------------------------------
-  stage-3-health-check:
-    name: "🌐 3. Kiểm tra Live API Health"
-    needs: [stage-1-preflight, stage-2-deploy-cloud]
+  stage-4-health-check:
+    name: "🌐 4. Kiểm tra Live API Health"
+    needs: [stage-1-preflight, stage-3-deploy-cloud]
     runs-on: ubuntu-latest
     steps:
       - name: Probe API Health Endpoint
@@ -106,17 +128,17 @@ jobs:
           exit 1
 
   # -------------------------------------------------------------
-  # STAGE 4: DEPLOYMENT REPORT & AUDIT SUMMARY
+  # STAGE 5: DEPLOYMENT REPORT & AUDIT SUMMARY
   # -------------------------------------------------------------
-  stage-4-summary:
-    name: "📋 4. Tổng kết Deployment"
-    needs: [stage-1-preflight, stage-2-deploy-cloud, stage-3-health-check]
+  stage-5-summary:
+    name: "📋 5. Tổng kết Deployment"
+    needs: [stage-1-preflight, stage-2-quality-gate, stage-3-deploy-cloud, stage-4-health-check]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Generate GitHub Step Summary
         run: |
-          STATUS="${{ needs.stage-3-health-check.result == 'success' && '🟢 HOÀN TẤT & LIVE' || '🔴 THẤT BẠI' }}"
+          STATUS="${{ needs.stage-4-health-check.result == 'success' && '🟢 HOÀN TẤT & LIVE' || '🔴 THẤT BẠI' }}"
           cat << EOF >> $GITHUB_STEP_SUMMARY
           # 🚀 Báo Cáo Triển Khai Backend TMS Core
           | Hạng mục | Chi tiết |
