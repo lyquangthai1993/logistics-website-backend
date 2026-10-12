@@ -1,0 +1,57 @@
+name: Railway Backend Deployment
+
+on:
+  push:
+    branches:
+      - dev
+      - master
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target Environment'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - dev
+          - production
+
+concurrency:
+  group: railway-backend-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Determine Environment & Token
+        id: env-setup
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.environment }}" != "auto" ]; then
+            TARGET_ENV="${{ inputs.environment }}"
+          elif [ "${{ github.ref_name }}" = "master" ] || [ "${{ github.ref_name }}" = "main" ]; then
+            TARGET_ENV="production"
+          else
+            TARGET_ENV="dev"
+          fi
+          echo "env_name=$TARGET_ENV" >> $GITHUB_OUTPUT
+
+      - name: Deploy Backend to Railway
+        env:
+          RAILWAY_TOKEN: ${{ steps.env-setup.outputs.env_name == 'production' && secrets.RAILWAY_PROD_TOKEN || secrets.RAILWAY_DEV_TOKEN }}
+        run: |
+          echo "🚀 Deploying backend-tms-core to ${{ steps.env-setup.outputs.env_name }}..."
+          railway up --service backend-tms-core --environment "${{ steps.env-setup.outputs.env_name }}" --detach
