@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -968,6 +969,65 @@ export class WarehouseService {
   }
 
   /**
+   * Kiểm tra quyền chỉnh sửa hoặc thao tác trên chuyến xe theo trạng thái trạm dừng.
+   * Nếu trạm dừng tại Hub đang thao tác đã ở trạng thái COMPLETED:
+   * - Tài khoản thuộc Hub (Non-admin) bị cấm (ném ForbiddenException).
+   * - Tài khoản SUPER_ADMIN được phép can thiệp đặc quyền.
+   */
+  async validateTripStopEditPermission(
+    user: UserEntity,
+    tripCode: string,
+    targetHubId?: number,
+    actionName: string = 'thao tác',
+  ): Promise<{ isCompleted: boolean; isAdmin: boolean }> {
+    const userWithHub = await this.userRepository.findOne({
+      where: { id: user.id },
+      relations: ['hub', 'role'],
+    });
+    const roleId = Number(
+      userWithHub?.role?.id ?? user.role?.id ?? (user.role as any),
+    );
+    const roleName =
+      userWithHub?.role?.name ||
+      (typeof user.role === 'string' ? user.role : (user.role as any)?.name) ||
+      '';
+    const isAdmin =
+      roleId === RoleEnum.SUPER_ADMIN ||
+      roleName === 'SUPER_ADMIN' ||
+      (user.role as any) === 'SUPER_ADMIN';
+
+    const operatingHubId =
+      targetHubId ?? userWithHub?.hubId ?? user.hubId ?? null;
+    const normTripCode = normalizeTripCode(tripCode);
+
+    if (normTripCode && operatingHubId) {
+      const tripStopRepo = this.dataSource.getRepository(TripStopEntity);
+      const stop = await tripStopRepo.findOne({
+        where: { tripCode: normTripCode, hubId: operatingHubId },
+        relations: ['hub'],
+      });
+
+      if (stop && stop.status === TripStopStatus.COMPLETED) {
+        if (!isAdmin) {
+          const hubName =
+            stop.hub?.name ||
+            userWithHub?.hub?.name ||
+            `Hub #${operatingHubId}`;
+          throw new ForbiddenException(
+            `Chuyến xe ${normTripCode} đã ở trạng thái Đã xử lý tại trạm ${hubName}. Tài khoản của Hub không có quyền ${actionName}. Chỉ tài khoản Quản trị viên (Admin) mới có quyền chỉnh sửa khi chuyến xe đã xử lý.`,
+          );
+        }
+        this.logger.log(
+          `[ADMIN OVERRIDE] Quản trị viên ${user.id} (${user.email || 'Admin'}) thực hiện ${actionName} trên chuyến xe ${normTripCode} đã xử lý tại trạm ${stop.hub?.name || operatingHubId}`,
+        );
+        return { isCompleted: true, isAdmin: true };
+      }
+    }
+
+    return { isCompleted: false, isAdmin };
+  }
+
+  /**
    * Quick create inbound order row from warehouse.
    * Generates code atomically via OrderCodeService, sets status = 'INBOUND' (LƯU KHO).
    * Creates the Master Contract + (when not a draft) the first Inbound Receipt invoice.
@@ -1368,6 +1428,13 @@ export class WarehouseService {
       currentOperatingHubName = 'Magellan Hub - Đà Nẵng';
     }
 
+    await this.validateTripStopEditPermission(
+      user,
+      tripCode,
+      currentOperatingHubId,
+      'bốc thêm đơn hàng',
+    );
+
     return this.dataSource.transaction(async (manager) => {
       const tripRepo = manager.getRepository(TripEntity);
       const orderRepo = manager.getRepository(OrderEntity);
@@ -1705,6 +1772,15 @@ export class WarehouseService {
       if (!sharedTripCode && tripId) {
         const trip = await tripRepo.findOne({ where: { id: tripId } });
         sharedTripCode = normalizeTripCode(trip?.tripCode);
+      }
+
+      if (sharedTripCode) {
+        await this.validateTripStopEditPermission(
+          user,
+          sharedTripCode,
+          hubId ?? undefined,
+          'xác nhận dỡ hàng và nhập kho',
+        );
       }
 
       const savedOrders: OrderEntity[] = [];
@@ -3597,6 +3673,28 @@ export class WarehouseService {
       ? stops.find((s) => Number(s.hubId) === viewerHubId)
       : undefined;
 
+    const userWithHub = await this.userRepository.findOne({
+      where: { id: user.id },
+      relations: ['hub', 'role'],
+    });
+    const roleId = Number(
+      userWithHub?.role?.id ?? user.role?.id ?? (user.role as any),
+    );
+    const roleName =
+      userWithHub?.role?.name ||
+      (typeof user.role === 'string' ? user.role : (user.role as any)?.name) ||
+      'WAREHOUSE_MANAGER';
+    const isAdmin =
+      roleId === RoleEnum.SUPER_ADMIN ||
+      roleName === 'SUPER_ADMIN' ||
+      (user.role as any) === 'SUPER_ADMIN';
+
+    const isCurrentHubCompleted =
+      currentStop?.status === TripStopStatus.COMPLETED;
+    const canModifyOrders = !isCurrentHubCompleted || isAdmin;
+    const canAddOrders = !isCurrentHubCompleted || isAdmin;
+    const isReadOnlyForHub = isCurrentHubCompleted && !isAdmin;
+
     return {
       tripCode: first.tripCode || code,
       licensePlate: first.licensePlate || '',
@@ -3617,6 +3715,11 @@ export class WarehouseService {
       currentHubId: viewerHubId,
       /** PENDING = Chờ xử lý, COMPLETED = Đã xử lý, null = chuyến không dừng tại kho này */
       currentHubStatus: currentStop?.status ?? null,
+      isCurrentHubCompleted,
+      canModifyOrders,
+      canAddOrders,
+      isReadOnlyForHub,
+      userRole: roleName,
       lines,
     };
   }
@@ -3794,6 +3897,13 @@ export class WarehouseService {
       currentHubId = 2;
       currentHubName = 'Magellan Hub - Đà Nẵng';
     }
+
+    await this.validateTripStopEditPermission(
+      user,
+      tripCode,
+      currentHubId,
+      'bốc đơn lưu kho lên xe',
+    );
 
     // 1. Tìm thông tin chuyến xe đang có
     const tripRepo = this.dataSource.getRepository(TripEntity);
@@ -3974,6 +4084,13 @@ export class WarehouseService {
       currentHubId = 2;
     }
 
+    await this.validateTripStopEditPermission(
+      user,
+      tripCode,
+      currentHubId,
+      'cập nhật tiến trình trạm chuyến xe',
+    );
+
     const tripStopRepo = this.dataSource.getRepository(TripStopEntity);
     let stop = await tripStopRepo.findOne({
       where: { tripCode, hubId: currentHubId },
@@ -4026,6 +4143,15 @@ export class WarehouseService {
     if (!tripCode) {
       throw new BadRequestException('Mã chuyến xe không hợp lệ');
     }
+
+    const userWithHub = await this.loadUserWithHub(user);
+    const operatingHubId = userWithHub.hubId ?? undefined;
+    const perm = await this.validateTripStopEditPermission(
+      user,
+      tripCode,
+      operatingHubId,
+      'điều chuyển đích đến đơn hàng',
+    );
 
     return await this.dataSource.transaction(async (manager) => {
       const txTripRepo = manager.getRepository(TripEntity);
@@ -4172,10 +4298,14 @@ export class WarehouseService {
         Number(order.totalQuantity) ||
         1;
 
+      const txType = perm.isCompleted
+        ? InventoryTransactionType.ADJUSTMENT
+        : InventoryTransactionType.TRANSFER;
+
       await txInvRepo.save(
         txInvRepo.create({
           orderId: order.id,
-          type: InventoryTransactionType.TRANSFER,
+          type: txType,
           hubId: currentHubId,
           tripId: trip.id,
           tripCode,
@@ -4191,7 +4321,9 @@ export class WarehouseService {
           driverName: trip.driverName,
           notes:
             dto.notes ||
-            `[ĐIỀU CHUYỂN ĐÍCH] Cập nhật đích đến đơn ${order.orderCode} sang ${destHubName || finalDeliveryAddress || 'Giao khách'} (${dto.deliveryMode})`,
+            (perm.isCompleted
+              ? `[ADMIN ĐIỀU CHUYỂN ĐÍCH] Quản trị viên cập nhật đích đến đơn ${order.orderCode} sang ${destHubName || finalDeliveryAddress || 'Giao khách'} (${dto.deliveryMode})`
+              : `[ĐIỀU CHUYỂN ĐÍCH] Cập nhật đích đến đơn ${order.orderCode} sang ${destHubName || finalDeliveryAddress || 'Giao khách'} (${dto.deliveryMode})`),
           destination: destHubName || finalDeliveryAddress || '',
           performedByUserId: user.id,
         }),

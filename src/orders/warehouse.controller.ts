@@ -208,7 +208,7 @@ export class WarehouseController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary:
-      'Bốc thêm đơn hàng vào chuyến xe đang chạy (bốc dọc đường hoặc xuất từ Hub)',
+      'Bốc thêm đơn hàng vào chuyến xe đang chạy (bốc dọc đường hoặc xuất từ Hub). Chỉ khả dụng khi trạm chưa xử lý. Nếu trạm đã Đã xử lý, chỉ SUPER_ADMIN mới có quyền gọi.',
   })
   @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
   async appendOrderToTrip(
@@ -249,7 +249,8 @@ export class WarehouseController {
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Bốc hàng loạt đơn hàng lưu kho sẵn có lên chuyến xe xuất kho',
+    summary:
+      'Bốc hàng loạt đơn hàng lưu kho sẵn có lên chuyến xe xuất kho. Chỉ khả dụng khi trạm chưa xử lý. Nếu trạm đã Đã xử lý, chỉ SUPER_ADMIN mới có quyền gọi.',
   })
   @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
   async appendStoredOrdersToTrip(
@@ -269,7 +270,7 @@ export class WarehouseController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Cập nhật hình thức giao hàng và đích đến cho đơn bốc lên chuyến xe (Giao khách, Hub Cấp 1, Tuyến Xe Bo)',
+      'Cập nhật hình thức giao hàng và đích đến cho đơn bốc lên chuyến xe (Giao khách, Hub Cấp 1, Tuyến Xe Bo). Chỉ khả dụng khi trạm chưa xử lý. Nếu trạm đã Đã xử lý, chỉ SUPER_ADMIN mới có quyền gọi.',
   })
   @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
   @ApiParam({ name: 'orderId', type: Number, example: 101 })
@@ -291,7 +292,8 @@ export class WarehouseController {
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Cập nhật tiến trình trạm trung chuyển (Transit Stop Lifecycle)',
+    summary:
+      'Cập nhật tiến trình trạm trung chuyển (Transit Stop Lifecycle). Nếu trạm đã Đã xử lý, chỉ SUPER_ADMIN mới có quyền can thiệp.',
   })
   @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
   async updateTransitStep(
@@ -334,7 +336,7 @@ export class WarehouseController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Xác nhận dỡ hàng và nhập vào kho (chuyển trạng thái LƯU KHO / INBOUND)',
+      'Xác nhận dỡ hàng và nhập vào kho (chuyển trạng thái LƯU KHO / INBOUND). Khóa thao tác khi trạm đã Đã xử lý trừ SUPER_ADMIN.',
   })
   async confirmInbound(@Request() req: any, @Body() body: any) {
     return this.warehouseService.confirmInbound(req.user, body);
