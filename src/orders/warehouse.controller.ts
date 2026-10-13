@@ -343,6 +343,8 @@ export class WarehouseController {
   @ApiOperation({
     summary:
       'Xác nhận dỡ hàng và nhập vào kho theo từng chuyến xe / biên bản kiểm đếm (chuyển trạng thái LƯU KHO / INBOUND). Khóa thao tác khi trạm đã Đã xử lý trừ SUPER_ADMIN.',
+    description:
+      'Xác nhận dỡ hàng và nhập kho theo từng chuyến xe hoặc biên bản kiểm đếm thực tế (Tally). Yêu cầu kiểm đếm thực nhận và ghi nhận biên bản chênh lệch nếu có. Không hỗ trợ xác nhận hàng loạt tự do ngoài danh sách.',
   })
   async confirmInbound(@Request() req: any, @Body() body: any) {
     return this.warehouseService.confirmInbound(req.user, body);
@@ -354,6 +356,8 @@ export class WarehouseController {
   @ApiOperation({
     summary:
       'Xác nhận xuất kho theo từng chuyến xe (Giao khách hàng hoặc Luân chuyển). Yêu cầu đầy đủ thông tin chuyến xe, biển số, tài xế.',
+    description:
+      'Xác nhận xuất kho theo từng chuyến xe (Giao khách hoặc Luân chuyển liên Hub) sau khi kiểm tra tải trọng, thông tin tài xế và biển số xe. Không hỗ trợ xác nhận hàng loạt ngoài danh sách.',
   })
   async confirmOutbound(@Request() req: any, @Body() dto: ConfirmOutboundDto) {
     return this.warehouseService.confirmOutbound(req.user, dto);
