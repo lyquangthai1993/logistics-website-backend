@@ -3418,13 +3418,16 @@ export class WarehouseService {
    * which lines are to be unloaded here, expected / already received quantities, per-hub stop status.
    * Read-only — never alters data (skipping a line keeps it on the truck for the next hub).
    */
-  async getTripManifest(user: UserEntity, tripCodeParam: string): Promise<any> {
+  async getTripManifest(
+    user: UserEntity,
+    tripCodeParam: string,
+    hubIdParam?: number,
+  ): Promise<any> {
     const code = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
     if (!code) {
       throw new NotFoundException('Không tìm thấy chuyến xe');
     }
     const resolvedUserHubId = await this.resolveUserHubId(user);
-    const viewerHubId = resolvedUserHubId ?? 2;
 
     const baseQb = () =>
       this.tripRepository
@@ -3458,6 +3461,15 @@ export class WarehouseService {
        ORDER BY ts."stopSequence" ASC, ts.id ASC`,
       [code],
     );
+
+    const completedStop = stops.find(
+      (s) => s.status === TripStopStatus.COMPLETED,
+    );
+    const viewerHubId =
+      resolvedUserHubId ??
+      (hubIdParam ? Number(hubIdParam) : null) ??
+      (completedStop ? Number(completedStop.hubId) : null) ??
+      (stops[0] ? Number(stops[0].hubId) : 2);
 
     const sums: any[] = await this.dataSource.query(
       `SELECT "orderId", "type", "hubId", COALESCE(SUM("quantity"), 0)::int AS "qty"

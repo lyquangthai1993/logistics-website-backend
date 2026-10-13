@@ -196,11 +196,17 @@ export class WarehouseController {
       'Bảng kê toàn bộ hàng trên chuyến xe (SD...) theo góc nhìn kho: dòng nhận tại kho, số dự kiến / đã nhận, trạng thái từng trạm',
   })
   @ApiParam({ name: 'tripCode', type: String, example: 'SD12' })
+  @ApiQuery({ name: 'hubId', required: false, type: Number })
   async getTripManifest(
     @Request() req: any,
     @Param('tripCode') tripCode: string,
+    @Query('hubId') hubId?: number,
   ) {
-    return this.warehouseService.getTripManifest(req.user, tripCode);
+    return this.warehouseService.getTripManifest(
+      req.user,
+      tripCode,
+      hubId ? Number(hubId) : undefined,
+    );
   }
 
   @Post('trips/:tripCode/append-order')
