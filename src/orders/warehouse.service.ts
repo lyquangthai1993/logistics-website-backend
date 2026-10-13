@@ -566,6 +566,7 @@ export class WarehouseService {
       let outboundLicensePlate: string | null = null;
       let outboundDriverName: string | null = null;
       let outboundTripDisplay: string | null = null;
+      let outboundDestination: string | null = null;
 
       if (!isStoredOrDraft) {
         const outboundTxs = hubTxs
@@ -583,6 +584,7 @@ export class WarehouseService {
           outboundTripCode = outboundTxs[0].tripCode || null;
           outboundLicensePlate = outboundTxs[0].licensePlate || null;
           outboundDriverName = outboundTxs[0].driverName || null;
+          outboundDestination = outboundTxs[0].destination || null;
         } else if (
           item.status === 'COMPLETED_INBOUND' ||
           item.status === 'DISPATCHED' ||
@@ -595,6 +597,10 @@ export class WarehouseService {
             outboundTripCode = lastTrip.tripCode || null;
             outboundLicensePlate = lastTrip.licensePlate || null;
             outboundDriverName = lastTrip.driverName || null;
+            outboundDestination =
+              lastTrip.destinationHub?.name ||
+              lastTrip.tripDestinationHub?.name ||
+              (lastTrip.notes ? lastTrip.notes.replace(/^\[.*?\]\s*/, '') : null);
           }
         }
 
@@ -624,6 +630,13 @@ export class WarehouseService {
         );
       }
 
+      const originalDestination =
+        item.destinationHub ||
+        item.destinationHubEntity?.name ||
+        deliveryAddr ||
+        item.province ||
+        '';
+
       return {
         ...item,
         pickupAddress: pickupAddr || item.originHubEntity?.name || '',
@@ -632,6 +645,9 @@ export class WarehouseService {
           item.destinationHub ||
           item.destinationHubEntity?.name ||
           '',
+        destinationHub: originalDestination,
+        originalDestination,
+        outboundDestination,
         /** Status seen from the viewer's hub (falls back to global status). */
         hubStatus: effectiveStatus,
         /** Available stock at the viewer's hub (ledger based); null without hub context. */
@@ -911,6 +927,17 @@ export class WarehouseService {
       );
     }
 
+    const groupOriginalDestination =
+      distinctJoin(
+        (it) =>
+          it.originalDestination ||
+          it.destinationHub ||
+          it.destinationHubEntity?.name,
+      ) ||
+      distinctJoin((it) => it.destinationHub || it.destinationHubEntity?.name);
+    const groupOutboundDestination =
+      distinctJoin((it) => it.outboundDestination) || null;
+
     return {
       ...first,
       orderCode,
@@ -924,9 +951,9 @@ export class WarehouseService {
       totalVolume: round3(sum((it) => it.totalVolume)),
       hubStock: normalizedHubStock,
       hubStatus,
-      destinationHub: distinctJoin(
-        (it) => it.destinationHub || it.destinationHubEntity?.name,
-      ),
+      destinationHub: groupOriginalDestination,
+      originalDestination: groupOriginalDestination,
+      outboundDestination: groupOutboundDestination,
       trips,
       lineCount: items.length,
       items: normalizedItems,
@@ -2324,31 +2351,18 @@ export class WarehouseService {
               ? dto.destinationHubId
               : null));
 
-        if (
-          !isLineDirectCustomer &&
-          itemDestHubId &&
-          itemDestHubId !== actingHubId
-        ) {
-          order.destinationHubId = itemDestHubId;
-          const destHub = await hubRepo.findOne({
-            where: { id: itemDestHubId },
-          });
-          if (destHub) {
-            order.destinationHub = destHub.name;
-          }
-        } else if (isLineDirectCustomer) {
-          order.destinationHubId = null;
-          order.destinationHubEntity = null;
-          if (item?.deliveryAddress) {
-            order.destinationHub = item.deliveryAddress;
-          } else if (order.route && order.route.includes('→')) {
-            order.destinationHub = order.route.split('→')[1]?.trim() || null;
-          } else if (order.province) {
-            order.destinationHub = order.province;
-          } else {
-            order.destinationHub = null;
-          }
-        }
+        // Master Contract Destination Invariance (Task 41):
+        // NEVER overwrite order.destinationHub, order.destinationHubId, order.destinationHubEntity, or order.route.
+        // Look up destination hub and delivery address only for trip dispatch and transaction audit.
+        const destHub =
+          !isLineDirectCustomer && itemDestHubId && itemDestHubId !== actingHubId
+            ? await hubRepo.findOne({ where: { id: itemDestHubId } })
+            : null;
+        const destHubName = destHub?.name || null;
+        const outboundDeliveryAddress = item?.deliveryAddress || null;
+        const outboundTargetName = isLineDirectCustomer
+          ? (outboundDeliveryAddress || 'Khách nhận')
+          : (destHubName || order.destinationHub || 'Trạm nhận');
 
         const isTransferLine =
           !isLineDirectCustomer &&
@@ -2378,12 +2392,8 @@ export class WarehouseService {
             ),
         );
 
-        const orderTargetHubName =
-          !isLineDirectCustomer && (order.destinationHub || destHubName)
-            ? order.destinationHub || destHubName
-            : 'Khách nhận';
         const tripNotes = isTransferLine
-          ? `[XUẤT KHO - LUÂN CHUYỂN] Xuất ${qtyToExport} kiện đến ${orderTargetHubName}`
+          ? `[XUẤT KHO - LUÂN CHUYỂN] Xuất ${qtyToExport} kiện đến ${outboundTargetName}`
           : `[XUẤT KHO - GIAO KHÁCH] Xuất ${qtyToExport} kiện giao khách`;
 
         const tripDestHubId = isLineDirectCustomer
@@ -2429,11 +2439,11 @@ export class WarehouseService {
             licensePlate: dto.licensePlate || null,
             driverName: dto.driverName || null,
             destination: isTransferLine
-              ? orderTargetHubName
-              : order.destinationHub || order.province || 'Giao khách',
+              ? outboundTargetName
+              : (outboundDeliveryAddress || order.destinationHub || order.province || 'Giao khách'),
             performedByUserId: user.id,
             notes: isTransferLine
-              ? `Xuất ${qtyToExport} kiện luân chuyển đến ${orderTargetHubName} trên chuyến ${tripCode}`
+              ? `Xuất ${qtyToExport} kiện luân chuyển đến ${outboundTargetName} trên chuyến ${tripCode}`
               : `Xuất ${qtyToExport} kiện giao khách trên chuyến ${tripCode}`,
           }),
         );
@@ -4221,21 +4231,12 @@ export class WarehouseService {
         destHubName = hub.name;
         finalDeliveryAddress = hub.name;
 
-        order.destinationHubId = hub.id;
-        order.destinationHubEntity = hub;
-        order.destinationHub = hub.name;
+        // Master Contract Invariance (Task 41):
+        // Update Trip destination only; NEVER overwrite OrderEntity master contract destination/route
         trip.destinationHubId = hub.id;
         trip.destinationHub = hub;
-
-        // Cập nhật tuyến lộ trình: origin -> hub.name
-        if (order.route && order.route.includes('→')) {
-          const originPart = order.route.split('→')[0]?.trim();
-          order.route = `${originPart} → ${hub.name}`;
-        } else if (order.originHub) {
-          order.route = `${order.originHub} → ${hub.name}`;
-        } else {
-          order.route = `Kho → ${hub.name}`;
-        }
+        trip.type = 'TRANSFER';
+        trip.notes = `[XUẤT KHO - LUÂN CHUYỂN] Chuyển đến ${hub.name}`;
 
         // Tự động đảm bảo TripStopEntity tồn tại trên lộ trình xe nếu Hub đích chưa có trong trạm dừng
         const existingStop = await txTripStopRepo.findOne({
@@ -4262,45 +4263,25 @@ export class WarehouseService {
         finalDestHubId = null;
         destHubName = null;
 
-        order.destinationHubId = null;
-        order.destinationHubEntity = null;
-        order.destinationHub = finalDeliveryAddress || null;
+        // Master Contract Invariance (Task 41):
+        // Update Trip destination only; NEVER overwrite OrderEntity master contract destination/route
         trip.destinationHubId = null;
         trip.destinationHub = null as any;
         trip.type = 'OUTBOUND';
         trip.notes = `[XUẤT KHO - GIAO KHÁCH] Giao thẳng khách tại ${finalDeliveryAddress || 'địa chỉ khách'}`;
-
-        if (finalDeliveryAddress) {
-          if (order.route && order.route.includes('→')) {
-            const originPart = order.route.split('→')[0]?.trim();
-            order.route = `${originPart} → ${finalDeliveryAddress}`;
-          } else if (order.originHub) {
-            order.route = `${order.originHub} → ${finalDeliveryAddress}`;
-          } else {
-            order.route = `Kho → ${finalDeliveryAddress}`;
-          }
-        }
       }
 
-      await txOrderRepo.update(order.id, {
-        destinationHubId: finalDestHubId,
-        destinationHub: order.destinationHub,
-        route: order.route,
-      });
       await txTripRepo.update(trip.id, {
         destinationHubId: finalDestHubId,
         type: trip.type,
         notes: trip.notes,
       });
 
-      const savedOrder =
-        (await txOrderRepo.findOne({
-          where: { id: order.id },
-          relations: ['originHubEntity', 'destinationHubEntity'],
-        })) || order;
+      const savedOrder = order;
       const savedTrip =
         (await txTripRepo.findOne({
           where: { id: trip.id },
+          relations: ['originHub', 'destinationHub'],
         })) || trip;
 
       // Ghi nhận nhật ký giao dịch kho (Inventory Transaction Audit)
