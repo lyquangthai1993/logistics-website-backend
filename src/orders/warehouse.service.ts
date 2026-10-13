@@ -600,7 +600,9 @@ export class WarehouseService {
             outboundDestination =
               lastTrip.destinationHub?.name ||
               lastTrip.tripDestinationHub?.name ||
-              (lastTrip.notes ? lastTrip.notes.replace(/^\[.*?\]\s*/, '') : null);
+              (lastTrip.notes
+                ? lastTrip.notes.replace(/^\[.*?\]\s*/, '')
+                : null);
           }
         }
 
@@ -2249,26 +2251,6 @@ export class WarehouseService {
       });
       const isTransfer = dto.mode === OutboundMode.TRANSFER || hasTransferItem;
 
-      const primaryTargetHubId =
-        dto.destinationHubId ||
-        dto.items?.find(
-          (i) => i.destinationHubId && i.destinationHubId !== actingOriginId,
-        )?.destinationHubId ||
-        orders.find(
-          (o) => o.destinationHubId && o.destinationHubId !== actingOriginId,
-        )?.destinationHubId ||
-        null;
-
-      let destHubName = '';
-      if (isTransfer && primaryTargetHubId) {
-        const destHub = await hubRepo.findOne({
-          where: { id: primaryTargetHubId },
-        });
-        if (destHub) {
-          destHubName = destHub.name;
-        }
-      }
-
       const originHubId = actingOriginId;
       // Confirming a saved draft ("Chờ xử lý"): keep its SD code, drop the planned lines
       const draftCode = normalizeTripCode(dto.draftTripCode);
@@ -2355,14 +2337,16 @@ export class WarehouseService {
         // NEVER overwrite order.destinationHub, order.destinationHubId, order.destinationHubEntity, or order.route.
         // Look up destination hub and delivery address only for trip dispatch and transaction audit.
         const destHub =
-          !isLineDirectCustomer && itemDestHubId && itemDestHubId !== actingHubId
+          !isLineDirectCustomer &&
+          itemDestHubId &&
+          itemDestHubId !== actingHubId
             ? await hubRepo.findOne({ where: { id: itemDestHubId } })
             : null;
         const destHubName = destHub?.name || null;
         const outboundDeliveryAddress = item?.deliveryAddress || null;
         const outboundTargetName = isLineDirectCustomer
-          ? (outboundDeliveryAddress || 'Khách nhận')
-          : (destHubName || order.destinationHub || 'Trạm nhận');
+          ? outboundDeliveryAddress || 'Khách nhận'
+          : destHubName || order.destinationHub || 'Trạm nhận';
 
         const isTransferLine =
           !isLineDirectCustomer &&
@@ -2440,7 +2424,10 @@ export class WarehouseService {
             driverName: dto.driverName || null,
             destination: isTransferLine
               ? outboundTargetName
-              : (outboundDeliveryAddress || order.destinationHub || order.province || 'Giao khách'),
+              : outboundDeliveryAddress ||
+                order.destinationHub ||
+                order.province ||
+                'Giao khách',
             performedByUserId: user.id,
             notes: isTransferLine
               ? `Xuất ${qtyToExport} kiện luân chuyển đến ${outboundTargetName} trên chuyến ${tripCode}`

@@ -5,9 +5,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Restores original Master Contract destination (destinationHub, destinationHubId)
  * for historical orders that were accidentally overwritten by outbound transfer / xe bo / local customer delivery.
  */
-export class RestoreMasterContractDestination1789060000000
-  implements MigrationInterface
-{
+export class RestoreMasterContractDestination1789060000000 implements MigrationInterface {
   name = 'RestoreMasterContractDestination1789060000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -58,7 +56,7 @@ export class RestoreMasterContractDestination1789060000000
     `);
   }
 
-  public async down(queryRunner: QueryRunner): Promise<void> {
+  public async down(): Promise<void> {
     // Non-destructive data healing migration; no down operation required.
   }
 }

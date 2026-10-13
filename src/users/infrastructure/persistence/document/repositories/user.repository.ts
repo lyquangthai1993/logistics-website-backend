@@ -141,8 +141,9 @@ export class UsersDocumentRepository implements UserRepository {
     });
   }
 
-  async restore(id: User['id']): Promise<void> {
-    // Document database stub
+  restore(_id: User['id']): Promise<void> {
+    void _id;
+    return Promise.resolve();
   }
 
   async findByEmailWithDeleted(

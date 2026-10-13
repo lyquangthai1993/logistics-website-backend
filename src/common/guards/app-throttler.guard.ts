@@ -3,7 +3,7 @@ import { ThrottlerGuard } from '@nestjs/throttler';
 
 @Injectable()
 export class AppThrottlerGuard extends ThrottlerGuard {
-  protected async getTracker(req: Record<string, any>): Promise<string> {
+  protected getTracker(req: Record<string, any>): Promise<string> {
     // 1. If user is authenticated via Bearer token, throttle per token/session
     // This prevents all office/warehouse users on the same NAT or proxy from sharing one rate-limit quota.
     const authHeader = req.headers?.authorization;
@@ -12,12 +12,12 @@ export class AppThrottlerGuard extends ThrottlerGuard {
       authHeader.startsWith('Bearer ') &&
       authHeader.length > 20
     ) {
-      return `auth-${authHeader.slice(-32)}`;
+      return Promise.resolve(`auth-${authHeader.slice(-32)}`);
     }
 
     // 2. If req.user is already populated by passport/session
     if (req.user?.id) {
-      return `user-${req.user.id}`;
+      return Promise.resolve(`user-${req.user.id}`);
     }
 
     // 3. Extract real client IP from X-Forwarded-For if behind a reverse proxy (Render, Vercel, Cloudflare)
@@ -29,10 +29,10 @@ export class AppThrottlerGuard extends ThrottlerGuard {
           : Array.isArray(forwarded)
             ? forwarded[0]
             : null;
-      if (clientIp) return clientIp;
+      if (clientIp) return Promise.resolve(clientIp);
     }
 
     // 4. Default to req.ips or req.ip
-    return req.ips?.length ? req.ips[0] : req.ip || 'unknown';
+    return Promise.resolve(req.ips?.length ? req.ips[0] : req.ip || 'unknown');
   }
 }

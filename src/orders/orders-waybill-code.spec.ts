@@ -21,6 +21,7 @@ import { OperationalLedgerService } from './operational-ledger.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { DeliveryDestinationMode } from './dto/quick-create-inbound-order.dto';
+import { AppendOrderMode } from './dto/append-order-to-trip.dto';
 import { RoleEnum } from '../roles/roles.enum';
 
 /**
@@ -33,7 +34,9 @@ const makeRepo = (overrides: Record<string, any> = {}) => ({
   create: jest.fn().mockImplementation((data) => ({ ...data })),
   save: jest
     .fn()
-    .mockImplementation((data) => Promise.resolve({ id: data.id ?? 101, ...data })),
+    .mockImplementation((data) =>
+      Promise.resolve({ id: data.id ?? 101, ...data }),
+    ),
   query: jest.fn().mockResolvedValue([]),
   ...overrides,
 });
@@ -49,7 +52,12 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
   let orderCodeService: { generateOrderCode: jest.Mock };
   let ledgerService: Record<string, jest.Mock>;
 
-  const hub = { id: 1, name: 'Andromeda Hub (Hà Nội)', code: 'HUB-HAN-01', isActive: true };
+  const hub = {
+    id: 1,
+    name: 'Andromeda Hub (Hà Nội)',
+    code: 'HUB-HAN-01',
+    isActive: true,
+  };
 
   const warehouseUser: any = {
     id: 1,
@@ -78,7 +86,9 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
 
   beforeEach(async () => {
     orderRepo = makeRepo();
-    userRepo = makeRepo({ findOne: jest.fn().mockResolvedValue(warehouseUser) });
+    userRepo = makeRepo({
+      findOne: jest.fn().mockResolvedValue(warehouseUser),
+    });
     hubRepo = makeRepo({ findOne: jest.fn().mockResolvedValue(hub) });
     tripRepo = makeRepo();
     txRepo = makeRepo();
@@ -119,6 +129,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
     };
     const dataSource = {
       manager,
+      getRepository: jest.fn((entity: any) => repoByEntity.get(entity)),
       transaction: jest.fn((cb: (m: any) => any) => cb(manager)),
     };
 
@@ -153,8 +164,10 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
   });
 
   describe('OrdersService.checkCodeExists', () => {
-    it('never blocks free-text waybill codes', async () => {
-      expect(await ordersService.checkCodeExists('')).toEqual({ exists: false });
+    it('should never block free-text waybill codes', async () => {
+      expect(await ordersService.checkCodeExists('')).toEqual({
+        exists: false,
+      });
       expect(await ordersService.checkCodeExists('WAYBILL-123')).toEqual({
         exists: false,
       });
@@ -162,17 +175,23 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
   });
 
   describe('WarehouseService.quickCreateInboundOrder', () => {
-    it('keeps a custom orderCode and issues SD trip code + PNK invoice', async () => {
-      const result = await warehouseService.quickCreateInboundOrder(warehouseUser, {
-        ...baseDto,
-        orderCode: 'CUSTOM-WAYBILL-001',
-      });
+    it('should keep a custom orderCode and issues SD trip code + PNK invoice', async () => {
+      const result = await warehouseService.quickCreateInboundOrder(
+        warehouseUser,
+        {
+          ...baseDto,
+          orderCode: 'CUSTOM-WAYBILL-001',
+        },
+      );
 
       expect(result.orderCode).toBe('CUSTOM-WAYBILL-001');
       expect(orderCodeService.generateOrderCode).not.toHaveBeenCalled();
       expect(ledgerService.generateTripCode).toHaveBeenCalled();
       expect(tripRepo.create).toHaveBeenCalledWith(
-        expect.objectContaining({ tripCode: 'SD7', licensePlate: '29C-123.45' }),
+        expect.objectContaining({
+          tripCode: 'SD7',
+          licensePlate: '29C-123.45',
+        }),
       );
       expect(txRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -186,7 +205,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       expect(result.currentHubId).toBe(1);
     });
 
-    it('auto-generates the order code when omitted', async () => {
+    it('should auto-generate the order code when omitted', async () => {
       const result = await warehouseService.quickCreateInboundOrder(
         warehouseUser,
         baseDto,
@@ -195,7 +214,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       expect(result.orderCode).toBe('HAN-OP-2609-099');
     });
 
-    it('does not write an inbound invoice for drafts', async () => {
+    it('should not write an inbound invoice for drafts', async () => {
       await warehouseService.quickCreateInboundOrder(warehouseUser, {
         ...baseDto,
         initialStatus: 'DRAFT',
@@ -205,7 +224,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
   });
 
   describe('WarehouseService.appendOrderToTrip', () => {
-    it('appends an en-route cargo order to an existing tripCode with TRANSFER ledger', async () => {
+    it('should append an en-route cargo order to an existing tripCode with TRANSFER ledger', async () => {
       tripRepo.find.mockResolvedValue([
         {
           id: 50,
@@ -216,16 +235,24 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
           destinationHubId: 2,
         },
       ]);
-      hubRepo.findOne.mockResolvedValue({ id: 2, name: 'Polaris Hub - Hưng Yên' });
-
-      const result = await warehouseService.appendOrderToTrip(warehouseUser, 'SD10', {
-        goodsDescription: 'Hạt nhựa công nghiệp',
-        totalQuantity: 30,
-        totalWeight: 600,
-        totalVolume: 3,
-        destinationHubId: 2,
-        notes: 'Bốc thêm dọc đường tại Đà Nẵng',
+      hubRepo.findOne.mockResolvedValue({
+        id: 2,
+        name: 'Polaris Hub - Hưng Yên',
       });
+
+      const result = await warehouseService.appendOrderToTrip(
+        warehouseUser,
+        'SD10',
+        {
+          appendMode: AppendOrderMode.HUB_OUTBOUND,
+          goodsDescription: 'Hạt nhựa công nghiệp',
+          totalQuantity: 30,
+          totalWeight: 600,
+          totalVolume: 3,
+          destinationHubId: 2,
+          notes: 'Bốc thêm dọc đường tại Đà Nẵng',
+        },
+      );
 
       expect(result.tripCode).toBe('SD10');
       expect(orderRepo.create).toHaveBeenCalledWith(
@@ -273,7 +300,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       isExternalVehicleNeeded: false,
     };
 
-    it('rejects contract changes once the order left DRAFT', async () => {
+    it('should reject contract changes once the order left DRAFT', async () => {
       orderRepo.findOne.mockResolvedValue({ ...lockedOrder });
       await expect(
         ordersService.update(5, { totalQuantity: 15 } as any),
@@ -281,7 +308,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       expect(orderRepo.save).not.toHaveBeenCalled();
     });
 
-    it('accepts re-sent unchanged contract values', async () => {
+    it('should accept re-sent unchanged contract values', async () => {
       orderRepo.findOne.mockResolvedValue({ ...lockedOrder });
       await ordersService.update(5, {
         totalQuantity: '20',
@@ -291,7 +318,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       expect(orderRepo.save).toHaveBeenCalled();
     });
 
-    it('allows contract changes while DRAFT', async () => {
+    it('should allow contract changes while DRAFT', async () => {
       orderRepo.findOne.mockResolvedValue({ ...lockedOrder, status: 'DRAFT' });
       await ordersService.update(5, { totalQuantity: 15 } as any);
       expect(orderRepo.save).toHaveBeenCalledWith(
@@ -299,7 +326,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       );
     });
 
-    it('admin override is SUPER_ADMIN only', async () => {
+    it('should restrict admin override to SUPER_ADMIN only', async () => {
       await expect(
         ordersService.adminOverride(
           5,
@@ -309,7 +336,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('admin override writes an ADJUSTMENT invoice with the audit reason', async () => {
+    it('should write an ADJUSTMENT invoice with the audit reason on admin override', async () => {
       orderRepo.findOne.mockResolvedValue({ ...lockedOrder });
       const saved = await ordersService.adminOverride(
         5,
@@ -329,7 +356,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       );
     });
 
-    it('admin override rejects a no-op change', async () => {
+    it('should reject a no-op change on admin override', async () => {
       orderRepo.findOne.mockResolvedValue({ ...lockedOrder });
       await expect(
         ordersService.adminOverride(

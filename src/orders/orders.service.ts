@@ -297,10 +297,11 @@ export class OrdersService {
     };
   }
 
-  async checkCodeExists(
-    code: string,
+  checkCodeExists(
+    _code: string,
   ): Promise<{ exists: boolean; message?: string }> {
-    return { exists: false };
+    void _code;
+    return Promise.resolve({ exists: false });
   }
 
   async findOne(idOrCode: number | string): Promise<OrderEntity> {
@@ -359,7 +360,9 @@ export class OrdersService {
       if (typeof v === 'string') {
         const trimmed = v.trim();
         const asNum = Number(trimmed);
-        return trimmed !== '' && !isNaN(asNum) && /^-?\d+(\.\d+)?$/.test(trimmed)
+        return trimmed !== '' &&
+          !isNaN(asNum) &&
+          /^-?\d+(\.\d+)?$/.test(trimmed)
           ? asNum
           : trimmed;
       }
@@ -466,13 +469,16 @@ export class OrdersService {
       const changes: string[] = [];
 
       const applyScalar = (
-        field: 'totalQuantity' | 'totalWeight' | 'totalVolume' | 'goodsDescription',
+        field:
+          | 'totalQuantity'
+          | 'totalWeight'
+          | 'totalVolume'
+          | 'goodsDescription',
       ) => {
         const next = dto[field];
         if (next === undefined || next === null) return;
         const prev = order[field];
-        const nextVal =
-          typeof next === 'string' ? next.trim() : Number(next);
+        const nextVal = typeof next === 'string' ? next.trim() : Number(next);
         if (nextVal === '' || nextVal === prev) return;
         changes.push(`${LABELS[field]}: ${prev ?? '—'} → ${nextVal}`);
         (order as any)[field] = nextVal;
@@ -494,7 +500,9 @@ export class OrdersService {
             `${LABELS[idField]} không tồn tại trên hệ thống.`,
           );
         }
-        changes.push(`${LABELS[idField]}: ${order[nameField] ?? '—'} → ${hub.name}`);
+        changes.push(
+          `${LABELS[idField]}: ${order[nameField] ?? '—'} → ${hub.name}`,
+        );
         order[idField] = hub.id;
         order[nameField] = hub.name;
       };
