@@ -3435,6 +3435,7 @@ export class WarehouseService {
         .leftJoinAndSelect('trip.order', 'order')
         .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
         .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
+        .leftJoinAndSelect('trip.destinationHub', 'tripDestinationHub')
         .where('trip.deletedAt IS NULL')
         .andWhere('order.deletedAt IS NULL');
 
@@ -3565,6 +3566,7 @@ export class WarehouseService {
         } else if (
           destEntity?.level === 2 ||
           destEntity?.code?.startsWith('HUB-BO-') ||
+          destEntity?.code?.startsWith('XB-') ||
           (o.destinationHub &&
             (o.destinationHub.toLowerCase().includes('xe bo') ||
               o.destinationHub.toLowerCase().includes('hub-bo')))
@@ -3619,32 +3621,32 @@ export class WarehouseService {
           }
         }
 
+        const matchedHub =
+          destEntity && destEntity.id === effectiveDestHubId
+            ? destEntity
+            : (t as any).destinationHub &&
+                (t as any).destinationHub.id === effectiveDestHubId
+              ? (t as any).destinationHub
+              : destEntity;
+
         let resolvedDestEntity: any = null;
-        if (effectiveDestHubId) {
-          if (destEntity && destEntity.id === effectiveDestHubId) {
-            resolvedDestEntity = {
-              id: destEntity.id,
-              name: destEntity.name,
-              code: destEntity.code,
-              level: destEntity.level ?? 1,
-              city: destEntity.city,
-            };
-          } else {
-            resolvedDestEntity = {
-              id: effectiveDestHubId,
-              name: resolvedDestHub || `Hub ${effectiveDestHubId}`,
-              code: null,
-              level: deliveryMode === 'XE_BO' ? 2 : 1,
-              city: null,
-            };
-          }
-        } else if (destEntity) {
+        if (matchedHub) {
           resolvedDestEntity = {
-            id: destEntity.id,
-            name: destEntity.name,
-            code: destEntity.code,
-            level: destEntity.level ?? 1,
-            city: destEntity.city,
+            id: matchedHub.id,
+            name: matchedHub.name,
+            code: matchedHub.code,
+            level: matchedHub.level ?? (deliveryMode === 'XE_BO' ? 2 : 1),
+            city: matchedHub.city,
+            address: matchedHub.address ?? null,
+          };
+        } else if (effectiveDestHubId) {
+          resolvedDestEntity = {
+            id: effectiveDestHubId,
+            name: resolvedDestHub || `Hub ${effectiveDestHubId}`,
+            code: null,
+            level: deliveryMode === 'XE_BO' ? 2 : 1,
+            city: null,
+            address: null,
           };
         }
 
