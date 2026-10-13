@@ -55,6 +55,15 @@ export interface WarehouseOrdersResult {
     OrderEntity & {
       inboundDate?: string | null;
       outboundDate?: string | null;
+      inboundTripCode?: string | null;
+      inboundLicensePlate?: string | null;
+      inboundDriverName?: string | null;
+      inboundTripDisplay?: string | null;
+      outboundTripCode?: string | null;
+      outboundLicensePlate?: string | null;
+      outboundDriverName?: string | null;
+      outboundTripDisplay?: string | null;
+      storageDays?: number;
       [key: string]: any;
     }
   >;
@@ -395,8 +404,7 @@ export class WarehouseService {
     );
     const draftCount = bucketCount((hs) => WAITING_STATUSES.includes(hs));
     const dispatchedCount = bucketCount(
-      (hs) =>
-        DISPATCHED_STATUSES.includes(hs) || hs === 'COMPLETED_INBOUND',
+      (hs) => DISPATCHED_STATUSES.includes(hs) || hs === 'COMPLETED_INBOUND',
     );
 
     if (groupByOrderCode) {
@@ -505,8 +513,47 @@ export class WarehouseService {
       const inboundDate =
         inboundTxs.length > 0 ? inboundTxs[0].createdAt : item.createdAt;
 
+      let inboundTripCode: string | null = null;
+      let inboundLicensePlate: string | null = null;
+      let inboundDriverName: string | null = null;
+
+      if (inboundTxs.length > 0) {
+        inboundTripCode = inboundTxs[0].tripCode || null;
+        inboundLicensePlate = inboundTxs[0].licensePlate || null;
+        inboundDriverName = inboundTxs[0].driverName || null;
+      }
+      if (!inboundLicensePlate && (item as any).vehicleLicensePlate) {
+        inboundLicensePlate = (item as any).vehicleLicensePlate;
+      }
+      if (!inboundTripCode && item.currentTripCode) {
+        inboundTripCode = item.currentTripCode;
+      }
+      if (!inboundDriverName && (item as any).driverName) {
+        inboundDriverName = (item as any).driverName;
+      }
+      if (
+        !inboundTripCode &&
+        !inboundLicensePlate &&
+        Array.isArray(item.trips) &&
+        item.trips.length > 0
+      ) {
+        const firstTrip = item.trips[0];
+        inboundTripCode = firstTrip.tripCode || null;
+        inboundLicensePlate = firstTrip.licensePlate || null;
+        inboundDriverName = firstTrip.driverName || null;
+      }
+
+      let inboundTripDisplay: string | null = null;
+      if (inboundTripCode && inboundLicensePlate) {
+        inboundTripDisplay = `${inboundTripCode} (${inboundLicensePlate})`;
+      } else if (inboundTripCode) {
+        inboundTripDisplay = inboundTripCode;
+      } else if (inboundLicensePlate) {
+        inboundTripDisplay = inboundLicensePlate;
+      }
+
       // RÀNG BUỘC SỐNG CÒN: Khi đơn ở trạng thái Lưu kho / Đơn nháp hoặc còn tồn kho > 0,
-      // outboundDate BẮT BUỘC để trống (null)
+      // outboundDate, outboundTripCode, outboundLicensePlate, outboundTripDisplay BẮT BUỘC để trống (null)
       const isStoredOrDraft =
         STORED_STATUSES.includes(effectiveStatus) ||
         effectiveStatus === 'DRAFT' ||
@@ -514,6 +561,11 @@ export class WarehouseService {
         (effectiveStock !== null && Number(effectiveStock) > 0);
 
       let outboundDate: Date | string | null = null;
+      let outboundTripCode: string | null = null;
+      let outboundLicensePlate: string | null = null;
+      let outboundDriverName: string | null = null;
+      let outboundTripDisplay: string | null = null;
+
       if (!isStoredOrDraft) {
         const outboundTxs = hubTxs
           .filter(
@@ -527,13 +579,48 @@ export class WarehouseService {
           );
         if (outboundTxs.length > 0) {
           outboundDate = outboundTxs[0].createdAt;
+          outboundTripCode = outboundTxs[0].tripCode || null;
+          outboundLicensePlate = outboundTxs[0].licensePlate || null;
+          outboundDriverName = outboundTxs[0].driverName || null;
         } else if (
           item.status === 'COMPLETED_INBOUND' ||
           item.status === 'DISPATCHED' ||
           effectiveStatus === 'COMPLETED_INBOUND'
         ) {
           outboundDate = item.updatedAt || null;
+          const itemTrips = (item.trips as any[]) || [];
+          if (itemTrips.length > 0) {
+            const lastTrip = itemTrips[itemTrips.length - 1];
+            outboundTripCode = lastTrip.tripCode || null;
+            outboundLicensePlate = lastTrip.licensePlate || null;
+            outboundDriverName = lastTrip.driverName || null;
+          }
         }
+
+        if (outboundTripCode && outboundLicensePlate) {
+          outboundTripDisplay = `${outboundTripCode} (${outboundLicensePlate})`;
+        } else if (outboundTripCode) {
+          outboundTripDisplay = outboundTripCode;
+        } else if (outboundLicensePlate) {
+          outboundTripDisplay = outboundLicensePlate;
+        }
+      }
+
+      const inboundTime = inboundDate
+        ? new Date(inboundDate).getTime()
+        : new Date(item.createdAt).getTime();
+      let storageDays = 0;
+      if (outboundDate) {
+        const outboundTime = new Date(outboundDate).getTime();
+        storageDays = Math.max(
+          0,
+          Math.floor((outboundTime - inboundTime) / (1000 * 60 * 60 * 24)),
+        );
+      } else {
+        storageDays = Math.max(
+          0,
+          Math.floor((Date.now() - inboundTime) / (1000 * 60 * 60 * 24)),
+        );
       }
 
       return {
@@ -553,6 +640,15 @@ export class WarehouseService {
         outboundDate: outboundDate
           ? new Date(outboundDate).toISOString()
           : null,
+        inboundTripCode,
+        inboundLicensePlate,
+        inboundDriverName,
+        inboundTripDisplay,
+        outboundTripCode,
+        outboundLicensePlate,
+        outboundDriverName,
+        outboundTripDisplay,
+        storageDays,
       };
     });
   }
@@ -751,7 +847,30 @@ export class WarehouseService {
     const groupInboundDate =
       validInboundDates.length > 0 ? validInboundDates[0] : first.createdAt;
 
+    const groupInboundTripDisplay =
+      normalizedItems.find((it) => it.inboundTripDisplay)?.inboundTripDisplay ||
+      first.inboundTripDisplay ||
+      null;
+    const groupInboundTripCode =
+      normalizedItems.find((it) => it.inboundTripCode)?.inboundTripCode ||
+      first.inboundTripCode ||
+      null;
+    const groupInboundLicensePlate =
+      normalizedItems.find((it) => it.inboundLicensePlate)
+        ?.inboundLicensePlate ||
+      first.inboundLicensePlate ||
+      null;
+    const groupInboundDriverName =
+      normalizedItems.find((it) => it.inboundDriverName)?.inboundDriverName ||
+      first.inboundDriverName ||
+      null;
+
     let groupOutboundDate: string | null = null;
+    let groupOutboundTripDisplay: string | null = null;
+    let groupOutboundTripCode: string | null = null;
+    let groupOutboundLicensePlate: string | null = null;
+    let groupOutboundDriverName: string | null = null;
+
     if (!isStoredOrDraftGroup) {
       const validOutboundDates = normalizedItems
         .map((it) => it.outboundDate)
@@ -759,6 +878,36 @@ export class WarehouseService {
         .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
       groupOutboundDate =
         validOutboundDates.length > 0 ? validOutboundDates[0] : null;
+
+      groupOutboundTripDisplay =
+        normalizedItems.find((it) => it.outboundTripDisplay)
+          ?.outboundTripDisplay || null;
+      groupOutboundTripCode =
+        normalizedItems.find((it) => it.outboundTripCode)?.outboundTripCode ||
+        null;
+      groupOutboundLicensePlate =
+        normalizedItems.find((it) => it.outboundLicensePlate)
+          ?.outboundLicensePlate || null;
+      groupOutboundDriverName =
+        normalizedItems.find((it) => it.outboundDriverName)
+          ?.outboundDriverName || null;
+    }
+
+    const grpInboundTime = groupInboundDate
+      ? new Date(groupInboundDate).getTime()
+      : new Date(first.createdAt).getTime();
+    let groupStorageDays = 0;
+    if (groupOutboundDate) {
+      const grpOutboundTime = new Date(groupOutboundDate).getTime();
+      groupStorageDays = Math.max(
+        0,
+        Math.floor((grpOutboundTime - grpInboundTime) / (1000 * 60 * 60 * 24)),
+      );
+    } else {
+      groupStorageDays = Math.max(
+        0,
+        Math.floor((Date.now() - grpInboundTime) / (1000 * 60 * 60 * 24)),
+      );
     }
 
     return {
@@ -786,6 +935,15 @@ export class WarehouseService {
       outboundDate: groupOutboundDate
         ? new Date(groupOutboundDate).toISOString()
         : null,
+      inboundTripCode: groupInboundTripCode,
+      inboundLicensePlate: groupInboundLicensePlate,
+      inboundDriverName: groupInboundDriverName,
+      inboundTripDisplay: groupInboundTripDisplay,
+      outboundTripCode: groupOutboundTripCode,
+      outboundLicensePlate: groupOutboundLicensePlate,
+      outboundDriverName: groupOutboundDriverName,
+      outboundTripDisplay: groupOutboundTripDisplay,
+      storageDays: groupStorageDays,
     };
   }
 
