@@ -342,7 +342,7 @@ export class WarehouseController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Xác nhận dỡ hàng và nhập vào kho (chuyển trạng thái LƯU KHO / INBOUND). Khóa thao tác khi trạm đã Đã xử lý trừ SUPER_ADMIN.',
+      'Xác nhận dỡ hàng và nhập vào kho theo từng chuyến xe / biên bản kiểm đếm (chuyển trạng thái LƯU KHO / INBOUND). Khóa thao tác khi trạm đã Đã xử lý trừ SUPER_ADMIN.',
   })
   async confirmInbound(@Request() req: any, @Body() body: any) {
     return this.warehouseService.confirmInbound(req.user, body);
@@ -352,7 +352,8 @@ export class WarehouseController {
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Xác nhận xuất kho (Giao khách hàng hoặc Luân chuyển)',
+    summary:
+      'Xác nhận xuất kho theo từng chuyến xe (Giao khách hàng hoặc Luân chuyển). Yêu cầu đầy đủ thông tin chuyến xe, biển số, tài xế.',
   })
   async confirmOutbound(@Request() req: any, @Body() dto: ConfirmOutboundDto) {
     return this.warehouseService.confirmOutbound(req.user, dto);
