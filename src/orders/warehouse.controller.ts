@@ -337,6 +337,26 @@ export class WarehouseController {
     return this.warehouseService.batchCreateInboundOrders(req.user, dto);
   }
 
+  @Get('inbound/receipt-data')
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Lấy dữ liệu in ấn phiếu nhập kho A4 theo tripCode, orderCode hoặc invoiceCode',
+  })
+  async getInboundReceiptData(
+    @Request() req: any,
+    @Query('tripCode') tripCode?: string,
+    @Query('orderCode') orderCode?: string,
+    @Query('invoiceCode') invoiceCode?: string,
+  ) {
+    return this.warehouseService.getInboundReceiptData(req.user, {
+      tripCode,
+      orderCode,
+      invoiceCode,
+    });
+  }
+
   @Post('inbound/confirm')
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
@@ -401,4 +421,3 @@ export class WarehouseController {
     return this.warehouseService.cancelInboundDraft(req.user, tripCode);
   }
 }
-

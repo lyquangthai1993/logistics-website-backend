@@ -1439,6 +1439,8 @@ export class WarehouseService {
           );
         }
 
+        (savedOrder as any).deliveryAddress = deliveryAddr;
+        (savedOrder as any).unit = 'Kiện';
         savedOrders.push(savedOrder);
       }
 
@@ -2098,6 +2100,19 @@ export class WarehouseService {
           }
         }
 
+        let deliv = '';
+        if (order.route && order.route.includes('→')) {
+          deliv = order.route.split('→')[1]?.trim() || '';
+        }
+        if (!deliv && order.notes) {
+          const match = order.notes.match(/\[Giao khách:\s*([^\]]+)\]/);
+          if (match) deliv = match[1].trim();
+        }
+        if (!deliv) {
+          deliv = order.destinationHub || order.province || '—';
+        }
+        (order as any).deliveryAddress = deliv;
+        (order as any).unit = 'Kiện';
         savedOrders.push(order);
 
         // Link the order to the vehicle trip (allocation row) when a plate is provided
@@ -2832,7 +2847,6 @@ export class WarehouseService {
     return { tripCode, cancelled: true };
   }
 
-
   /**
    * Get KPI metrics for warehouse dashboard cards & tab counters (hub-scoped statuses).
    */
@@ -3544,6 +3558,218 @@ export class WarehouseService {
     return {
       data: formatted,
       meta,
+    };
+  }
+
+  /**
+   * Trích xuất địa chỉ giao hàng chuẩn hóa từ hợp đồng đơn hàng
+   */
+  private extractDeliveryAddress(order: {
+    route?: string | null;
+    notes?: string | null;
+    destinationHub?: string | null;
+    destinationHubEntity?: { name?: string | null } | null;
+    province?: string | null;
+  }): string {
+    if (!order) return '—';
+    if (order.route && order.route.includes('→')) {
+      const parts = order.route.split('→');
+      const dest = parts[1]?.trim();
+      if (
+        dest &&
+        dest !== 'Điểm đến' &&
+        dest !== 'Điểm giao' &&
+        dest !== 'Hub'
+      ) {
+        return dest;
+      }
+    }
+    if (order.notes) {
+      const match = order.notes.match(/\[Giao khách:\s*([^\]]+)\]/);
+      if (match && match[1]?.trim()) return match[1].trim();
+    }
+    if (order.destinationHub && order.destinationHub.trim()) {
+      return order.destinationHub.trim();
+    }
+    if (
+      order.destinationHubEntity?.name &&
+      order.destinationHubEntity.name.trim()
+    ) {
+      return order.destinationHubEntity.name.trim();
+    }
+    if (order.province && order.province.trim()) {
+      return order.province.trim();
+    }
+    return '—';
+  }
+
+  /**
+   * Lấy dữ liệu in ấn Phiếu Nhập Kho A4 (hỗ trợ tripCode, invoiceCode hoặc orderCode)
+   */
+  async getInboundReceiptData(
+    user: UserEntity,
+    query: { tripCode?: string; orderCode?: string; invoiceCode?: string },
+  ): Promise<{
+    tripCode?: string;
+    orderCode: string;
+    licensePlate: string;
+    driverName: string;
+    originHubName?: string;
+    destinationHubName: string;
+    deliveryAddress: string;
+    totalQuantity: number;
+    totalWeight: number;
+    totalVolume: number;
+    createdAt?: Date | string;
+    items: Array<{
+      orderCode: string;
+      goodsDescription: string;
+      quantity: number;
+      unit: string;
+      deliveryAddress: string;
+      accompanyingDocs: string;
+      notes: string;
+      weight?: number;
+      volume?: number;
+    }>;
+  }> {
+    const rawTripCode = query?.tripCode
+      ? normalizeTripCode(query.tripCode)
+      : '';
+    const rawOrderCode = query?.orderCode?.trim() || '';
+    const rawInvoiceCode = query?.invoiceCode?.trim() || '';
+
+    if (!rawTripCode && !rawOrderCode && !rawInvoiceCode) {
+      throw new UnprocessableEntityException(
+        'Vui lòng cung cấp tripCode, orderCode hoặc invoiceCode',
+      );
+    }
+
+    let tripCode = rawTripCode;
+    let licensePlate = '';
+    let driverName = '';
+    let originHubName = '';
+    let destinationHubName = '';
+    let deliveryAddress = '';
+    let createdAt: Date | string | undefined;
+
+    let orders: OrderEntity[] = [];
+
+    if (tripCode) {
+      const trips = await this.tripRepository.find({
+        where: { tripCode, deletedAt: IsNull() },
+        relations: [
+          'order',
+          'order.originHubEntity',
+          'order.destinationHubEntity',
+        ],
+      });
+
+      if (trips.length > 0) {
+        licensePlate = trips[0].licensePlate || '';
+        driverName = trips[0].driverName || '';
+        createdAt = trips[0].createdAt || trips[0].pickupDate;
+        const orderIds = Array.from(
+          new Set(trips.map((t) => t.orderId).filter(Boolean)),
+        );
+        if (orderIds.length > 0) {
+          orders = await this.orderRepository.find({
+            where: { id: In(orderIds), deletedAt: IsNull() },
+            relations: ['originHubEntity', 'destinationHubEntity'],
+          });
+        }
+      }
+    }
+
+    if (orders.length === 0 && rawInvoiceCode) {
+      const txs = await this.transactionRepository.find({
+        where: { invoiceCode: rawInvoiceCode, deletedAt: IsNull() },
+        relations: [
+          'order',
+          'order.originHubEntity',
+          'order.destinationHubEntity',
+          'hub',
+        ],
+      });
+      if (txs.length > 0) {
+        tripCode = tripCode || txs[0].tripCode || '';
+        licensePlate = licensePlate || txs[0].licensePlate || '';
+        driverName = driverName || txs[0].driverName || '';
+        originHubName = originHubName || txs[0].hub?.name || '';
+        createdAt = createdAt || txs[0].createdAt;
+        orders = txs.map((t) => t.order).filter(Boolean);
+      }
+    }
+
+    if (orders.length === 0 && rawOrderCode) {
+      const singleOrder = await this.orderRepository.findOne({
+        where: { orderCode: rawOrderCode, deletedAt: IsNull() },
+        relations: ['originHubEntity', 'destinationHubEntity', 'trips'],
+      });
+      if (singleOrder) {
+        orders = [singleOrder];
+        if (singleOrder.trips && singleOrder.trips.length > 0) {
+          const t = singleOrder.trips[0];
+          tripCode = tripCode || t.tripCode || '';
+          licensePlate = licensePlate || t.licensePlate || '';
+          driverName = driverName || t.driverName || '';
+          createdAt = createdAt || t.createdAt;
+        }
+      }
+    }
+
+    if (orders.length === 0) {
+      throw new NotFoundException('Không tìm thấy dữ liệu phiếu nhập kho');
+    }
+
+    const items = orders.map((o) => {
+      const deliv = this.extractDeliveryAddress(o);
+      return {
+        orderCode: o.orderCode,
+        goodsDescription: o.goodsDescription || 'Hàng hóa nhập kho',
+        quantity: Number(o.inboundQuantity || o.totalQuantity || 1),
+        unit: 'Kiện',
+        deliveryAddress: deliv,
+        accompanyingDocs: o.accompanyingDocs || 'KHÔNG CÓ',
+        notes: o.notes || '',
+        weight: Number(o.totalWeight) || 0,
+        volume: Number(o.totalVolume) || 0,
+      };
+    });
+
+    const first = orders[0];
+    originHubName =
+      originHubName || first.originHub || first.originHubEntity?.name || '';
+    destinationHubName =
+      destinationHubName ||
+      first.destinationHub ||
+      first.destinationHubEntity?.name ||
+      '';
+    deliveryAddress = deliveryAddress || items[0]?.deliveryAddress || '—';
+
+    const totalQuantity = items.reduce((sum, it) => sum + it.quantity, 0);
+    const totalWeight = orders.reduce(
+      (sum, o) => sum + (Number(o.totalWeight) || 0),
+      0,
+    );
+    const totalVolume = orders.reduce(
+      (sum, o) => sum + (Number(o.totalVolume) || 0),
+      0,
+    );
+
+    return {
+      tripCode: tripCode || undefined,
+      orderCode: first.orderCode,
+      licensePlate: licensePlate || '—',
+      driverName: driverName || '—',
+      originHubName,
+      destinationHubName,
+      deliveryAddress,
+      totalQuantity,
+      totalWeight,
+      totalVolume,
+      createdAt: createdAt || new Date(),
+      items,
     };
   }
 
