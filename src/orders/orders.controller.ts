@@ -129,6 +129,11 @@ export class OrdersController {
     return this.ordersService.generateOrderCode(prefix);
   }
 
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.DISPATCHER,
+    RoleEnum.WAREHOUSE_MANAGER,
+  )
   @Post('refresh-metrics')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Làm mới thông số tải trọng cho danh sách đơn hàng' })
