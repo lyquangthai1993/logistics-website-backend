@@ -2785,6 +2785,21 @@ export class WarehouseService {
       throw new NotFoundException('Không tìm thấy chuyến nháp');
     }
     const userHubId = (await this.resolveUserHubId(user)) ?? null;
+    const existingStops = await this.dataSource.query(
+      `SELECT 1 FROM "trip_stop"
+       WHERE "tripCode" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL
+       ${userHubId ? 'AND "hubId" = $2' : ''} LIMIT 1`,
+      userHubId ? [tripCode, userHubId] : [tripCode],
+    );
+    const existingTrips = await this.dataSource.query(
+      `SELECT 1 FROM "trip"
+       WHERE "tripCode" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL LIMIT 1`,
+      [tripCode],
+    );
+    if (existingStops.length === 0 && existingTrips.length === 0) {
+      throw new NotFoundException(`Không tìm thấy chuyến nháp ${tripCode}`);
+    }
+
     await this.dataSource.transaction(async (manager) => {
       if (userHubId) {
         await manager.query(
