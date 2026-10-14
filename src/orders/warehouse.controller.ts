@@ -420,4 +420,22 @@ export class WarehouseController {
   ) {
     return this.warehouseService.cancelInboundDraft(req.user, tripCode);
   }
+
+  @Post('trips/:tripCode/rollback')
+  @Roles(RoleEnum.SUPER_ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Mở lại chuyến xe đã xử lý về trạng thái Chờ xử lý (Rollback Inbound/Outbound Trip). Chỉ dành riêng cho SUPER_ADMIN.',
+    description:
+      'Hoàn tác toàn bộ trạng thái chuyến xe, trạng thái đơn hàng và cân bằng lại tồn kho Hub trong sổ cái vận hành.',
+  })
+  @ApiParam({ name: 'tripCode', type: String, example: 'SD10' })
+  async rollbackTrip(
+    @Request() req: any,
+    @Param('tripCode') tripCode: string,
+    @Body() dto?: { reason?: string; hubId?: number },
+  ) {
+    return this.warehouseService.rollbackTrip(req.user, tripCode, dto);
+  }
 }

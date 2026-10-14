@@ -4724,4 +4724,247 @@ export class WarehouseService {
       };
     });
   }
+
+  /**
+   * Mở lại chuyến xe đã xử lý về trạng thái Chờ xử lý (Rollback Inbound/Outbound Trip).
+   * Dành riêng cho Super Admin.
+   * Hoàn tác số lượng tồn kho, trạng thái đơn hàng và chuyển trip/stop về PENDING.
+   */
+  async rollbackTrip(
+    user: UserEntity,
+    tripCodeParam: string,
+    dto?: { reason?: string; hubId?: number },
+  ): Promise<{
+    success: boolean;
+    tripCode: string;
+    tripType: string;
+    affectedOrdersCount: number;
+    message: string;
+  }> {
+    const userWithHub = await this.userRepository.findOne({
+      where: { id: user.id },
+      relations: ['hub', 'role'],
+    });
+    const roleId = Number(
+      userWithHub?.role?.id ?? user.role?.id ?? (user.role as any),
+    );
+    const roleName =
+      userWithHub?.role?.name ||
+      (typeof user.role === 'string' ? user.role : (user.role as any)?.name) ||
+      '';
+    const isAdmin =
+      roleId === RoleEnum.SUPER_ADMIN ||
+      roleName === 'SUPER_ADMIN' ||
+      (user.role as any) === 'SUPER_ADMIN';
+
+    if (!isAdmin) {
+      throw new ForbiddenException(
+        'Chỉ Quản trị viên (Super Admin) mới có quyền mở lại chuyến xe đã xử lý.',
+      );
+    }
+
+    const normTripCode = normalizeTripCode(
+      decodeURIComponent(tripCodeParam || ''),
+    );
+    if (!normTripCode) {
+      throw new NotFoundException('Mã chuyến xe không hợp lệ');
+    }
+
+    const operatingHubId =
+      dto?.hubId ?? userWithHub?.hubId ?? user.hubId ?? null;
+
+    return this.dataSource.transaction(async (manager) => {
+      const stopRepo = manager.getRepository(TripStopEntity);
+      const tripRepo = manager.getRepository(TripEntity);
+      const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
+      const orderRepo = manager.getRepository(OrderEntity);
+
+      const stops = await stopRepo.find({
+        where: { tripCode: normTripCode },
+        relations: ['hub'],
+      });
+      const trips = await tripRepo.find({
+        where: { tripCode: normTripCode },
+      });
+
+      if (stops.length === 0 && trips.length === 0) {
+        throw new NotFoundException(
+          `Không tìm thấy dữ liệu chuyến xe ${normTripCode}`,
+        );
+      }
+
+      // Xác định loại chuyến xe (Xuất kho vs Nhập kho)
+      let isOutbound = trips.some(
+        (t) => t.type === 'OUTBOUND' || t.type === 'TRANSFER',
+      );
+      if (!isOutbound && operatingHubId) {
+        const matchingStop = stops.find((s) => s.hubId === operatingHubId);
+        if (matchingStop && matchingStop.stopType === TripStopType.ORIGIN) {
+          isOutbound = true;
+        }
+      }
+
+      const affectedOrderIds = new Set<number>();
+
+      if (isOutbound) {
+        // === ROLLBACK XUẤT KHO ===
+        const txQb = txRepo
+          .createQueryBuilder('tx')
+          .where('tx.tripCode = :tripCode', { tripCode: normTripCode })
+          .andWhere('tx.type IN (:...types)', {
+            types: [
+              InventoryTransactionType.OUTBOUND,
+              InventoryTransactionType.TRANSFER,
+            ],
+          })
+          .andWhere('tx.deletedAt IS NULL');
+
+        if (operatingHubId) {
+          txQb.andWhere('tx.hubId = :hubId', { hubId: operatingHubId });
+        }
+        const txList = await txQb.getMany();
+
+        for (const tx of txList) {
+          affectedOrderIds.add(tx.orderId);
+          const order = await orderRepo.findOne({ where: { id: tx.orderId } });
+          if (order) {
+            const qty = Number(tx.quantity) || 0;
+            order.outboundQuantity = Math.max(
+              0,
+              (Number(order.outboundQuantity) || 0) - qty,
+            );
+            order.remainingQuantity =
+              (Number(order.remainingQuantity) || 0) + qty;
+            order.status = 'INBOUND'; // Khôi phục trạng thái LƯU KHO tại Hub
+            if (tx.hubId) {
+              order.currentHubId = tx.hubId;
+            }
+            if (order.currentTripCode === normTripCode) {
+              order.currentTripCode = null;
+            }
+            await orderRepo.save(order);
+          }
+        }
+
+        for (const t of trips) {
+          affectedOrderIds.add(t.orderId);
+          const order = await orderRepo.findOne({ where: { id: t.orderId } });
+          if (order && order.currentTripCode === normTripCode) {
+            order.currentTripCode = null;
+            await orderRepo.save(order);
+          }
+        }
+
+        // Đánh dấu xóa giao dịch xuất kho
+        if (txList.length > 0) {
+          await manager.query(
+            `UPDATE "order_inventory_transaction" SET "deletedAt" = NOW()
+             WHERE "tripCode" = $1 AND "type" IN ('OUTBOUND', 'TRANSFER') AND "deletedAt" IS NULL
+             ${operatingHubId ? 'AND "hubId" = $2' : ''}`,
+            operatingHubId ? [normTripCode, operatingHubId] : [normTripCode],
+          );
+        }
+
+        // Cập nhật trip_stop về PENDING
+        await manager.query(
+          `UPDATE "trip_stop" SET "status" = 'PENDING', "updatedAt" = NOW()
+           WHERE "tripCode" = $1 AND "deletedAt" IS NULL
+           ${operatingHubId ? 'AND "hubId" = $2' : ''}`,
+          operatingHubId ? [normTripCode, operatingHubId] : [normTripCode],
+        );
+
+        // Cập nhật trip về PENDING
+        await manager.query(
+          `UPDATE "trip" SET "status" = 'PENDING', "updatedAt" = NOW()
+           WHERE "tripCode" = $1 AND "deletedAt" IS NULL`,
+          [normTripCode],
+        );
+      } else {
+        // === ROLLBACK NHẬP KHO ===
+        const txQb = txRepo
+          .createQueryBuilder('tx')
+          .where('tx.tripCode = :tripCode', { tripCode: normTripCode })
+          .andWhere('tx.type = :type', {
+            type: InventoryTransactionType.INBOUND,
+          })
+          .andWhere('tx.deletedAt IS NULL');
+
+        if (operatingHubId) {
+          txQb.andWhere('tx.hubId = :hubId', { hubId: operatingHubId });
+        }
+        const txList = await txQb.getMany();
+
+        for (const tx of txList) {
+          affectedOrderIds.add(tx.orderId);
+          const order = await orderRepo.findOne({ where: { id: tx.orderId } });
+          if (order) {
+            const qty = Number(tx.quantity) || 0;
+            order.inboundQuantity = Math.max(
+              0,
+              (Number(order.inboundQuantity) || 0) - qty,
+            );
+            order.remainingQuantity = Math.max(
+              0,
+              (Number(order.remainingQuantity) || 0) - qty,
+            );
+
+            if (order.remainingQuantity === 0) {
+              if (
+                order.originHubId &&
+                tx.hubId &&
+                order.originHubId !== tx.hubId
+              ) {
+                order.status = 'IN_TRANSIT';
+                order.currentTripCode = normTripCode;
+              } else {
+                order.status = 'WAITING';
+              }
+            }
+            await orderRepo.save(order);
+          }
+        }
+
+        for (const t of trips) {
+          affectedOrderIds.add(t.orderId);
+        }
+
+        // Đánh dấu xóa giao dịch nhập kho
+        if (txList.length > 0) {
+          await manager.query(
+            `UPDATE "order_inventory_transaction" SET "deletedAt" = NOW()
+             WHERE "tripCode" = $1 AND "type" = 'INBOUND' AND "deletedAt" IS NULL
+             ${operatingHubId ? 'AND "hubId" = $2' : ''}`,
+            operatingHubId ? [normTripCode, operatingHubId] : [normTripCode],
+          );
+        }
+
+        // Cập nhật trip_stop về PENDING
+        await manager.query(
+          `UPDATE "trip_stop" SET "status" = 'PENDING', "updatedAt" = NOW()
+           WHERE "tripCode" = $1 AND "deletedAt" IS NULL
+           ${operatingHubId ? 'AND "hubId" = $2' : ''}`,
+          operatingHubId ? [normTripCode, operatingHubId] : [normTripCode],
+        );
+
+        // Cập nhật trip về PENDING
+        await manager.query(
+          `UPDATE "trip" SET "status" = 'PENDING', "updatedAt" = NOW()
+           WHERE "tripCode" = $1 AND "deletedAt" IS NULL`,
+          [normTripCode],
+        );
+      }
+
+      this.logger.log(
+        `[ADMIN ROLLBACK TRIP] Quản trị viên ${user.id} (${user.email || 'Admin'}) đã rollback chuyến xe ${normTripCode} (${isOutbound ? 'XUẤT KHO' : 'NHẬP KHO'}) về trạng thái PENDING. Lý do: ${dto?.reason || 'Không ghi nhận'}. Đơn hàng bị ảnh hưởng: ${affectedOrderIds.size}`,
+      );
+
+      return {
+        success: true,
+        tripCode: normTripCode,
+        tripType: isOutbound ? 'OUTBOUND' : 'INBOUND',
+        affectedOrdersCount: affectedOrderIds.size,
+        message: `Đã mở lại chuyến xe ${normTripCode} thành công. Chuyến xe và tồn kho hàng hóa đã được hoàn tác về trạng thái Chờ xử lý.`,
+      };
+    });
+  }
 }
