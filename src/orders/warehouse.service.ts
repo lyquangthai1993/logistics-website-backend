@@ -553,6 +553,43 @@ export class WarehouseService {
         inboundTripDisplay = inboundLicensePlate;
       }
 
+      // Biển số xe nhập dự kiến (expectedInboundLicensePlate):
+      // - Các đơn nháp: biển số xe của trip nhập đơn hàng đang ở trạng thái chờ xử lý (PENDING).
+      // - Các đơn đã có trạng thái lưu kho: để trống (null).
+      const isStored =
+        STORED_STATUSES.includes(effectiveStatus) ||
+        STORED_STATUSES.includes(item.status);
+
+      let expectedInboundLicensePlate: string | null = null;
+      if (!isStored) {
+        const itemTrips = (item.trips as any[]) || [];
+        const pendingInboundTrip = itemTrips.find(
+          (t) =>
+            (t.type === 'INBOUND' ||
+              (t.type !== 'OUTBOUND' && t.type !== 'TRANSFER')) &&
+            (t.status === 'PENDING' || t.status === 'WAITING') &&
+            t.licensePlate,
+        );
+        if (pendingInboundTrip?.licensePlate) {
+          expectedInboundLicensePlate = pendingInboundTrip.licensePlate;
+        } else {
+          const anyPendingTrip = itemTrips.find(
+            (t) =>
+              (t.status === 'PENDING' || t.status === 'WAITING') &&
+              t.type !== 'OUTBOUND' &&
+              t.type !== 'TRANSFER' &&
+              t.licensePlate,
+          );
+          if (anyPendingTrip?.licensePlate) {
+            expectedInboundLicensePlate = anyPendingTrip.licensePlate;
+          } else if (inboundLicensePlate) {
+            expectedInboundLicensePlate = inboundLicensePlate;
+          } else if ((item as any).vehicleLicensePlate) {
+            expectedInboundLicensePlate = (item as any).vehicleLicensePlate;
+          }
+        }
+      }
+
       // RÀNG BUỘC SỐNG CÒN: Khi đơn ở trạng thái Lưu kho / Đơn nháp hoặc còn tồn kho > 0,
       // outboundDate, outboundTripCode, outboundLicensePlate, outboundTripDisplay BẮT BUỘC để trống (null)
       const isStoredOrDraft =
@@ -663,6 +700,7 @@ export class WarehouseService {
         inboundLicensePlate,
         inboundDriverName,
         inboundTripDisplay,
+        expectedInboundLicensePlate,
         outboundTripCode,
         outboundLicensePlate,
         outboundDriverName,
