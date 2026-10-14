@@ -3462,11 +3462,33 @@ export class WarehouseService {
         .getMany();
 
       for (const order of orders) {
+        let deliveryAddress = '';
+        if (order.route && order.route.includes('→')) {
+          const parts = order.route.split('→');
+          deliveryAddress = parts[1]?.trim() || '';
+        }
+        if (!deliveryAddress && order.notes) {
+          const match = order.notes.match(/\[Giao khách:\s*([^\]]+)\]/);
+          if (match) deliveryAddress = match[1].trim();
+        }
+        if (!deliveryAddress) {
+          deliveryAddress =
+            order.destinationHub ||
+            order.destinationHubEntity?.name ||
+            order.province ||
+            '';
+        }
+
+        const enrichedOrder = {
+          ...order,
+          deliveryAddress: deliveryAddress || '—',
+        };
+
         for (const trip of order.trips || []) {
           if (trip.tripCode && tripCodes.includes(trip.tripCode)) {
             const list = ordersByTripCode.get(trip.tripCode) || [];
             if (!list.some((o) => o.id === order.id)) {
-              list.push(order);
+              list.push(enrichedOrder);
               ordersByTripCode.set(trip.tripCode, list);
             }
           }
