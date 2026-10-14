@@ -179,8 +179,6 @@ export class OrdersService {
       .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
       .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
       .leftJoinAndSelect('order.trips', 'trips')
-      .leftJoinAndSelect('trips.vehicle', 'vehicle')
-      .leftJoinAndSelect('trips.driver', 'driver')
       .where('order.deletedAt IS NULL')
       .orderBy('order.createdAt', 'DESC');
 
