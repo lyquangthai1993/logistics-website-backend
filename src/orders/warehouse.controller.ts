@@ -388,4 +388,17 @@ export class WarehouseController {
   ) {
     return this.warehouseService.cancelOutboundDraft(req.user, tripCode);
   }
+
+  @Delete('inbound/drafts/:tripCode')
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Hủy chuyến nháp nhập kho (chỉ chuyến Chờ xử lý)' })
+  @ApiParam({ name: 'tripCode', type: String, example: 'SD49' })
+  async cancelInboundDraft(
+    @Request() req: any,
+    @Param('tripCode') tripCode: string,
+  ) {
+    return this.warehouseService.cancelInboundDraft(req.user, tripCode);
+  }
 }
+

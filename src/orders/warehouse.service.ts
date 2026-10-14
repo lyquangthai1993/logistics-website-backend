@@ -2775,6 +2775,49 @@ export class WarehouseService {
     return { tripCode, cancelled: true };
   }
 
+  /** Cancel an inbound draft trip: soft-deletes its pending trip stops and pending draft orders. */
+  async cancelInboundDraft(
+    user: UserEntity,
+    tripCodeParam: string,
+  ): Promise<{ tripCode: string; cancelled: boolean }> {
+    const tripCode = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
+    if (!tripCode) {
+      throw new NotFoundException('Không tìm thấy chuyến nháp');
+    }
+    const userHubId = (await this.resolveUserHubId(user)) ?? null;
+    await this.dataSource.transaction(async (manager) => {
+      if (userHubId) {
+        await manager.query(
+          `UPDATE "trip_stop" SET "deletedAt" = NOW()
+           WHERE "tripCode" = $1 AND "hubId" = $2 AND "status" = 'PENDING' AND "deletedAt" IS NULL`,
+          [tripCode, userHubId],
+        );
+      } else {
+        await manager.query(
+          `UPDATE "trip_stop" SET "deletedAt" = NOW()
+           WHERE "tripCode" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL`,
+          [tripCode],
+        );
+      }
+
+      await manager.query(
+        `UPDATE "order" SET "deletedAt" = NOW()
+         WHERE id IN (SELECT t."orderId" FROM "trip" t WHERE t."tripCode" = $1)
+           AND "status" IN ('DRAFT', 'PENDING')
+           AND "deletedAt" IS NULL`,
+        [tripCode],
+      );
+
+      await manager.query(
+        `UPDATE "trip" SET "deletedAt" = NOW()
+         WHERE "tripCode" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL`,
+        [tripCode],
+      );
+    });
+    return { tripCode, cancelled: true };
+  }
+
+
   /**
    * Get KPI metrics for warehouse dashboard cards & tab counters (hub-scoped statuses).
    */
