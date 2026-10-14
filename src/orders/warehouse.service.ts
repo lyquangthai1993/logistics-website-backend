@@ -266,7 +266,7 @@ export class WarehouseService {
       }
       if (flowUpper === 'OUTBOUND_LOOKUP') {
         q.andWhere(
-          `${statusExpr} IN (${sqlList([...STORED_STATUSES, 'DRAFT'])})`,
+          `${statusExpr} IN (${sqlList([...STORED_STATUSES, ...DRAFT_LIKE_STATUSES])})`,
         );
       } else if (isAllStatus && flowUpper === 'INBOUND') {
         // Only items physically in or inbound to the warehouse (exclude departed ones)
@@ -2238,6 +2238,18 @@ export class WarehouseService {
         throw new NotFoundException('Không tìm thấy đơn hàng nào để xuất kho');
       }
 
+      // Strict Pending Guard (Task #51): Trips with draft orders can only stay PENDING ("Chờ xử lý").
+      // Confirming outbound (COMPLETED) is strictly forbidden for any DRAFT / WAITING / PENDING orders.
+      const draftOrders = orders.filter((o) =>
+        DRAFT_LIKE_STATUSES.includes(o.status),
+      );
+      if (draftOrders.length > 0) {
+        const draftCodes = draftOrders.map((o) => o.orderCode).join(', ');
+        throw new BadRequestException(
+          `Không thể chuyển chuyến xe sang trạng thái "Đã xử lý" vì chuyến xe có chứa ${draftOrders.length} đơn hàng đang ở trạng thái đơn nháp (${draftCodes}). Chuyến xe có đơn nháp chỉ được phép ở trạng thái "Chờ xử lý". Vui lòng duyệt đơn hàng trước khi xuất kho.`,
+        );
+      }
+
       // Auto-detect isTransfer if mode is TRANSFER OR any item/order has a destination hub different from origin
       const actingOriginId =
         userHubId ?? orders[0].currentHubId ?? orders[0].originHubId ?? null;
@@ -2587,11 +2599,18 @@ export class WarehouseService {
         const item = dto.items?.find((i) => i.orderId === order.id);
         const actingHubId =
           userHubId ?? order.currentHubId ?? order.originHubId ?? null;
-        const hubStock = actingHubId
-          ? await this.ledgerService.getHubStock(order.id, actingHubId, manager)
-          : null;
-        const availableQty =
-          hubStock !== null
+        const isDraft = DRAFT_LIKE_STATUSES.includes(order.status);
+        const hubStock =
+          !isDraft && actingHubId
+            ? await this.ledgerService.getHubStock(
+                order.id,
+                actingHubId,
+                manager,
+              )
+            : null;
+        const availableQty = isDraft
+          ? (order.remainingQuantity ?? order.totalQuantity ?? 0)
+          : hubStock !== null
             ? hubStock
             : (order.remainingQuantity ?? order.totalQuantity ?? 0);
         const qty =
@@ -3845,7 +3864,7 @@ export class WarehouseService {
           qb.where(
             "order.status IN ('IN_WAREHOUSE', 'INBOUND', 'STORED', 'LUU_KHO')",
           ).orWhere(
-            "(order.status IN ('DRAFT', 'WAITING', 'PENDING') AND order.originHubId = :currentHubId)",
+            "(order.status IN ('DRAFT', 'WAITING', 'PENDING') AND (order.originHubId = :currentHubId OR order.currentHubId = :currentHubId OR order.currentHubId IS NULL))",
             { currentHubId },
           );
         }),
@@ -3960,6 +3979,16 @@ export class WarehouseService {
       if (orders.length === 0) {
         throw new BadRequestException(
           'Không tìm thấy đơn hàng nào hợp lệ trong danh sách đã chọn',
+        );
+      }
+
+      const draftOrders = orders.filter((o) =>
+        DRAFT_LIKE_STATUSES.includes(o.status),
+      );
+      if (draftOrders.length > 0) {
+        const draftCodes = draftOrders.map((o) => o.orderCode).join(', ');
+        throw new BadRequestException(
+          `Không thể bốc đơn hàng nháp (${draftCodes}) lên chuyến xe xuất kho. Chuyến xe có đơn nháp chỉ được phép ở trạng thái "Chờ xử lý". Vui lòng duyệt đơn hàng trước khi bốc hàng.`,
         );
       }
 
@@ -4101,6 +4130,33 @@ export class WarehouseService {
       currentHubId,
       'cập nhật tiến trình trạm chuyến xe',
     );
+
+    // Strict Pending Guard (Task #51): If any order associated with this trip is in DRAFT/WAITING/PENDING,
+    // the transit step cannot transition to COMPLETED.
+    const tripRepo = this.dataSource.getRepository(TripEntity);
+    const orderRepo = this.dataSource.getRepository(OrderEntity);
+    const trips = await tripRepo.find({
+      where: { tripCode, deletedAt: IsNull() },
+    });
+    if (trips.length > 0) {
+      const orderIds = trips
+        .map((t) => t.orderId)
+        .filter((id): id is number => !!id);
+      if (orderIds.length > 0) {
+        const orders = await orderRepo.find({
+          where: { id: In(orderIds), deletedAt: IsNull() },
+        });
+        const draftOrders = orders.filter((o) =>
+          DRAFT_LIKE_STATUSES.includes(o.status),
+        );
+        if (draftOrders.length > 0) {
+          const draftCodes = draftOrders.map((o) => o.orderCode).join(', ');
+          throw new BadRequestException(
+            `Không thể hoàn tất trạm trung chuyển vì chuyến xe ${tripCode} có chứa ${draftOrders.length} đơn hàng đang ở trạng thái đơn nháp (${draftCodes}). Chuyến xe có đơn nháp chỉ được phép ở trạng thái "Chờ xử lý". Vui lòng duyệt đơn hàng trước khi cập nhật.`,
+          );
+        }
+      }
+    }
 
     const tripStopRepo = this.dataSource.getRepository(TripStopEntity);
     let stop = await tripStopRepo.findOne({
