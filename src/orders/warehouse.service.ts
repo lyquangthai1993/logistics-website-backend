@@ -3771,6 +3771,33 @@ export class WarehouseService {
     let orders: OrderEntity[] = [];
 
     if (tripCode) {
+      const resolvedUserHubId = await this.resolveUserHubId(user);
+      const stops: any[] = await this.dataSource.query(
+        `SELECT ts."hubId", ts."status" FROM "trip_stop" ts WHERE ts."tripCode" = $1 AND ts."deletedAt" IS NULL`,
+        [tripCode],
+      );
+      const userStop = resolvedUserHubId
+        ? stops.find((s) => Number(s.hubId) === resolvedUserHubId)
+        : null;
+      const hasCompletedStop = userStop
+        ? userStop.status === TripStopStatus.COMPLETED
+        : stops.some((s) => s.status === TripStopStatus.COMPLETED);
+
+      const inboundTx = await this.transactionRepository.findOne({
+        where: {
+          tripCode,
+          type: InventoryTransactionType.INBOUND,
+          deletedAt: IsNull(),
+          ...(resolvedUserHubId ? { hubId: resolvedUserHubId } : {}),
+        },
+      });
+
+      if (!hasCompletedStop && !inboundTx) {
+        throw new BadRequestException(
+          'Chuyến xe đang ở trạng thái Chờ xử lý, chưa hoàn tất kiểm đếm dỡ hàng để in phiếu nhập kho',
+        );
+      }
+
       const trips = await this.tripRepository.find({
         where: { tripCode, deletedAt: IsNull() },
         relations: [
