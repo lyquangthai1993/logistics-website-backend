@@ -298,7 +298,7 @@ export class WarehouseService {
       }
       if (flowUpper === 'OUTBOUND_LOOKUP') {
         q.andWhere(
-          `${statusExpr} IN (${sqlList([...STORED_STATUSES, ...DRAFT_LIKE_STATUSES])})`,
+          `(${statusExpr} IN (${sqlList(STORED_STATUSES)}) OR (${statusExpr} IN (${sqlList(DRAFT_LIKE_STATUSES)}) AND NOT EXISTS (SELECT 1 FROM "trip" inbt WHERE inbt."orderId" = order.id AND inbt."type" = 'INBOUND' AND inbt."deletedAt" IS NULL)))`,
         );
       } else if (isAllStatus && flowUpper === 'INBOUND') {
         // Only items physically in or inbound to the warehouse (exclude departed ones)
@@ -3321,11 +3321,43 @@ export class WarehouseService {
         totalVolume += line.volume;
         const order = orderById.get(Number(line.orderId));
         if (!order) continue;
+        const basePendingQty = Number(order.pendingOutboundQuantity) || 0;
+        const basePendingTripCodes: string[] = order.pendingOutboundTripCodes || [];
+        const thisTripQty = isDraft ? line.quantity : 0;
+        const adjustedPendingTripCodes = basePendingTripCodes.filter(
+          (tc) => tc !== row.tripCode,
+        );
+        const adjustedPendingQty = Math.max(0, basePendingQty - thisTripQty);
+        const adjustedEffectiveHubStock =
+          order.effectiveHubStock !== null && order.effectiveHubStock !== undefined
+            ? Number(order.effectiveHubStock) + thisTripQty
+            : null;
+        const adjustedEffectiveStock =
+          order.effectiveStock !== null && order.effectiveStock !== undefined
+            ? Number(order.effectiveStock) + thisTripQty
+            : null;
+
         const existing = orders.find((x) => x.id === order.id);
         if (existing) {
           existing.exportedQuantity += line.quantity;
           existing.exportedWeight += line.weight;
           existing.exportedVolume += line.volume;
+          if (isDraft) {
+            existing.effectiveHubStock =
+              existing.effectiveHubStock !== null &&
+              existing.effectiveHubStock !== undefined
+                ? Number(existing.effectiveHubStock) + line.quantity
+                : null;
+            existing.effectiveStock =
+              existing.effectiveStock !== null &&
+              existing.effectiveStock !== undefined
+                ? Number(existing.effectiveStock) + line.quantity
+                : null;
+            existing.pendingOutboundQuantity = Math.max(
+              0,
+              (Number(existing.pendingOutboundQuantity) || 0) - line.quantity,
+            );
+          }
           continue;
         }
         orders.push({
@@ -3335,6 +3367,10 @@ export class WarehouseService {
           exportedVolume: line.volume,
           dispatchInvoiceCode: line.invoiceCode,
           plannedDestinationHubId: line.destinationHubId,
+          pendingOutboundTripCodes: adjustedPendingTripCodes,
+          pendingOutboundQuantity: adjustedPendingQty,
+          effectiveHubStock: adjustedEffectiveHubStock,
+          effectiveStock: adjustedEffectiveStock,
         });
       }
 

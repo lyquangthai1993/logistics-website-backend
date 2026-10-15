@@ -200,12 +200,13 @@ export class OperationalLedgerService {
     const em = this.em(manager);
     const rows = await em.query(
       `SELECT COALESCE(SUM(COALESCE("quantityAllocated", 0)), 0)::int AS "pendingQty",
-              array_agg(DISTINCT "tripCode") FILTER (WHERE "tripCode" IS NOT NULL) AS "tripCodes"
+              array_agg(DISTINCT "tripCode") FILTER (WHERE "tripCode" IS NOT NULL AND COALESCE("quantityAllocated", 0) > 0) AS "tripCodes"
        FROM "trip"
        WHERE "orderId" = $1
          AND "originHubId" = $2
          AND "status" = 'PENDING'
          AND "type" IN ('OUTBOUND', 'TRANSFER')
+         AND "type" != 'INBOUND'
          AND "deletedAt" IS NULL
          AND ($3::text IS NULL OR "tripCode" != $3)`,
       [orderId, hubId, excludeTripCode || null],
@@ -230,12 +231,13 @@ export class OperationalLedgerService {
     const rows = await em.query(
       `SELECT "orderId",
               COALESCE(SUM(COALESCE("quantityAllocated", 0)), 0)::int AS "pendingQty",
-              array_agg(DISTINCT "tripCode") FILTER (WHERE "tripCode" IS NOT NULL) AS "tripCodes"
+              array_agg(DISTINCT "tripCode") FILTER (WHERE "tripCode" IS NOT NULL AND COALESCE("quantityAllocated", 0) > 0) AS "tripCodes"
        FROM "trip"
        WHERE "orderId" = ANY($1)
          AND "originHubId" = $2
          AND "status" = 'PENDING'
          AND "type" IN ('OUTBOUND', 'TRANSFER')
+         AND "type" != 'INBOUND'
          AND "deletedAt" IS NULL
          AND ($3::text IS NULL OR "tripCode" != $3)
        GROUP BY "orderId"`,
