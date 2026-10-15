@@ -13,24 +13,41 @@ describe('isCorsOriginAllowed', () => {
       expect(isCorsOriginAllowed('', corsOrigins, isDev)).toBe(true);
     });
 
-    it('should allow any Vercel preview domain dynamically', () => {
+    it('should allow any Railway domain dynamically in dev mode', () => {
       expect(
         isCorsOriginAllowed(
-          'https://logistics-website-frontend-git-dev-user.vercel.app',
+          'https://frontend-tms-core-dev.up.railway.app',
           corsOrigins,
           isDev,
         ),
       ).toBe(true);
       expect(
         isCorsOriginAllowed(
-          'https://logistics-website-frontend-kappa.vercel.app',
+          'https://preview-feature.up.railway.app',
           corsOrigins,
           isDev,
         ),
       ).toBe(true);
       expect(
         isCorsOriginAllowed(
-          'https://random-preview-1234.vercel.app',
+          'https://custom-service.railway.app',
+          corsOrigins,
+          isDev,
+        ),
+      ).toBe(true);
+    });
+
+    it('should allow any Vercel preview domain dynamically in dev mode', () => {
+      expect(
+        isCorsOriginAllowed(
+          'https://logistics-website-frontend-preview.vercel.app',
+          corsOrigins,
+          isDev,
+        ),
+      ).toBe(true);
+      expect(
+        isCorsOriginAllowed(
+          'https://preview-sample-1234.vercel.app',
           corsOrigins,
           isDev,
         ),
@@ -116,17 +133,17 @@ describe('isCorsOriginAllowed', () => {
       ).toBe(true);
     });
 
-    it('should REJECT random vercel preview domains in production mode', () => {
+    it('should REJECT random preview domains (Railway/Vercel) in production mode', () => {
       expect(
         isCorsOriginAllowed(
-          'https://logistics-website-frontend-git-dev-user.vercel.app',
+          'https://preview-sample.vercel.app',
           corsOrigins,
           isDev,
         ),
       ).toBe(false);
       expect(
         isCorsOriginAllowed(
-          'https://logistics-website-frontend-kappa.vercel.app',
+          'https://unconfigured-service.up.railway.app',
           corsOrigins,
           isDev,
         ),
