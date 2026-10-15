@@ -9,7 +9,9 @@ import cookieParser from 'cookie-parser';
 // which causes a negative timezone offset shift when serialized to ISO string (JSON).
 types.setTypeParser(1114, (stringValue: string) => {
   if (!stringValue) return null;
-  const isoString = stringValue.includes('T') ? stringValue : stringValue.replace(' ', 'T');
+  const isoString = stringValue.includes('T')
+    ? stringValue
+    : stringValue.replace(' ', 'T');
   return new Date(isoString.endsWith('Z') ? isoString : `${isoString}Z`);
 });
 

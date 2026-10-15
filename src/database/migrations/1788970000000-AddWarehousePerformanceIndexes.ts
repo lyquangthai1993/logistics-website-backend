@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddWarehousePerformanceIndexes1788970000000
-  implements MigrationInterface
-{
+export class AddWarehousePerformanceIndexes1788970000000 implements MigrationInterface {
   name = 'AddWarehousePerformanceIndexes1788970000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -54,7 +52,9 @@ export class AddWarehousePerformanceIndexes1788970000000
     await queryRunner.query(`DROP INDEX IF EXISTS "IDX_order_status_created"`);
     await queryRunner.query(`DROP INDEX IF EXISTS "IDX_trip_order_deleted"`);
     await queryRunner.query(`DROP INDEX IF EXISTS "IDX_trip_licensePlate"`);
-    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_order_destinationHubId"`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "IDX_order_destinationHubId"`,
+    );
     await queryRunner.query(`DROP INDEX IF EXISTS "IDX_order_originHubId"`);
     await queryRunner.query(`DROP INDEX IF EXISTS "IDX_trip_createdAt"`);
     await queryRunner.query(`DROP INDEX IF EXISTS "IDX_order_updatedAt"`);

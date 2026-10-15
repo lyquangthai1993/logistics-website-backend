@@ -45,7 +45,10 @@ export class AppendOrderToTripDto {
   @IsString()
   orderCode?: string;
 
-  @ApiProperty({ example: 'Hạt nhựa công nghiệp', description: 'Tên hàng hóa bốc thêm' })
+  @ApiProperty({
+    example: 'Hạt nhựa công nghiệp',
+    description: 'Tên hàng hóa bốc thêm',
+  })
   @IsNotEmpty({ message: 'Tên hàng hóa không được để trống' })
   @IsString()
   goodsDescription: string;
@@ -92,14 +95,18 @@ export class AppendOrderToTripDto {
   @IsString()
   deliveryAddress?: string;
 
-  @ApiPropertyOptional({ example: 'Đà Nẵng', description: 'Tỉnh/Thành phố nhận hàng của khách' })
+  @ApiPropertyOptional({
+    example: 'Đà Nẵng',
+    description: 'Tỉnh/Thành phố nhận hàng của khách',
+  })
   @IsOptional()
   @IsString()
   province?: string;
 
   @ApiPropertyOptional({
     example: 2,
-    description: 'ID Kho nhập hàng (mặc định lấy Kho hiện tại của tài khoản thao tác)',
+    description:
+      'ID Kho nhập hàng (mặc định lấy Kho hiện tại của tài khoản thao tác)',
   })
   @IsOptional()
   @IsInt()

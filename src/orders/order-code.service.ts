@@ -71,7 +71,7 @@ export class OrderCodeService {
   ): Promise<string> {
     const em = manager || this.dataSource.manager;
 
-    let userWithHub = user;
+    const userWithHub = user;
     if (!userWithHub.hub && userWithHub.hubId) {
       const hub = await em.findOne(HubEntity, {
         where: { id: userWithHub.hubId },
@@ -109,12 +109,18 @@ export class OrderCodeService {
           ? 'DAD'
           : hub.code === 'HUB-HYN-01'
             ? 'HYN'
-            : hub.code.replace('HUB-', '').replace('-01', '').replace(/-/g, '_'));
+            : hub.code
+                .replace('HUB-', '')
+                .replace('-01', '')
+                .replace(/-/g, '_'));
 
-    const fullName = [userWithHub.firstName, userWithHub.lastName]
-      .filter(Boolean)
-      .join(' ')
-      .trim() || userWithHub.username || 'OP';
+    const fullName =
+      [userWithHub.firstName, userWithHub.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim() ||
+      userWithHub.username ||
+      'OP';
 
     const operatorInitials = this.extractInitials(fullName);
     const yearMonth = this.getYearMonthPeriod();

@@ -129,20 +129,19 @@ export class OrdersController {
     return this.ordersService.generateOrderCode(prefix);
   }
 
-  @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.DISPATCHER,
-    RoleEnum.WAREHOUSE_MANAGER,
-  )
+  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.DISPATCHER, RoleEnum.WAREHOUSE_MANAGER)
   @Post('refresh-metrics')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Làm mới thông số tải trọng cho danh sách đơn hàng' })
+  @ApiOperation({
+    summary: 'Làm mới thông số tải trọng cho danh sách đơn hàng',
+  })
   refreshMetrics(@Body('orderIds') orderIds: number[]) {
     return this.ordersService.refreshMetrics(orderIds);
   }
 
   @ApiOkResponse({
-    description: 'Kiểm tra mã vận đơn/đơn hàng đã tồn tại trong hệ thống hay chưa',
+    description:
+      'Kiểm tra mã vận đơn/đơn hàng đã tồn tại trong hệ thống hay chưa',
     schema: {
       properties: {
         exists: { type: 'boolean', example: false },

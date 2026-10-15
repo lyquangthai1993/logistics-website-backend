@@ -534,7 +534,8 @@ export class WarehouseService {
       const view = hubView.get(item.id);
       const effectiveStatus = view?.hubStatus ?? item.status;
       const effectiveStock =
-        view?.effectiveHubStock !== undefined && view?.effectiveHubStock !== null
+        view?.effectiveHubStock !== undefined &&
+        view?.effectiveHubStock !== null
           ? view.effectiveHubStock
           : view?.hubStock !== undefined && view?.hubStock !== null
             ? view.hubStock
@@ -3342,14 +3343,16 @@ export class WarehouseService {
         const order = orderById.get(Number(line.orderId));
         if (!order) continue;
         const basePendingQty = Number(order.pendingOutboundQuantity) || 0;
-        const basePendingTripCodes: string[] = order.pendingOutboundTripCodes || [];
+        const basePendingTripCodes: string[] =
+          order.pendingOutboundTripCodes || [];
         const thisTripQty = isDraft ? line.quantity : 0;
         const adjustedPendingTripCodes = basePendingTripCodes.filter(
           (tc) => tc !== row.tripCode,
         );
         const adjustedPendingQty = Math.max(0, basePendingQty - thisTripQty);
         const adjustedEffectiveHubStock =
-          order.effectiveHubStock !== null && order.effectiveHubStock !== undefined
+          order.effectiveHubStock !== null &&
+          order.effectiveHubStock !== undefined
             ? Number(order.effectiveHubStock) + thisTripQty
             : null;
         const adjustedEffectiveStock =

@@ -29,9 +29,13 @@ export class OrderInventoryTransactionEntity extends AbstractBaseEntity {
   @Column({ type: Number, nullable: false })
   orderId: number;
 
-  @ManyToOne('OrderEntity', (order: OrderEntity) => order.inventoryTransactions, {
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    'OrderEntity',
+    (order: OrderEntity) => order.inventoryTransactions,
+    {
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'orderId' })
   order: Relation<OrderEntity>;
 

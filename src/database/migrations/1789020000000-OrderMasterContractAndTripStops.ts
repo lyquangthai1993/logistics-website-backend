@@ -12,9 +12,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *     expectedQuantity, discrepancyQuantity, discrepancyReason.
  *  5. Backfill (new columns only): currentHubId, transaction hubId, trip stops for legacy trip codes.
  */
-export class OrderMasterContractAndTripStops1789020000000
-  implements MigrationInterface
-{
+export class OrderMasterContractAndTripStops1789020000000 implements MigrationInterface {
   name = 'OrderMasterContractAndTripStops1789020000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

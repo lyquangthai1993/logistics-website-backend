@@ -33,7 +33,10 @@ export class InboundOrderItemDto {
   @IsString()
   goodsDescription?: string;
 
-  @ApiPropertyOptional({ example: 50, description: 'Số lượng hàng hóa (thùng, kiện, bao, pallet...)' })
+  @ApiPropertyOptional({
+    example: 50,
+    description: 'Số lượng hàng hóa (thùng, kiện, bao, pallet...)',
+  })
   @IsOptional()
   @IsInt({ message: 'Số lượng phải là số nguyên' })
   @Min(1, { message: 'Số lượng phải lớn hơn hoặc bằng 1' })
@@ -69,7 +72,10 @@ export class InboundOrderItemDto {
   @IsString()
   deliveryAddress?: string;
 
-  @ApiPropertyOptional({ example: 'TP.HCM', description: 'Tỉnh/Thành phố nhận hàng (nhập tự do)' })
+  @ApiPropertyOptional({
+    example: 'TP.HCM',
+    description: 'Tỉnh/Thành phố nhận hàng (nhập tự do)',
+  })
   @IsOptional()
   @IsString()
   province?: string;
@@ -80,7 +86,10 @@ export class InboundOrderItemDto {
   @IsPositive()
   destinationHubId?: number;
 
-  @ApiPropertyOptional({ example: '1 BCT', description: 'Chứng từ đi kèm (optional)' })
+  @ApiPropertyOptional({
+    example: '1 BCT',
+    description: 'Chứng từ đi kèm (optional)',
+  })
   @IsOptional()
   @IsString()
   accompanyingDocs?: string;
@@ -168,7 +177,8 @@ export class BatchQuickCreateInboundDto {
 
   @ApiPropertyOptional({
     example: 1,
-    description: 'ID Kho tiếp nhận (Dành riêng cho Super Admin chọn kho nạp hàng)',
+    description:
+      'ID Kho tiếp nhận (Dành riêng cho Super Admin chọn kho nạp hàng)',
   })
   @IsOptional()
   @IsInt()
@@ -183,5 +193,3 @@ export class BatchQuickCreateInboundDto {
   @Type(() => InboundOrderItemDto)
   items: InboundOrderItemDto[];
 }
-
-

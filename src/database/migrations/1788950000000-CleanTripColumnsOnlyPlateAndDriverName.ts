@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CleanTripColumnsOnlyPlateAndDriverName1788950000000
-  implements MigrationInterface
-{
+export class CleanTripColumnsOnlyPlateAndDriverName1788950000000 implements MigrationInterface {
   name = 'CleanTripColumnsOnlyPlateAndDriverName1788950000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -39,7 +39,11 @@ export class CreateHubDto {
   @IsString()
   managerName?: string;
 
-  @ApiPropertyOptional({ example: 1, default: 1, description: '1: Hub Cấp 1, 2: Hub Cấp 2 / Xe bo' })
+  @ApiPropertyOptional({
+    example: 1,
+    default: 1,
+    description: '1: Hub Cấp 1, 2: Hub Cấp 2 / Xe bo',
+  })
   @IsOptional()
   level?: number;
 

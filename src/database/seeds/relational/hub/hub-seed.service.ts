@@ -397,7 +397,10 @@ export class HubSeedService {
             ? 'DAD'
             : h.code === 'HUB-HYN-01'
               ? 'HYN'
-              : h.code.replace('HUB-', '').replace('-01', '').replace(/-/g, '_'));
+              : h.code
+                  .replace('HUB-', '')
+                  .replace('-01', '')
+                  .replace(/-/g, '_'));
 
       const level = (h as any).level || (h.code.startsWith('HUB-BO-') ? 2 : 1);
 

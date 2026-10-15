@@ -83,8 +83,11 @@ export class TripsService {
       );
     }
 
-    const isTransfer =
-      !!(order.originHubId && order.destinationHubId && order.originHubId !== order.destinationHubId);
+    const isTransfer = !!(
+      order.originHubId &&
+      order.destinationHubId &&
+      order.originHubId !== order.destinationHubId
+    );
     const trip = this.tripRepository.create({
       ...createTripDto,
       tripCode: await this.ledgerService.generateTripCode(),
@@ -123,8 +126,11 @@ export class TripsService {
     for (let i = 0; i < dto.trips.length; i++) {
       const item = dto.trips[i];
 
-      const isTransfer =
-        !!(order.originHubId && order.destinationHubId && order.originHubId !== order.destinationHubId);
+      const isTransfer = !!(
+        order.originHubId &&
+        order.destinationHubId &&
+        order.originHubId !== order.destinationHubId
+      );
       // Mỗi xe phân bổ là một chuyến xe riêng → mã SD riêng
       const trip = this.tripRepository.create({
         orderId: dto.orderId,
@@ -424,10 +430,9 @@ export class TripsService {
     }
 
     if (query?.hub) {
-      qb.andWhere(
-        '(order.originHub = :hub OR order.destinationHub = :hub)',
-        { hub: query.hub },
-      );
+      qb.andWhere('(order.originHub = :hub OR order.destinationHub = :hub)', {
+        hub: query.hub,
+      });
     }
 
     if (query?.search && query.search.trim()) {
@@ -459,7 +464,8 @@ export class TripsService {
     // Hub-scoped trip status (Chờ xử lý / Đã xử lý) from the viewer hub's trip stop
     const viewerHubId = user?.hubId ?? null;
     const wantsHubContext =
-      query?.hubContext === 'true' || user?.role?.id === RoleEnum.WAREHOUSE_MANAGER;
+      query?.hubContext === 'true' ||
+      user?.role?.id === RoleEnum.WAREHOUSE_MANAGER;
     if (wantsHubContext && viewerHubId) {
       const codes = Array.from(
         new Set(data.map((t) => t.tripCode).filter((c): c is string => !!c)),
