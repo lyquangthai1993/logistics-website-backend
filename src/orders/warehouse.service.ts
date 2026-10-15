@@ -1355,8 +1355,28 @@ export class WarehouseService {
       const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
       const hubRepo = manager.getRepository(HubEntity);
 
-      const originHubId = userWithHub.hubId || null;
-      const originHubName = userWithHub.hub?.name || null;
+      let originHubId = userWithHub.hubId || null;
+      let originHubName = userWithHub.hub?.name || null;
+
+      // Cho phép Super Admin (hoặc user không bị gắn cố định 1 hub) chỉ định kho tiếp nhận qua dto.hubId
+      if (dto.hubId) {
+        const targetHub = await hubRepo.findOne({ where: { id: dto.hubId } });
+        if (targetHub) {
+          originHubId = targetHub.id;
+          originHubName = targetHub.name;
+        }
+      }
+
+      // Cơ chế bảo vệ dự phòng: nếu là Super Admin không truyền hubId, mặc định gán vào Andromeda Hub - HCM (HUB-HCM-01)
+      if (!originHubId) {
+        const defaultHcmHub = await hubRepo.findOne({
+          where: [{ code: 'HUB-HCM-01' }, { id: 1 }],
+        });
+        if (defaultHcmHub) {
+          originHubId = defaultHcmHub.id;
+          originHubName = defaultHcmHub.name;
+        }
+      }
 
       // Single shared tripCode for all items on this vehicle
       sharedTripCode =

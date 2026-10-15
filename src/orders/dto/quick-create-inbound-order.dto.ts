@@ -166,6 +166,14 @@ export class BatchQuickCreateInboundDto {
   @IsString()
   tripCode?: string;
 
+  @ApiPropertyOptional({
+    example: 1,
+    description: 'ID Kho tiếp nhận (Dành riêng cho Super Admin chọn kho nạp hàng)',
+  })
+  @IsOptional()
+  @IsInt()
+  hubId?: number;
+
   @ApiProperty({
     description: 'Danh sách các dòng hàng của chuyến xe',
     type: () => [InboundOrderItemDto],
