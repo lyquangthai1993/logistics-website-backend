@@ -1,8 +1,9 @@
 /**
  * Determines whether a given request origin is allowed under the current CORS policy.
  *
- * In Dev Environment (nodeEnv !== 'production' or RENDER_GIT_BRANCH === 'dev'):
- * - Automatically allows any Vercel domain (*.vercel.app), Render domain (*.onrender.com),
+ * In Dev Environment (nodeEnv !== 'production' or RENDER_GIT_BRANCH === 'dev' or RAILWAY_ENVIRONMENT_NAME === 'dev'):
+ * - Automatically allows any Railway domain (*.up.railway.app, *.railway.app),
+ *   Vercel domain (*.vercel.app), Render domain (*.onrender.com),
  *   localhost, and 127.0.0.1.
  * - Allows any custom origins in APP_CORS_ORIGINS / FRONTEND_DOMAIN.
  *
@@ -26,8 +27,12 @@ export function isCorsOriginAllowed(
     return true;
   }
 
-  // 3. In Dev / Preview environments, automatically allow Vercel, Render, and Localhost
+  // 3. In Dev / Preview environments, automatically allow Railway, Vercel, Render, and Localhost
   if (isDev) {
+    const isRailway =
+      origin.endsWith('.up.railway.app') ||
+      origin.endsWith('.railway.app') ||
+      /^https:\/\/([a-zA-Z0-9_-]+\.)*railway\.app$/.test(origin);
     const isVercel =
       origin.endsWith('.vercel.app') ||
       /^https:\/\/([a-zA-Z0-9_-]+\.)*vercel\.app$/.test(origin);
@@ -38,7 +43,7 @@ export function isCorsOriginAllowed(
       origin,
     );
 
-    if (isVercel || isRender || isLocalhost) {
+    if (isRailway || isVercel || isRender || isLocalhost) {
       return true;
     }
   }

@@ -57,7 +57,9 @@ async function bootstrap() {
   const isDev =
     nodeEnv !== 'production' ||
     process.env.RENDER_GIT_BRANCH === 'dev' ||
-    process.env.RENDER_GIT_BRANCH === 'development';
+    process.env.RENDER_GIT_BRANCH === 'development' ||
+    process.env.RAILWAY_ENVIRONMENT_NAME === 'dev' ||
+    process.env.RAILWAY_ENVIRONMENT === 'dev';
 
   const corsOrigins = configService.getOrThrow('app.corsOrigins', {
     infer: true,
