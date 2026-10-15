@@ -186,6 +186,70 @@ export class OperationalLedgerService {
     return { loaded, received, inTransit: Math.max(0, loaded - received) };
   }
 
+  /**
+   * Total packages of an order allocated to PENDING outbound/transfer trips from a hub,
+   * optionally excluding a specific draft trip code (e.g. when resuming/updating that draft).
+   */
+  async getPendingOutboundAllocation(
+    orderId: number,
+    hubId: number | null | undefined,
+    excludeTripCode?: string,
+    manager?: EntityManager,
+  ): Promise<{ pendingQty: number; tripCodes: string[] }> {
+    if (!hubId) return { pendingQty: 0, tripCodes: [] };
+    const em = this.em(manager);
+    const rows = await em.query(
+      `SELECT COALESCE(SUM(COALESCE("quantityAllocated", 0)), 0)::int AS "pendingQty",
+              array_agg(DISTINCT "tripCode") FILTER (WHERE "tripCode" IS NOT NULL) AS "tripCodes"
+       FROM "trip"
+       WHERE "orderId" = $1
+         AND "originHubId" = $2
+         AND "status" = 'PENDING'
+         AND "type" IN ('OUTBOUND', 'TRANSFER')
+         AND "deletedAt" IS NULL
+         AND ($3::text IS NULL OR "tripCode" != $3)`,
+      [orderId, hubId, excludeTripCode || null],
+    );
+    const pendingQty = Number(rows?.[0]?.pendingQty) || 0;
+    const tripCodes: string[] = rows?.[0]?.tripCodes || [];
+    return { pendingQty, tripCodes };
+  }
+
+  /**
+   * Batch calculation of pending outbound allocation for multiple orders at a hub.
+   */
+  async getBatchPendingOutboundAllocations(
+    orderIds: number[],
+    hubId: number | null | undefined,
+    excludeTripCode?: string,
+    manager?: EntityManager,
+  ): Promise<Map<number, { pendingQty: number; tripCodes: string[] }>> {
+    const map = new Map<number, { pendingQty: number; tripCodes: string[] }>();
+    if (!hubId || orderIds.length === 0) return map;
+    const em = this.em(manager);
+    const rows = await em.query(
+      `SELECT "orderId",
+              COALESCE(SUM(COALESCE("quantityAllocated", 0)), 0)::int AS "pendingQty",
+              array_agg(DISTINCT "tripCode") FILTER (WHERE "tripCode" IS NOT NULL) AS "tripCodes"
+       FROM "trip"
+       WHERE "orderId" = ANY($1)
+         AND "originHubId" = $2
+         AND "status" = 'PENDING'
+         AND "type" IN ('OUTBOUND', 'TRANSFER')
+         AND "deletedAt" IS NULL
+         AND ($3::text IS NULL OR "tripCode" != $3)
+       GROUP BY "orderId"`,
+      [orderIds, hubId, excludeTripCode || null],
+    );
+    for (const r of rows) {
+      map.set(Number(r.orderId), {
+        pendingQty: Number(r.pendingQty) || 0,
+        tripCodes: r.tripCodes || [],
+      });
+    }
+    return map;
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
   // SQL fragments (TypeORM query builder, main alias `order`, param `:userHubId`)
   // ───────────────────────────────────────────────────────────────────────────

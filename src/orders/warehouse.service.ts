@@ -173,21 +173,53 @@ export class WarehouseService {
   private async computeHubView(
     orderIds: number[],
     hubId: number,
-  ): Promise<Map<number, { hubStatus: string; hubStock: number }>> {
-    const map = new Map<number, { hubStatus: string; hubStock: number }>();
+  ): Promise<
+    Map<
+      number,
+      {
+        hubStatus: string;
+        hubStock: number;
+        pendingOutboundQuantity: number;
+        pendingOutboundTripCodes: string[];
+        effectiveHubStock: number;
+      }
+    >
+  > {
+    const map = new Map<
+      number,
+      {
+        hubStatus: string;
+        hubStock: number;
+        pendingOutboundQuantity: number;
+        pendingOutboundTripCodes: string[];
+        effectiveHubStock: number;
+      }
+    >();
     if (orderIds.length === 0) return map;
-    const rows = await this.orderRepository
-      .createQueryBuilder('order')
-      .select('order.id', 'id')
-      .addSelect(this.ledgerService.hubStatusSql(), 'hubStatus')
-      .addSelect(this.ledgerService.hubStockSql(), 'hubStock')
-      .where('order.id IN (:...orderIds)', { orderIds })
-      .setParameter('userHubId', hubId)
-      .getRawMany();
+    const [rows, pendingAllocMap] = await Promise.all([
+      this.orderRepository
+        .createQueryBuilder('order')
+        .select('order.id', 'id')
+        .addSelect(this.ledgerService.hubStatusSql(), 'hubStatus')
+        .addSelect(this.ledgerService.hubStockSql(), 'hubStock')
+        .where('order.id IN (:...orderIds)', { orderIds })
+        .setParameter('userHubId', hubId)
+        .getRawMany(),
+      this.ledgerService.getBatchPendingOutboundAllocations(orderIds, hubId),
+    ]);
     for (const r of rows) {
-      map.set(Number(r.id), {
+      const id = Number(r.id);
+      const hubStock = Number(r.hubStock) || 0;
+      const pendingAlloc = pendingAllocMap.get(id);
+      const pendingOutboundQuantity = pendingAlloc?.pendingQty ?? 0;
+      const pendingOutboundTripCodes = pendingAlloc?.tripCodes ?? [];
+      const effectiveHubStock = Math.max(0, hubStock - pendingOutboundQuantity);
+      map.set(id, {
         hubStatus: r.hubStatus,
-        hubStock: Number(r.hubStock) || 0,
+        hubStock,
+        pendingOutboundQuantity,
+        pendingOutboundTripCodes,
+        effectiveHubStock,
       });
     }
     return map;
@@ -478,7 +510,16 @@ export class WarehouseService {
             data.map((d) => d.id),
             userHubId,
           )
-        : new Map<number, { hubStatus: string; hubStock: number }>();
+        : new Map<
+            number,
+            {
+              hubStatus: string;
+              hubStock: number;
+              pendingOutboundQuantity: number;
+              pendingOutboundTripCodes: string[];
+              effectiveHubStock: number;
+            }
+          >();
 
     return data.map((item) => {
       let pickupAddr = item.originHub || '';
@@ -493,12 +534,14 @@ export class WarehouseService {
       const view = hubView.get(item.id);
       const effectiveStatus = view?.hubStatus ?? item.status;
       const effectiveStock =
-        view?.hubStock !== undefined && view?.hubStock !== null
-          ? view.hubStock
-          : item.remainingQuantity !== undefined &&
-              item.remainingQuantity !== null
-            ? item.remainingQuantity
-            : null;
+        view?.effectiveHubStock !== undefined && view?.effectiveHubStock !== null
+          ? view.effectiveHubStock
+          : view?.hubStock !== undefined && view?.hubStock !== null
+            ? view.hubStock
+            : item.remainingQuantity !== undefined &&
+                item.remainingQuantity !== null
+              ? item.remainingQuantity
+              : null;
 
       const txs = (item.inventoryTransactions as any[]) || [];
       const hubTxs = userHubId
@@ -691,6 +734,10 @@ export class WarehouseService {
         hubStatus: effectiveStatus,
         /** Available stock at the viewer's hub (ledger based); null without hub context. */
         hubStock: view ? view.hubStock : null,
+        pendingOutboundQuantity: view ? view.pendingOutboundQuantity : 0,
+        pendingOutboundTripCodes: view ? view.pendingOutboundTripCodes : [],
+        effectiveHubStock: view ? view.effectiveHubStock : null,
+        effectiveStock: effectiveStock,
         isContractLocked: !DRAFT_LIKE_STATUSES.includes(item.status),
         inboundDate: inboundDate ? new Date(inboundDate).toISOString() : null,
         outboundDate: outboundDate
@@ -2352,10 +2399,22 @@ export class WarehouseService {
               ? order.remainingQuantity
               : order.totalQuantity || 0;
 
+        const pendingAlloc =
+          await this.ledgerService.getPendingOutboundAllocation(
+            order.id,
+            actingHubId,
+            draftCode || undefined,
+            manager,
+          );
+        const effectiveAvailable = Math.max(
+          0,
+          availableQty - pendingAlloc.pendingQty,
+        );
+
         const qtyToExport =
           item && item.quantityToExport !== undefined
             ? Number(item.quantityToExport)
-            : availableQty;
+            : effectiveAvailable;
 
         if (qtyToExport <= 0) {
           throw new UnprocessableEntityException(
@@ -2363,9 +2422,13 @@ export class WarehouseService {
           );
         }
 
-        if (qtyToExport > availableQty) {
+        if (qtyToExport > effectiveAvailable) {
+          const tripHint =
+            pendingAlloc.tripCodes.length > 0
+              ? ` (${pendingAlloc.tripCodes.join(', ')})`
+              : '';
           throw new UnprocessableEntityException(
-            `Mã đơn ${order.orderCode}: Số lượng xuất (${qtyToExport}) vượt quá tồn kho khả dụng tại kho (${availableQty} kiện).`,
+            `Mã đơn ${order.orderCode}: Số lượng xuất (${qtyToExport}) vượt quá tồn kho khả dụng còn lại (${effectiveAvailable} kiện). Đơn hàng đang được xếp ${pendingAlloc.pendingQty} kiện trong chuyến xe chờ xuất${tripHint}.`,
           );
         }
 
@@ -2666,18 +2729,34 @@ export class WarehouseService {
           : hubStock !== null
             ? hubStock
             : (order.remainingQuantity ?? order.totalQuantity ?? 0);
+        const pendingAlloc =
+          await this.ledgerService.getPendingOutboundAllocation(
+            order.id,
+            actingHubId,
+            draftCode || undefined,
+            manager,
+          );
+        const effectiveAvailable = Math.max(
+          0,
+          availableQty - pendingAlloc.pendingQty,
+        );
+
         const qty =
           item?.quantityToExport !== undefined
             ? Number(item.quantityToExport)
-            : availableQty;
+            : effectiveAvailable;
         if (qty <= 0) {
           throw new UnprocessableEntityException(
             `Đơn hàng ${order.orderCode}: Số lượng xuất phải lớn hơn 0.`,
           );
         }
-        if (qty > availableQty) {
+        if (qty > effectiveAvailable) {
+          const tripHint =
+            pendingAlloc.tripCodes.length > 0
+              ? ` (${pendingAlloc.tripCodes.join(', ')})`
+              : '';
           throw new UnprocessableEntityException(
-            `Mã đơn ${order.orderCode}: Số lượng xuất (${qty}) vượt quá tồn kho khả dụng tại kho (${availableQty} kiện).`,
+            `Mã đơn ${order.orderCode}: Không thể thêm vào chuyến xe này. Đơn hàng đã được xếp ${pendingAlloc.pendingQty}/${availableQty} kiện vào chuyến xe chờ xuất${tripHint}. Số kiện khả dụng còn lại: ${effectiveAvailable} kiện.`,
           );
         }
 
@@ -4221,6 +4300,33 @@ export class WarehouseService {
       .orderBy('order.id', 'DESC')
       .getMany();
 
+    const orderIds = orders.map((o) => o.id);
+    const pendingAllocMap =
+      await this.ledgerService.getBatchPendingOutboundAllocations(
+        orderIds,
+        currentHubId,
+        tripCode || undefined,
+      );
+
+    const availableOrders = orders
+      .map((order) => {
+        const pending = pendingAllocMap.get(order.id);
+        const pendingOutboundQuantity = pending?.pendingQty ?? 0;
+        const pendingOutboundTripCodes = pending?.tripCodes ?? [];
+        const baseStock = Number(
+          order.remainingQuantity ?? order.totalQuantity ?? 0,
+        );
+        const effectiveHubStock = Math.max(
+          0,
+          baseStock - pendingOutboundQuantity,
+        );
+        (order as any).pendingOutboundQuantity = pendingOutboundQuantity;
+        (order as any).pendingOutboundTripCodes = pendingOutboundTripCodes;
+        (order as any).effectiveHubStock = effectiveHubStock;
+        return order;
+      })
+      .filter((order) => (order as any).effectiveHubStock > 0);
+
     return {
       tripCode,
       currentHubId,
@@ -4229,7 +4335,7 @@ export class WarehouseService {
         id: Number(s.hubId),
         name: s.hubName,
       })),
-      orders,
+      orders: availableOrders,
     };
   }
 
@@ -4343,6 +4449,24 @@ export class WarehouseService {
           Number(order.remainingQuantity) > 0
             ? Number(order.remainingQuantity)
             : Number(order.totalQuantity) || 1;
+
+        const pendingAlloc =
+          await this.ledgerService.getPendingOutboundAllocation(
+            order.id,
+            currentHubId,
+            tripCode || undefined,
+            manager,
+          );
+        const effectiveAvailable = Math.max(0, qty - pendingAlloc.pendingQty);
+        if (effectiveAvailable <= 0) {
+          const tripHint =
+            pendingAlloc.tripCodes.length > 0
+              ? ` (${pendingAlloc.tripCodes.join(', ')})`
+              : '';
+          throw new UnprocessableEntityException(
+            `Đơn hàng ${order.orderCode} đã được xếp hết số kiện vào chuyến xe chờ xuất${tripHint}. Không thể bốc lên chuyến ${tripCode}.`,
+          );
+        }
         const weight = Number(order.totalWeight) || 0;
         const vol = Number(order.totalVolume) || 0;
 
