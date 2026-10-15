@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class DropOrderCodeUniqueAndAddInventoryFields1788960000000
-  implements MigrationInterface
-{
+export class DropOrderCodeUniqueAndAddInventoryFields1788960000000 implements MigrationInterface {
   name = 'DropOrderCodeUniqueAndAddInventoryFields1788960000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

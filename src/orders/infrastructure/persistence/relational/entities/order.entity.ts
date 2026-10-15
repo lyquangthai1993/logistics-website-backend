@@ -113,7 +113,10 @@ export class OrderEntity extends AbstractBaseEntity {
     eager: false,
     onDelete: 'SET NULL',
   })
-  @JoinColumn({ name: 'currentHubId', foreignKeyConstraintName: 'FK_order_currentHub' })
+  @JoinColumn({
+    name: 'currentHubId',
+    foreignKeyConstraintName: 'FK_order_currentHub',
+  })
   currentHubEntity: Relation<HubEntity> | null;
 
   /** Logical trip (SD...) currently carrying goods of this order; null when nothing in transit. */
@@ -124,9 +127,6 @@ export class OrderEntity extends AbstractBaseEntity {
   @OneToMany('TripEntity', (trip: TripEntity) => trip.order)
   trips: Relation<TripEntity[]>;
 
-  @OneToMany(
-    'OrderInventoryTransactionEntity',
-    (tx: any) => tx.order,
-  )
+  @OneToMany('OrderInventoryTransactionEntity', (tx: any) => tx.order)
   inventoryTransactions: Relation<any[]>;
 }

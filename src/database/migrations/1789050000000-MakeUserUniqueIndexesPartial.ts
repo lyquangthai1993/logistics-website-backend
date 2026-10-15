@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class MakeUserUniqueIndexesPartial1789050000000
-  implements MigrationInterface
-{
+export class MakeUserUniqueIndexesPartial1789050000000 implements MigrationInterface {
   name = 'MakeUserUniqueIndexesPartial1789050000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -1,10 +1,4 @@
-import {
-  Column,
-  Entity,
-  Index,
-  PrimaryGeneratedColumn,
-  Unique,
-} from 'typeorm';
+import { Column, Entity, Index, PrimaryGeneratedColumn, Unique } from 'typeorm';
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 
 @Entity({

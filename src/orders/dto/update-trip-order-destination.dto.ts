@@ -9,7 +9,8 @@ export enum DeliveryModeEnum {
 
 export class UpdateTripOrderDestinationDto {
   @ApiProperty({
-    description: 'Hình thức giao nhận (Giao khách tận nơi, Hub Cấp 1, Tuyến Xe Bo)',
+    description:
+      'Hình thức giao nhận (Giao khách tận nơi, Hub Cấp 1, Tuyến Xe Bo)',
     enum: DeliveryModeEnum,
     example: DeliveryModeEnum.HUB_L1,
   })
@@ -19,7 +20,8 @@ export class UpdateTripOrderDestinationDto {
   deliveryMode: DeliveryModeEnum;
 
   @ApiPropertyOptional({
-    description: 'ID Hub đích đến (bắt buộc khi HUB_L1 hoặc XE_BO; null khi DIRECT_CUSTOMER)',
+    description:
+      'ID Hub đích đến (bắt buộc khi HUB_L1 hoặc XE_BO; null khi DIRECT_CUSTOMER)',
     example: 2,
     nullable: true,
   })

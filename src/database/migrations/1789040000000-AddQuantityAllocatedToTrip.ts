@@ -8,9 +8,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *    Used by outbound draft trips ("Chờ xử lý") which have no dispatch invoice yet.
  *  - Existing rows keep NULL (no backfill, no data change).
  */
-export class AddQuantityAllocatedToTrip1789040000000
-  implements MigrationInterface
-{
+export class AddQuantityAllocatedToTrip1789040000000 implements MigrationInterface {
   name = 'AddQuantityAllocatedToTrip1789040000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

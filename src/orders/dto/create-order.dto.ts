@@ -99,12 +99,18 @@ export class CreateOrderDto {
   @IsString()
   notes?: string;
 
-  @ApiPropertyOptional({ example: 'TP.HCM', description: 'Tỉnh/Thành phố nhận hàng (nhập tự do)' })
+  @ApiPropertyOptional({
+    example: 'TP.HCM',
+    description: 'Tỉnh/Thành phố nhận hàng (nhập tự do)',
+  })
   @IsOptional()
   @IsString()
   province?: string;
 
-  @ApiPropertyOptional({ example: '1 BCT', description: 'Chứng từ đi kèm (optional)' })
+  @ApiPropertyOptional({
+    example: '1 BCT',
+    description: 'Chứng từ đi kèm (optional)',
+  })
   @IsOptional()
   @IsString()
   accompanyingDocs?: string;

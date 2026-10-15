@@ -7,7 +7,9 @@ import { AllConfigType } from '../config/config.type';
 // Force node-postgres (pg) to parse TIMESTAMP WITHOUT TIME ZONE (OID 1114) as UTC Date.
 types.setTypeParser(1114, (stringValue: string) => {
   if (!stringValue) return null;
-  const isoString = stringValue.includes('T') ? stringValue : stringValue.replace(' ', 'T');
+  const isoString = stringValue.includes('T')
+    ? stringValue
+    : stringValue.replace(' ', 'T');
   return new Date(isoString.endsWith('Z') ? isoString : `${isoString}Z`);
 });
 

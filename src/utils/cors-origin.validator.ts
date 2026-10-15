@@ -34,8 +34,9 @@ export function isCorsOriginAllowed(
     const isRender =
       origin.endsWith('.onrender.com') ||
       /^https:\/\/([a-zA-Z0-9_-]+\.)*onrender\.com$/.test(origin);
-    const isLocalhost =
-      /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(
+      origin,
+    );
 
     if (isVercel || isRender || isLocalhost) {
       return true;
