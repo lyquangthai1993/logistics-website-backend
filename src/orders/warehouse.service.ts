@@ -1893,6 +1893,8 @@ export class WarehouseService {
 
     const targetStatus = body?.targetStatus || 'INBOUND';
     const isKeepStatus = targetStatus === 'KEEP';
+    const keepTripPending =
+      body?.keepTripPending === true || body?.keepTripPending === 'true';
     const inboundPlate = (body?.vehicleLicensePlate || body?.licensePlate || '')
       ?.trim()
       .toUpperCase();
@@ -2017,6 +2019,7 @@ export class WarehouseService {
               found.remainingQuantity = q;
               found.outboundQuantity = 0;
               found.currentHubId = hubId;
+              found.currentTripCode = null;
               actualQty = q;
               expectedQty = q;
               actualWeight = Number(found.totalWeight) || 0;
@@ -2027,19 +2030,36 @@ export class WarehouseService {
             rowTripCode =
               sharedTripCode || normalizeTripCode(found.currentTripCode);
 
-            if (rowTripCode && hubId) {
+            const checkTripCode = rowTripCode || sharedTripCode;
+            if (checkTripCode && hubId) {
               const already = await txRepo.findOne({
                 where: {
                   orderId: found.id,
-                  tripCode: rowTripCode,
+                  tripCode: checkTripCode,
                   hubId,
                   type: InventoryTransactionType.INBOUND,
                 },
               });
               if (already) {
-                throw new UnprocessableEntityException(
-                  `Đơn ${found.orderCode} đã được nhập kho tại ${hubName} từ chuyến ${rowTripCode} (phiếu ${already.invoiceCode || '#' + already.id}).`,
-                );
+                // Đơn này đã được nhập riêng lẻ hoặc nhập kho trước đó trong chuyến xe:
+                // Bỏ qua tạo giao dịch trùng lặp, không ném UnprocessableEntityException,
+                // và vẫn đưa vào savedOrders để phục vụ tổng kết phiếu in.
+                let deliv = '';
+                if (found.route && found.route.includes('→')) {
+                  deliv = found.route.split('→')[1]?.trim() || '';
+                }
+                if (!deliv && found.notes) {
+                  const match = found.notes.match(/\[Giao khách:\s*([^\]]+)\]/);
+                  if (match) deliv = match[1].trim();
+                }
+                if (!deliv) {
+                  deliv = found.destinationHub || found.province || '—';
+                }
+                (found as any).deliveryAddress = deliv;
+                (found as any).unit = 'Kiện';
+                savedOrders.push(found);
+                if (checkTripCode) processedTripCodes.add(checkTripCode);
+                continue;
               }
             }
 
@@ -2100,8 +2120,7 @@ export class WarehouseService {
             if (
               rowTripCode &&
               found.currentTripCode === rowTripCode &&
-              inTransit !== null &&
-              inTransit - actualQty <= 0
+              (inTransit === null || inTransit - actualQty <= 0)
             ) {
               found.currentTripCode = null;
             }
@@ -2203,7 +2222,8 @@ export class WarehouseService {
                 type: 'INBOUND',
                 licensePlate: inboundPlate,
                 driverName: inboundDriver || null,
-                status: isKeepStatus ? 'PENDING' : 'COMPLETED',
+                status:
+                  isKeepStatus || keepTripPending ? 'PENDING' : 'COMPLETED',
                 pickupDate: inboundDate,
                 weightAllocated: Number(order.totalWeight) || 0,
                 volumeAllocated: Number(order.totalVolume) || 0,
@@ -2248,9 +2268,11 @@ export class WarehouseService {
               notes:
                 discrepancy !== 0
                   ? `Nhập kho tại ${hubName}: thực nhận ${actualQty}/${expectedQty} kiện (${discrepancy > 0 ? 'thừa' : 'thiếu'} ${Math.abs(discrepancy)} kiện)`
-                  : inboundPlate
-                    ? `Nhập kho từ xe ${inboundPlate} tại ${hubName}`
-                    : `Tiếp nhận lưu kho tại ${hubName}`,
+                  : keepTripPending
+                    ? `Nhập riêng đơn lẻ từ xe ${inboundPlate || rowTripCode || ''} tại ${hubName}`
+                    : inboundPlate
+                      ? `Nhập kho từ xe ${inboundPlate} tại ${hubName}`
+                      : `Tiếp nhận lưu kho tại ${hubName}`,
             }),
           );
         }
@@ -2270,7 +2292,7 @@ export class WarehouseService {
       }
       if (tripId) {
         const trip = await tripRepo.findOne({ where: { id: tripId } });
-        if (trip && !isKeepStatus) {
+        if (trip && !isKeepStatus && !keepTripPending) {
           trip.notes =
             (trip.notes ? `${trip.notes} · ` : '') +
             `Đã dỡ hàng tại ${hubName}`;
@@ -2278,24 +2300,34 @@ export class WarehouseService {
         }
       }
 
-      // Per-hub trip status: this hub becomes "Đã xử lý" (or stays "Chờ xử lý" on save draft)
+      // Per-hub trip status: this hub becomes "Đã xử lý" (or stays "Chờ xử lý" on save draft or keepTripPending)
       if (hubId) {
         for (const code of processedTripCodes) {
-          await this.ledgerService.upsertTripStop(
-            {
-              tripCode: code,
-              hubId,
-              status: isKeepStatus
-                ? TripStopStatus.PENDING
-                : TripStopStatus.COMPLETED,
-              stopType: TripStopType.DESTINATION,
-              stopSequence: 1,
-              userId: user.id,
-            },
-            manager,
-          );
+          if (keepTripPending || isKeepStatus) {
+            await this.ledgerService.upsertTripStop(
+              {
+                tripCode: code,
+                hubId,
+                status: TripStopStatus.PENDING,
+                stopType: TripStopType.DESTINATION,
+                stopSequence: 1,
+                userId: user.id,
+              },
+              manager,
+            );
+          } else {
+            await this.ledgerService.upsertTripStop(
+              {
+                tripCode: code,
+                hubId,
+                status: TripStopStatus.COMPLETED,
+                stopType: TripStopType.DESTINATION,
+                stopSequence: 1,
+                userId: user.id,
+              },
+              manager,
+            );
 
-          if (!isKeepStatus) {
             // All stops processed → the trip is fully unloaded
             await manager.query(
               `UPDATE "trip" SET "status" = 'COMPLETED', "updatedAt" = NOW()
