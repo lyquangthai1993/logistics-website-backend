@@ -2523,11 +2523,15 @@ export class WarehouseService {
           itemDestHubId !== actingHubId
             ? await hubRepo.findOne({ where: { id: itemDestHubId } })
             : null;
-        const destHubName = destHub?.name || null;
+        const destHubName = destHub?.name
+          ? destHub.address && !destHub.name.includes(destHub.address)
+            ? `${destHub.name} — ${destHub.address}`
+            : destHub.name
+          : null;
         const outboundDeliveryAddress = item?.deliveryAddress || null;
         const outboundTargetName = isLineDirectCustomer
-          ? outboundDeliveryAddress || 'Khách nhận'
-          : destHubName || order.destinationHub || 'Trạm nhận';
+          ? outboundDeliveryAddress || order.destinationHub || 'Khách nhận'
+          : destHubName || outboundDeliveryAddress || 'Trạm nhận';
 
         const isTransferLine =
           !isLineDirectCustomer &&
@@ -2830,6 +2834,11 @@ export class WarehouseService {
         const isTransferLine =
           !isLineDirectCustomer && (isTransferMode || !!tripDestHubId);
 
+        const customDraftAddr = item?.deliveryAddress?.trim() || '';
+        const draftAddrSuffix = customDraftAddr
+          ? ` | ĐC: ${customDraftAddr}`
+          : '';
+
         await tripRepo.save(
           tripRepo.create({
             orderId: order.id,
@@ -2851,8 +2860,8 @@ export class WarehouseService {
                 this.proportional(order.totalVolume, qty, order.totalQuantity),
             ),
             notes: isTransferLine
-              ? `[NHÁP XUẤT KHO - LUÂN CHUYỂN] Dự kiến xuất ${qty} kiện`
-              : `[NHÁP XUẤT KHO - GIAO KHÁCH] Dự kiến xuất ${qty} kiện`,
+              ? `[NHÁP XUẤT KHO - LUÂN CHUYỂN] Dự kiến xuất ${qty} kiện${draftAddrSuffix}`
+              : `[NHÁP XUẤT KHO - GIAO KHÁCH] Dự kiến xuất ${qty} kiện${draftAddrSuffix}`,
           }),
         );
       }
@@ -3286,6 +3295,7 @@ export class WarehouseService {
         ? await this.tripRepository
             .createQueryBuilder('t')
             .leftJoinAndSelect('t.originHub', 'draftOriginHub')
+            .leftJoinAndSelect('t.destinationHub', 'draftDestinationHub')
             .where('t.deletedAt IS NULL')
             .andWhere('t.tripCode IN (:...pendingCodes)', { pendingCodes })
             .andWhere(`t.status = 'PENDING'`)
@@ -3312,6 +3322,7 @@ export class WarehouseService {
             .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
             .leftJoinAndSelect('order.trips', 'trips')
             .leftJoinAndSelect('trips.originHub', 'tripOriginHub')
+            .leftJoinAndSelect('trips.destinationHub', 'tripDestinationHub')
             .leftJoinAndSelect(
               'order.inventoryTransactions',
               'inventoryTransactions',
@@ -3342,17 +3353,32 @@ export class WarehouseService {
         volume: number;
         invoiceCode: string | null;
         destinationHubId: number | null;
+        destinationHubEntity: any | null;
+        outboundDestination: string | null;
       }> = isDraft
         ? draftLines
             .filter((t) => t.tripCode === row.tripCode)
-            .map((t) => ({
-              orderId: t.orderId,
-              quantity: Number(t.quantityAllocated) || 0,
-              weight: Number(t.weightAllocated) || 0,
-              volume: Number(t.volumeAllocated) || 0,
-              invoiceCode: null,
-              destinationHubId: t.destinationHubId ?? null,
-            }))
+            .map((t) => {
+              const hubObj = (t as any).destinationHub;
+              const hubLabel = hubObj?.name
+                ? hubObj.address && !hubObj.name.includes(hubObj.address)
+                  ? `${hubObj.name} — ${hubObj.address}`
+                  : hubObj.name
+                : null;
+              const noteAddr = t.notes?.includes(' | ĐC: ')
+                ? t.notes.split(' | ĐC: ')[1]?.trim() || null
+                : null;
+              return {
+                orderId: t.orderId,
+                quantity: Number(t.quantityAllocated) || 0,
+                weight: Number(t.weightAllocated) || 0,
+                volume: Number(t.volumeAllocated) || 0,
+                invoiceCode: null,
+                destinationHubId: t.destinationHubId ?? null,
+                destinationHubEntity: hubObj ?? null,
+                outboundDestination: hubLabel || noteAddr || null,
+              };
+            })
         : dispatchTxs
             .filter((t) => t.tripCode === row.tripCode)
             .map((t) => ({
@@ -3362,6 +3388,8 @@ export class WarehouseService {
               volume: Number(t.volume) || 0,
               invoiceCode: t.invoiceCode,
               destinationHubId: null,
+              destinationHubEntity: null,
+              outboundDestination: t.destination ?? null,
             }));
 
       const orders: any[] = [];
@@ -3415,13 +3443,33 @@ export class WarehouseService {
           }
           continue;
         }
+        const matchedTrip = (order.trips ?? []).find(
+          (tr: any) => tr?.tripCode === row.tripCode,
+        );
+        const resolvedTripDestHubEntity =
+          line.destinationHubEntity ?? matchedTrip?.destinationHub ?? null;
+        const resolvedTripDestHubId =
+          line.destinationHubId ?? matchedTrip?.destinationHubId ?? null;
+        const tripHubLabel = resolvedTripDestHubEntity?.name
+          ? resolvedTripDestHubEntity.address &&
+            !resolvedTripDestHubEntity.name.includes(
+              resolvedTripDestHubEntity.address,
+            )
+            ? `${resolvedTripDestHubEntity.name} — ${resolvedTripDestHubEntity.address}`
+            : resolvedTripDestHubEntity.name
+          : null;
+        const resolvedOutboundDestination =
+          tripHubLabel || line.outboundDestination || null;
+
         orders.push({
           ...order,
           exportedQuantity: line.quantity,
           exportedWeight: line.weight,
           exportedVolume: line.volume,
           dispatchInvoiceCode: line.invoiceCode,
-          plannedDestinationHubId: line.destinationHubId,
+          plannedDestinationHubId: resolvedTripDestHubId,
+          outboundDestinationHubEntity: resolvedTripDestHubEntity,
+          outboundDestination: resolvedOutboundDestination,
           pendingOutboundTripCodes: adjustedPendingTripCodes,
           pendingOutboundQuantity: adjustedPendingQty,
           effectiveHubStock: adjustedEffectiveHubStock,
@@ -4111,7 +4159,7 @@ export class WarehouseService {
 
         let deliveryMode: 'DIRECT_CUSTOMER' | 'HUB_L1' | 'XE_BO' =
           'DIRECT_CUSTOMER';
-        const destEntity = o.destinationHubEntity;
+        const destEntity = (t as any).destinationHub || o.destinationHubEntity;
 
         if (
           t.type === 'OUTBOUND' ||
@@ -4124,6 +4172,7 @@ export class WarehouseService {
           destEntity?.level === 2 ||
           destEntity?.code?.startsWith('HUB-BO-') ||
           destEntity?.code?.startsWith('XB-') ||
+          destEntity?.name?.toLowerCase().includes('xe bo') ||
           (o.destinationHub &&
             (o.destinationHub.toLowerCase().includes('xe bo') ||
               o.destinationHub.toLowerCase().includes('hub-bo')))
@@ -4211,6 +4260,12 @@ export class WarehouseService {
           deliveryAddress =
             deliveryAddress || originalDeliveryAddress || resolvedDestHub || '';
           resolvedDestHub = deliveryAddress || 'Giao thẳng khách';
+        } else if (resolvedDestEntity?.name) {
+          resolvedDestHub =
+            resolvedDestEntity.address &&
+            !resolvedDestEntity.name.includes(resolvedDestEntity.address)
+              ? `${resolvedDestEntity.name} — ${resolvedDestEntity.address}`
+              : resolvedDestEntity.name;
         }
 
         const view = hubView.get(o.id);
