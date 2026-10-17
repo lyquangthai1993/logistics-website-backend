@@ -60,6 +60,31 @@ export class OutboundItemDto {
   @IsOptional()
   @IsString()
   deliveryAddress?: string;
+
+  @ApiPropertyOptional({ example: 'Hàng dễ vỡ' })
+  @IsOptional()
+  @IsString()
+  notes?: string;
+
+  @ApiPropertyOptional({ example: 'HĐ-001' })
+  @IsOptional()
+  @IsString()
+  accompanyingDocs?: string;
+
+  @ApiPropertyOptional({ example: 'Hà Nội' })
+  @IsOptional()
+  @IsString()
+  province?: string;
+
+  @ApiPropertyOptional({ example: 'Thùng linh kiện điện tử' })
+  @IsOptional()
+  @IsString()
+  goodsDescription?: string;
+
+  @ApiPropertyOptional({ example: 'Andromeda Hub - HCM' })
+  @IsOptional()
+  @IsString()
+  pickupAddress?: string;
 }
 
 export class ConfirmOutboundDto {
