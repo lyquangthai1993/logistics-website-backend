@@ -3860,6 +3860,7 @@ export class WarehouseService {
         .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
         .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
         .leftJoinAndSelect('order.trips', 'trips')
+        .leftJoinAndSelect('order.inventoryTransactions', 'inventoryTransactions')
         .where('order.deletedAt IS NULL')
         .andWhere('trips.tripCode IN (:...tripCodes)', { tripCodes })
         .getMany();
