@@ -278,7 +278,8 @@ export class WarehouseService {
       .split(',')
       .map((s) => Number(s.trim()))
       .filter((n) => Number.isInteger(n) && n > 0);
-    const groupByOrderCode = query?.groupBy === 'orderCode';
+    const groupByOrderCode =
+      query?.groupBy === 'orderCode' || flowUpper === 'OUTBOUND_LOOKUP';
     const waitingOrStored = sqlList([...WAITING_STATUSES, ...STORED_STATUSES]);
     const storedOrDispatched = sqlList([
       ...STORED_STATUSES,
@@ -307,7 +308,10 @@ export class WarehouseService {
         q.andWhere(`${statusExpr} IN (${storedOrDispatched})`);
       }
       if (idFilter.length > 0) {
-        q.andWhere('order.id IN (:...idFilter)', { idFilter });
+        q.andWhere(
+          '(order.id IN (:...idFilter) OR order.orderCode IN (SELECT sub_o."orderCode" FROM "order" sub_o WHERE sub_o.id IN (:...idFilter) AND sub_o."deletedAt" IS NULL))',
+          { idFilter },
+        );
       }
       if (searchTerm) {
         // Freetext: orderCode OR goodsDescription OR trips.licensePlate OR trips.tripCode
@@ -810,7 +814,7 @@ export class WarehouseService {
       members = await ctx
         .applyStatusFilter(ctx.applyScope(ctx.createListQb()))
         .andWhere('order.orderCode IN (:...groupCodes)', { groupCodes: codes })
-        .orderBy('order.createdAt', 'ASC')
+        .orderBy('order.id', 'ASC')
         .getMany();
     }
     const enriched = await this.enrichWarehouseRows(
@@ -850,8 +854,22 @@ export class WarehouseService {
   /** Collapse the rows sharing one order code into a single summary row. */
   private aggregateOrderGroup(orderCode: string, items: any[]): any {
     const first = items[0];
+    const isDraftItem = (it: any) =>
+      DRAFT_LIKE_STATUSES.includes(
+        String(it.hubStatus ?? it.status ?? '').toUpperCase(),
+      );
+    const nonDraftItems = items.filter((it) => !isDraftItem(it));
+    // When an orderCode already has real inbound/dispatched rows, ignore leftover draft rows in metric sums
+    const metricItems = nonDraftItems.length > 0 ? nonDraftItems : items;
+    const primaryRow =
+      metricItems.find(
+        (it) => (Number(it.hubStock ?? it.remainingQuantity) || 0) > 0,
+      ) ||
+      metricItems[0] ||
+      first;
+
     const sum = (pick: (it: any) => unknown) =>
-      items.reduce((s, it) => s + (Number(pick(it)) || 0), 0);
+      metricItems.reduce((s, it) => s + (Number(pick(it)) || 0), 0);
     const round3 = (n: number) => Math.round(n * 1000) / 1000;
     const distinctJoin = (pick: (it: any) => string | null | undefined) =>
       Array.from(
@@ -864,7 +882,9 @@ export class WarehouseService {
       ).join(', ');
 
     // A code is "Lưu kho" while any row is still held here; "Đã xuất kho" only when none is.
-    const statuses: string[] = items.map((it) => it.hubStatus ?? it.status);
+    const statuses: string[] = metricItems.map(
+      (it) => it.hubStatus ?? it.status,
+    );
     const hubStatus =
       statuses.find((s) => STORED_STATUSES.includes(s)) ??
       statuses.find((s) => s === 'DRAFT') ??
@@ -901,7 +921,11 @@ export class WarehouseService {
       (a, b) => (b.id ?? 0) - (a.id ?? 0),
     );
 
-    const hasHubStock = items.some(
+    const allTransactions = items.flatMap(
+      (it) => it.inventoryTransactions ?? [],
+    );
+
+    const hasHubStock = metricItems.some(
       (it) => it.hubStock !== null && it.hubStock !== undefined,
     );
     const rawStock = hasHubStock
@@ -917,8 +941,17 @@ export class WarehouseService {
       ? Math.max(0, Math.min(rawStock, normalizedTotalQty))
       : null;
 
+    const totalPendingOutbound = sum((it) => it.pendingOutboundQuantity || 0);
+    const pendingOutboundTripCodes = Array.from(
+      new Set(metricItems.flatMap((it) => it.pendingOutboundTripCodes || [])),
+    );
+    const effectiveHubStock =
+      normalizedHubStock !== null
+        ? Math.max(0, normalizedHubStock - totalPendingOutbound)
+        : null;
+
     // Normalize member items so each individual line also satisfies stock <= total quantity
-    const normalizedItems = items.map((it) => {
+    const normalizedItems = metricItems.map((it) => {
       const itStock =
         it.hubStock !== null && it.hubStock !== undefined
           ? Number(it.hubStock)
@@ -1015,21 +1048,32 @@ export class WarehouseService {
       );
     }
 
+    // Canonical Master Fields: Strictly use the FIRST entry's goodsDescription and destination
+    const canonicalGoodsDescription =
+      first.goodsDescription?.trim() ||
+      items
+        .find((it) => it.goodsDescription?.trim())
+        ?.goodsDescription?.trim() ||
+      'Hàng tổng hợp';
     const groupOriginalDestination =
-      distinctJoin(
+      first.originalDestination?.trim() ||
+      first.destinationHub?.trim() ||
+      first.destinationHubEntity?.name?.trim() ||
+      items.find(
         (it) =>
-          it.originalDestination ||
-          it.destinationHub ||
-          it.destinationHubEntity?.name,
-      ) ||
-      distinctJoin((it) => it.destinationHub || it.destinationHubEntity?.name);
+          it.originalDestination?.trim() ||
+          it.destinationHub?.trim() ||
+          it.destinationHubEntity?.name?.trim(),
+      )?.originalDestination ||
+      null;
     const groupOutboundDestination =
       distinctJoin((it) => it.outboundDestination) || null;
 
     return {
       ...first,
+      id: primaryRow.id,
       orderCode,
-      goodsDescription: distinctJoin((it) => it.goodsDescription),
+      goodsDescription: canonicalGoodsDescription,
       totalQuantity: normalizedTotalQty,
       inboundQuantity: Math.max(totalInbound, normalizedTotalQty),
       outboundQuantity: totalOutbound,
@@ -1038,12 +1082,16 @@ export class WarehouseService {
       totalWeight: round3(sum((it) => it.totalWeight)),
       totalVolume: round3(sum((it) => it.totalVolume)),
       hubStock: normalizedHubStock,
+      pendingOutboundQuantity: totalPendingOutbound,
+      pendingOutboundTripCodes,
+      effectiveHubStock,
       hubStatus,
       destinationHub: groupOriginalDestination,
       originalDestination: groupOriginalDestination,
       outboundDestination: groupOutboundDestination,
       trips,
-      lineCount: items.length,
+      inventoryTransactions: allTransactions,
+      lineCount: 1,
       items: normalizedItems,
       inboundDate: groupInboundDate
         ? new Date(groupInboundDate).toISOString()
@@ -1219,30 +1267,118 @@ export class WarehouseService {
           (await this.ledgerService.generateTripCode(manager))
         : null;
 
-      const order = orderRepo.create({
-        orderCode: finalOrderCode,
-        goodsDescription: finalGoodsDescription,
-        totalQuantity: finalQuantity,
-        inboundQuantity: finalQuantity,
-        outboundQuantity: 0,
-        remainingQuantity: finalQuantity,
-        totalWeight: finalWeight,
-        totalVolume: finalVolume,
-        route: `${pickupAddr} → ${deliveryAddr}`,
-        originHub: dto.pickupAddress?.trim() || originHubName,
-        originHubId,
-        currentHubId: originHubId,
-        destinationHub: destinationHubName,
-        destinationHubId: dto.destinationHubId || null,
-        province: dto.province?.trim() || null,
-        accompanyingDocs: dto.accompanyingDocs?.trim() || null,
-        notes: dto.notes?.trim() || null,
-        status: initialStatus,
-        createdByUserId: user.id,
-        isExternalVehicleNeeded: false,
-      });
+      const existingOrders = finalOrderCode
+        ? await orderRepo.find({
+            where: { orderCode: finalOrderCode },
+            order: { id: 'ASC' },
+          })
+        : [];
 
-      const savedOrder = await orderRepo.save(order);
+      let savedOrder: OrderEntity;
+      let effectiveDeliveryAddr = deliveryAddr;
+      let effectiveDestHubId = dto.destinationHubId || null;
+
+      if (existingOrders.length > 0) {
+        const firstEntry = existingOrders[0];
+        let activeEntry =
+          existingOrders.find((o) => !DRAFT_LIKE_STATUSES.includes(o.status)) ||
+          firstEntry;
+        if (existingOrders.length > 1) {
+          activeEntry = await this.consolidateSiblingOrdersByCode(
+            manager,
+            activeEntry,
+          );
+        }
+
+        const lockedGoodsDesc =
+          firstEntry.goodsDescription || finalGoodsDescription;
+        const lockedDestHubName =
+          firstEntry.destinationHub || destinationHubName;
+        const lockedDestHubId =
+          firstEntry.destinationHubId ?? (dto.destinationHubId || null);
+        const lockedProvince =
+          firstEntry.province || dto.province?.trim() || null;
+        const lockedAccompanyingDocs =
+          firstEntry.accompanyingDocs || dto.accompanyingDocs?.trim() || null;
+        const lockedDeliveryAddr =
+          (firstEntry.route && firstEntry.route.includes('→')
+            ? firstEntry.route.split('→')[1]?.trim()
+            : '') ||
+          lockedDestHubName ||
+          deliveryAddr;
+
+        effectiveDeliveryAddr = lockedDeliveryAddr;
+        effectiveDestHubId = lockedDestHubId;
+
+        const wasDraft = DRAFT_LIKE_STATUSES.includes(activeEntry.status);
+        if (wasDraft && !isDraft) {
+          activeEntry.totalQuantity = finalQuantity;
+          activeEntry.inboundQuantity = finalQuantity;
+          activeEntry.remainingQuantity = finalQuantity;
+          activeEntry.totalWeight = finalWeight;
+          activeEntry.totalVolume = finalVolume;
+          activeEntry.status = initialStatus;
+          activeEntry.currentHubId = originHubId;
+        } else {
+          activeEntry.totalQuantity =
+            (Number(activeEntry.totalQuantity) || 0) + finalQuantity;
+          activeEntry.inboundQuantity =
+            (Number(activeEntry.inboundQuantity) || 0) + finalQuantity;
+          activeEntry.remainingQuantity =
+            (Number(activeEntry.remainingQuantity) || 0) + finalQuantity;
+          activeEntry.totalWeight =
+            Math.round(
+              ((Number(activeEntry.totalWeight) || 0) + finalWeight) * 1000,
+            ) / 1000;
+          activeEntry.totalVolume =
+            Math.round(
+              ((Number(activeEntry.totalVolume) || 0) + finalVolume) * 1000,
+            ) / 1000;
+          if (!isDraft) {
+            activeEntry.status = 'INBOUND';
+            activeEntry.currentHubId = originHubId;
+          }
+        }
+
+        activeEntry.goodsDescription = lockedGoodsDesc;
+        activeEntry.destinationHub = lockedDestHubName;
+        activeEntry.destinationHubId = lockedDestHubId;
+        activeEntry.province = lockedProvince;
+        activeEntry.accompanyingDocs = lockedAccompanyingDocs;
+        activeEntry.originHub =
+          dto.pickupAddress?.trim() || activeEntry.originHub || originHubName;
+        activeEntry.route = `${pickupAddr} → ${lockedDeliveryAddr}`;
+        if (dto.notes?.trim()) {
+          activeEntry.notes = dto.notes.trim();
+        }
+
+        savedOrder = await orderRepo.save(activeEntry);
+      } else {
+        const order = orderRepo.create({
+          orderCode: finalOrderCode,
+          goodsDescription: finalGoodsDescription,
+          totalQuantity: finalQuantity,
+          inboundQuantity: finalQuantity,
+          outboundQuantity: 0,
+          remainingQuantity: finalQuantity,
+          totalWeight: finalWeight,
+          totalVolume: finalVolume,
+          route: `${pickupAddr} → ${deliveryAddr}`,
+          originHub: dto.pickupAddress?.trim() || originHubName,
+          originHubId,
+          currentHubId: originHubId,
+          destinationHub: destinationHubName,
+          destinationHubId: dto.destinationHubId || null,
+          province: dto.province?.trim() || null,
+          accompanyingDocs: dto.accompanyingDocs?.trim() || null,
+          notes: dto.notes?.trim() || null,
+          status: initialStatus,
+          createdByUserId: user.id,
+          isExternalVehicleNeeded: false,
+        });
+
+        savedOrder = await orderRepo.save(order);
+      }
 
       // Create TripEntity for vehicle intake
       let savedTrip: TripEntity | null = null;
@@ -1252,12 +1388,13 @@ export class WarehouseService {
             orderId: savedOrder.id,
             tripCode: finalTripCode,
             originHubId,
-            destinationHubId: dto.destinationHubId || null,
+            destinationHubId: effectiveDestHubId,
             type: 'INBOUND',
             licensePlate: plate,
             driverName: driver,
             status: isDraft ? 'PENDING' : 'COMPLETED',
             pickupDate: date,
+            quantityAllocated: finalQuantity,
             weightAllocated: finalWeight,
             volumeAllocated: finalVolume,
             notes: `[NHẬP KHO] Xe ${plate} tiếp nhận ${finalQuantity} kiện tại ${originHubName || 'Kho'}`,
@@ -1300,13 +1437,13 @@ export class WarehouseService {
             quantity: finalQuantity,
             expectedQuantity: finalQuantity,
             discrepancyQuantity: 0,
-            remainingQuantity: finalQuantity,
+            remainingQuantity: savedOrder.remainingQuantity,
             weight: finalWeight,
             volume: finalVolume,
             licensePlate: plate || null,
             driverName: driver || null,
             notes: dto.notes?.trim() || 'Tiếp nhận nhập kho ban đầu',
-            destination: dto.deliveryAddress || destinationHubName || null,
+            destination: effectiveDeliveryAddr || null,
             performedByUserId: user.id,
           }),
         );
@@ -1429,30 +1566,122 @@ export class WarehouseService {
         const deliveryAddr =
           item.deliveryAddress?.trim() || destinationHubName || 'Điểm đến';
 
-        const order = orderRepo.create({
-          orderCode: finalOrderCode,
-          goodsDescription: finalGoodsDesc,
-          totalQuantity: qty,
-          inboundQuantity: qty,
-          outboundQuantity: 0,
-          remainingQuantity: qty,
-          totalWeight: weight,
-          totalVolume: vol,
-          route: `${pickupAddr} → ${deliveryAddr}`,
-          originHub: item.pickupAddress?.trim() || originHubName,
-          originHubId,
-          currentHubId: originHubId,
-          destinationHub: destinationHubName,
-          destinationHubId: item.destinationHubId || null,
-          province: item.province?.trim() || null,
-          accompanyingDocs: item.accompanyingDocs?.trim() || null,
-          notes: item.notes?.trim() || null,
-          status: initialStatus,
-          createdByUserId: user.id,
-          isExternalVehicleNeeded: false,
-        });
+        const existingOrders = finalOrderCode
+          ? await orderRepo.find({
+              where: { orderCode: finalOrderCode },
+              order: { id: 'ASC' },
+            })
+          : [];
 
-        const savedOrder = await orderRepo.save(order);
+        let savedOrder: OrderEntity;
+        let effectiveDeliveryAddr = deliveryAddr;
+        let effectiveDestHubId = item.destinationHubId || null;
+
+        if (existingOrders.length > 0) {
+          const firstEntry = existingOrders[0];
+          let activeEntry =
+            existingOrders.find(
+              (o) => !DRAFT_LIKE_STATUSES.includes(o.status),
+            ) || firstEntry;
+          if (existingOrders.length > 1) {
+            activeEntry = await this.consolidateSiblingOrdersByCode(
+              manager,
+              activeEntry,
+            );
+          }
+
+          const lockedGoodsDesc = firstEntry.goodsDescription || finalGoodsDesc;
+          const lockedDestHubName =
+            firstEntry.destinationHub || destinationHubName;
+          const lockedDestHubId =
+            firstEntry.destinationHubId ?? (item.destinationHubId || null);
+          const lockedProvince =
+            firstEntry.province || item.province?.trim() || null;
+          const lockedAccompanyingDocs =
+            firstEntry.accompanyingDocs ||
+            item.accompanyingDocs?.trim() ||
+            null;
+          const lockedDeliveryAddr =
+            (firstEntry.route && firstEntry.route.includes('→')
+              ? firstEntry.route.split('→')[1]?.trim()
+              : '') ||
+            lockedDestHubName ||
+            deliveryAddr;
+
+          effectiveDeliveryAddr = lockedDeliveryAddr;
+          effectiveDestHubId = lockedDestHubId;
+
+          const wasDraft = DRAFT_LIKE_STATUSES.includes(activeEntry.status);
+          if (wasDraft && !isDraft) {
+            activeEntry.totalQuantity = qty;
+            activeEntry.inboundQuantity = qty;
+            activeEntry.remainingQuantity = qty;
+            activeEntry.totalWeight = weight;
+            activeEntry.totalVolume = vol;
+            activeEntry.status = initialStatus;
+            activeEntry.currentHubId = originHubId;
+          } else {
+            activeEntry.totalQuantity =
+              (Number(activeEntry.totalQuantity) || 0) + qty;
+            activeEntry.inboundQuantity =
+              (Number(activeEntry.inboundQuantity) || 0) + qty;
+            activeEntry.remainingQuantity =
+              (Number(activeEntry.remainingQuantity) || 0) + qty;
+            activeEntry.totalWeight =
+              Math.round(
+                ((Number(activeEntry.totalWeight) || 0) + weight) * 1000,
+              ) / 1000;
+            activeEntry.totalVolume =
+              Math.round(
+                ((Number(activeEntry.totalVolume) || 0) + vol) * 1000,
+              ) / 1000;
+            if (!isDraft) {
+              activeEntry.status = 'INBOUND';
+              activeEntry.currentHubId = originHubId;
+            }
+          }
+
+          activeEntry.goodsDescription = lockedGoodsDesc;
+          activeEntry.destinationHub = lockedDestHubName;
+          activeEntry.destinationHubId = lockedDestHubId;
+          activeEntry.province = lockedProvince;
+          activeEntry.accompanyingDocs = lockedAccompanyingDocs;
+          activeEntry.originHub =
+            item.pickupAddress?.trim() ||
+            activeEntry.originHub ||
+            originHubName;
+          activeEntry.route = `${pickupAddr} → ${lockedDeliveryAddr}`;
+          if (item.notes?.trim()) {
+            activeEntry.notes = item.notes.trim();
+          }
+
+          savedOrder = await orderRepo.save(activeEntry);
+        } else {
+          const order = orderRepo.create({
+            orderCode: finalOrderCode,
+            goodsDescription: finalGoodsDesc,
+            totalQuantity: qty,
+            inboundQuantity: qty,
+            outboundQuantity: 0,
+            remainingQuantity: qty,
+            totalWeight: weight,
+            totalVolume: vol,
+            route: `${pickupAddr} → ${deliveryAddr}`,
+            originHub: item.pickupAddress?.trim() || originHubName,
+            originHubId,
+            currentHubId: originHubId,
+            destinationHub: destinationHubName,
+            destinationHubId: item.destinationHubId || null,
+            province: item.province?.trim() || null,
+            accompanyingDocs: item.accompanyingDocs?.trim() || null,
+            notes: item.notes?.trim() || null,
+            status: initialStatus,
+            createdByUserId: user.id,
+            isExternalVehicleNeeded: false,
+          });
+
+          savedOrder = await orderRepo.save(order);
+        }
 
         // Create TripEntity linked to this order with shared tripCode
         const trip = await tripRepo.save(
@@ -1460,7 +1689,7 @@ export class WarehouseService {
             orderId: savedOrder.id,
             tripCode: sharedTripCode,
             originHubId,
-            destinationHubId: item.destinationHubId || null,
+            destinationHubId: effectiveDestHubId,
             type: 'INBOUND',
             licensePlate: plate,
             driverName: driver,
@@ -1494,7 +1723,7 @@ export class WarehouseService {
               quantity: qty,
               expectedQuantity: qty,
               discrepancyQuantity: 0,
-              remainingQuantity: qty,
+              remainingQuantity: savedOrder.remainingQuantity,
               weight: weight,
               volume: vol,
               licensePlate: plate,
@@ -1502,13 +1731,13 @@ export class WarehouseService {
               notes:
                 item.notes?.trim() ||
                 `Tiếp nhận xe ${plate} - ${sharedTripCode}`,
-              destination: item.deliveryAddress || destinationHubName || null,
+              destination: effectiveDeliveryAddr || null,
               performedByUserId: user.id,
             }),
           );
         }
 
-        (savedOrder as any).deliveryAddress = deliveryAddr;
+        (savedOrder as any).deliveryAddress = effectiveDeliveryAddr;
         (savedOrder as any).unit = 'Kiện';
         savedOrders.push(savedOrder);
       }
@@ -2481,6 +2710,97 @@ export class WarehouseService {
   }
 
   /**
+   * Consolidate historical split sibling OrderEntity rows sharing the same orderCode
+   * into `primaryOrder`, preserving all TripEntity and OrderInventoryTransactionEntity rows
+   * and locking canonical master fields (goodsDescription, destinationHub) to the first entry.
+   */
+  private async consolidateSiblingOrdersByCode(
+    manager: EntityManager,
+    primaryOrder: OrderEntity,
+  ): Promise<OrderEntity> {
+    if (!primaryOrder?.orderCode) return primaryOrder;
+    const orderRepo = manager.getRepository(OrderEntity);
+    const siblings = await orderRepo.find({
+      where: { orderCode: primaryOrder.orderCode },
+      order: { id: 'ASC' },
+    });
+    if (siblings.length <= 1) return primaryOrder;
+
+    const firstEntry = siblings[0];
+    const nonDrafts = siblings.filter(
+      (s) => !DRAFT_LIKE_STATUSES.includes(s.status),
+    );
+    const activeSiblings = nonDrafts.length > 0 ? nonDrafts : siblings;
+
+    primaryOrder.goodsDescription =
+      firstEntry.goodsDescription || primaryOrder.goodsDescription;
+    primaryOrder.destinationHub =
+      firstEntry.destinationHub || primaryOrder.destinationHub;
+    primaryOrder.destinationHubId =
+      firstEntry.destinationHubId ?? primaryOrder.destinationHubId;
+    primaryOrder.province = firstEntry.province || primaryOrder.province;
+    primaryOrder.accompanyingDocs =
+      firstEntry.accompanyingDocs || primaryOrder.accompanyingDocs;
+    if (firstEntry.route && firstEntry.route.includes('→')) {
+      primaryOrder.route = firstEntry.route;
+    }
+
+    primaryOrder.totalQuantity = activeSiblings.reduce(
+      (sum, s) => sum + (Number(s.totalQuantity) || 0),
+      0,
+    );
+    primaryOrder.inboundQuantity = activeSiblings.reduce(
+      (sum, s) => sum + (Number(s.inboundQuantity) || 0),
+      0,
+    );
+    primaryOrder.outboundQuantity = activeSiblings.reduce(
+      (sum, s) => sum + (Number(s.outboundQuantity) || 0),
+      0,
+    );
+    primaryOrder.remainingQuantity = activeSiblings.reduce(
+      (sum, s) => sum + (Number(s.remainingQuantity) || 0),
+      0,
+    );
+    primaryOrder.totalWeight =
+      Math.round(
+        activeSiblings.reduce(
+          (sum, s) => sum + (Number(s.totalWeight) || 0),
+          0,
+        ) * 1000,
+      ) / 1000;
+    primaryOrder.totalVolume =
+      Math.round(
+        activeSiblings.reduce(
+          (sum, s) => sum + (Number(s.totalVolume) || 0),
+          0,
+        ) * 1000,
+      ) / 1000;
+    if (
+      nonDrafts.length > 0 &&
+      DRAFT_LIKE_STATUSES.includes(primaryOrder.status)
+    ) {
+      primaryOrder.status = nonDrafts[0].status;
+    }
+
+    const otherIds = siblings
+      .filter((s) => s.id !== primaryOrder.id)
+      .map((s) => s.id);
+    if (otherIds.length > 0) {
+      await manager.query(
+        `UPDATE "trip" SET "orderId" = $1 WHERE "orderId" = ANY($2)`,
+        [primaryOrder.id, otherIds],
+      );
+      await manager.query(
+        `UPDATE "order_inventory_transaction" SET "orderId" = $1 WHERE "orderId" = ANY($2)`,
+        [primaryOrder.id, otherIds],
+      );
+      await orderRepo.softDelete(otherIds);
+    }
+
+    return orderRepo.save(primaryOrder);
+  }
+
+  /**
    * Confirm outbound dispatch (Customer vs Transfer).
    * - Validates against the stock of the dispatching hub (invoice ledger).
    * - Allocates ONE SD trip code + ONE dispatch invoice for the whole vehicle.
@@ -2514,12 +2834,24 @@ export class WarehouseService {
       const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
       const hubRepo = manager.getRepository(HubEntity);
 
-      const orders = await orderRepo.find({
+      const rawOrders = await orderRepo.find({
         where: { id: In(targetOrderIds) },
       });
 
-      if (orders.length === 0) {
+      if (rawOrders.length === 0) {
         throw new NotFoundException('Không tìm thấy đơn hàng nào để xuất kho');
+      }
+
+      const orders: OrderEntity[] = [];
+      const seenCodes = new Set<string>();
+      for (const ro of rawOrders) {
+        if (ro.orderCode && seenCodes.has(ro.orderCode)) continue;
+        if (ro.orderCode) seenCodes.add(ro.orderCode);
+        const consolidated = await this.consolidateSiblingOrdersByCode(
+          manager,
+          ro,
+        );
+        orders.push(consolidated);
       }
 
       // Strict Pending Guard (Task #51): Trips with draft orders can only stay PENDING ("Chờ xử lý").
@@ -2879,10 +3211,10 @@ export class WarehouseService {
       const orderRepo = manager.getRepository(OrderEntity);
       const tripRepo = manager.getRepository(TripEntity);
 
-      const orders = await orderRepo.find({
+      const rawOrders = await orderRepo.find({
         where: { id: In(targetOrderIds) },
       });
-      if (orders.length === 0) {
+      if (rawOrders.length === 0) {
         throw new NotFoundException('Không tìm thấy đơn hàng nào để lưu nháp');
       }
 
@@ -2890,6 +3222,19 @@ export class WarehouseService {
       if (draftCode) {
         await this.discardOutboundDraftLines(manager, draftCode, userHubId);
       }
+
+      const orders: OrderEntity[] = [];
+      const seenCodes = new Set<string>();
+      for (const ro of rawOrders) {
+        if (ro.orderCode && seenCodes.has(ro.orderCode)) continue;
+        if (ro.orderCode) seenCodes.add(ro.orderCode);
+        const consolidated = await this.consolidateSiblingOrdersByCode(
+          manager,
+          ro,
+        );
+        orders.push(consolidated);
+      }
+
       const tripCode =
         draftCode || (await this.ledgerService.generateTripCode(manager));
 
@@ -3860,7 +4205,10 @@ export class WarehouseService {
         .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
         .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
         .leftJoinAndSelect('order.trips', 'trips')
-        .leftJoinAndSelect('order.inventoryTransactions', 'inventoryTransactions')
+        .leftJoinAndSelect(
+          'order.inventoryTransactions',
+          'inventoryTransactions',
+        )
         .where('order.deletedAt IS NULL')
         .andWhere('trips.tripCode IN (:...tripCodes)', { tripCodes })
         .getMany();
