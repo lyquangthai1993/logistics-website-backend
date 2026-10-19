@@ -2394,6 +2394,19 @@ export class WarehouseService {
 
             found.inboundQuantity =
               (Number(found.inboundQuantity) || 0) + actualQty;
+            if (
+              Number(found.inboundQuantity) > (Number(found.totalQuantity) || 0)
+            ) {
+              found.totalQuantity = Number(found.inboundQuantity);
+              found.totalWeight =
+                Math.round(
+                  ((Number(found.totalWeight) || 0) + actualWeight) * 1000,
+                ) / 1000;
+              found.totalVolume =
+                Math.round(
+                  ((Number(found.totalVolume) || 0) + actualVolume) * 1000,
+                ) / 1000;
+            }
             found.remainingQuantity = Math.max(
               0,
               Number(found.inboundQuantity) -
@@ -2782,14 +2795,54 @@ export class WarehouseService {
       primaryOrder.status = nonDrafts[0].status;
     }
 
+    const allSiblingIds = siblings.map((s) => s.id);
     const otherIds = siblings
       .filter((s) => s.id !== primaryOrder.id)
       .map((s) => s.id);
     if (otherIds.length > 0) {
-      await manager.query(
-        `UPDATE "trip" SET "orderId" = $1 WHERE "orderId" = ANY($2)`,
-        [primaryOrder.id, otherIds],
-      );
+      const tripRepo = manager.getRepository(TripEntity);
+      const allSiblingTrips = await tripRepo.find({
+        where: { orderId: In(allSiblingIds) },
+        order: { id: 'ASC' },
+      });
+      const tripByCode = new Map<string, TripEntity>();
+      const duplicateTripIds: number[] = [];
+      for (const tr of allSiblingTrips) {
+        const key = tr.tripCode || `id-${tr.id}`;
+        const existingTr = tripByCode.get(key);
+        if (!existingTr) {
+          tripByCode.set(key, tr);
+        } else {
+          existingTr.quantityAllocated =
+            (Number(existingTr.quantityAllocated) || 0) +
+            (Number(tr.quantityAllocated) || 0);
+          existingTr.weightAllocated =
+            Math.round(
+              ((Number(existingTr.weightAllocated) || 0) +
+                (Number(tr.weightAllocated) || 0)) *
+                1000,
+            ) / 1000;
+          existingTr.volumeAllocated =
+            Math.round(
+              ((Number(existingTr.volumeAllocated) || 0) +
+                (Number(tr.volumeAllocated) || 0)) *
+                1000,
+            ) / 1000;
+          duplicateTripIds.push(tr.id);
+        }
+      }
+      if (duplicateTripIds.length > 0) {
+        await manager.query(
+          `UPDATE "order_inventory_transaction" SET "tripId" = NULL WHERE "tripId" = ANY($1)`,
+          [duplicateTripIds],
+        );
+        await tripRepo.softDelete(duplicateTripIds);
+      }
+      for (const keptTr of tripByCode.values()) {
+        keptTr.orderId = primaryOrder.id;
+        await tripRepo.save(keptTr);
+      }
+
       await manager.query(
         `UPDATE "order_inventory_transaction" SET "orderId" = $1 WHERE "orderId" = ANY($2)`,
         [primaryOrder.id, otherIds],
@@ -2797,7 +2850,39 @@ export class WarehouseService {
       await orderRepo.softDelete(otherIds);
     }
 
-    return orderRepo.save(primaryOrder);
+    const savedPrimary = await orderRepo.save(primaryOrder);
+    (savedPrimary as any).__mergedOrderIds = allSiblingIds;
+    return savedPrimary;
+  }
+
+  private mergeOutboundItemsForOrder(
+    items: ConfirmOutboundDto['items'],
+    order: OrderEntity,
+  ) {
+    if (!items || items.length === 0) return undefined;
+    const mergedIds: number[] = (order as any).__mergedOrderIds || [order.id];
+    const matched = items.filter((i) => mergedIds.includes(Number(i.orderId)));
+    if (matched.length === 0) return undefined;
+    if (matched.length === 1) return matched[0];
+    const first = matched[0];
+    return {
+      ...first,
+      orderId: order.id,
+      quantityToExport: matched.reduce(
+        (sum, m) => sum + (Number(m.quantityToExport) || 0),
+        0,
+      ),
+      weightToExport:
+        Math.round(
+          matched.reduce((sum, m) => sum + (Number(m.weightToExport) || 0), 0) *
+            1000,
+        ) / 1000,
+      volumeToExport:
+        Math.round(
+          matched.reduce((sum, m) => sum + (Number(m.volumeToExport) || 0), 0) *
+            1000,
+        ) / 1000,
+    };
   }
 
   /**
@@ -2870,7 +2955,7 @@ export class WarehouseService {
       const actingOriginId =
         userHubId ?? orders[0].currentHubId ?? orders[0].originHubId ?? null;
       const hasTransferItem = orders.some((order) => {
-        const item = dto.items?.find((i) => i.orderId === order.id);
+        const item = this.mergeOutboundItemsForOrder(dto.items, order);
         if (item?.deliveryMode === 'DIRECT_CUSTOMER') return false;
         const destId =
           item?.destinationHubId ??
@@ -2900,7 +2985,7 @@ export class WarehouseService {
       let createdTrip: TripEntity | undefined;
 
       for (const order of orders) {
-        const item = dto.items?.find((i) => i.orderId === order.id);
+        const item = this.mergeOutboundItemsForOrder(dto.items, order);
         const actingHubId =
           userHubId ?? order.currentHubId ?? order.originHubId ?? null;
 
@@ -3045,6 +3130,7 @@ export class WarehouseService {
             driverName: dto.driverName || 'Tài xế giao hàng',
             status: 'IN_TRANSIT',
             pickupDate: dispatchDate,
+            quantityAllocated: qtyToExport,
             weightAllocated: weight,
             volumeAllocated: volume,
             notes: tripNotes,
@@ -3245,7 +3331,7 @@ export class WarehouseService {
         dto.dispatchDate || new Date().toISOString().split('T')[0];
 
       for (const order of orders) {
-        const item = dto.items?.find((i) => i.orderId === order.id);
+        const item = this.mergeOutboundItemsForOrder(dto.items, order);
         const actingHubId =
           userHubId ?? order.currentHubId ?? order.originHubId ?? null;
         const isDraft = DRAFT_LIKE_STATUSES.includes(order.status);
@@ -5687,6 +5773,14 @@ export class WarehouseService {
 
         for (const t of trips) {
           affectedOrderIds.add(t.orderId);
+          if (
+            t.quantityAllocated === null ||
+            t.quantityAllocated === undefined
+          ) {
+            const matchingTx = txList.find((tx) => tx.orderId === t.orderId);
+            t.quantityAllocated = Number(matchingTx?.quantity) || 1;
+            await tripRepo.save(t);
+          }
           const order = await orderRepo.findOne({ where: { id: t.orderId } });
           if (order && order.currentTripCode === normTripCode) {
             order.currentTripCode = null;
