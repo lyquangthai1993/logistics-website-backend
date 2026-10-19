@@ -322,7 +322,7 @@ export class OrdersService {
     }
 
     if (!order && typeof idOrCode === 'string' && idOrCode.trim()) {
-      order = await this.orderRepository.findOne({
+      const matchingOrders = await this.orderRepository.find({
         where: { orderCode: idOrCode.trim() },
         relations: [
           'trips',
@@ -331,8 +331,62 @@ export class OrdersService {
           'destinationHubEntity',
           'currentHubEntity',
         ],
-        order: { id: 'DESC' },
+        order: { id: 'ASC' },
       });
+      if (matchingOrders.length > 0) {
+        order = matchingOrders[0];
+        if (matchingOrders.length > 1) {
+          const hasNonDraft = matchingOrders.some(
+            (o) =>
+              !['DRAFT', 'PENDING', 'WAITING'].includes(
+                String(o.status || '').toUpperCase(),
+              ),
+          );
+          const effectiveMembers = hasNonDraft
+            ? matchingOrders.filter(
+                (o) =>
+                  !['DRAFT', 'PENDING', 'WAITING'].includes(
+                    String(o.status || '').toUpperCase(),
+                  ),
+              )
+            : matchingOrders;
+
+          order.totalQuantity = effectiveMembers.reduce(
+            (sum, o) => sum + (Number(o.totalQuantity) || 0),
+            0,
+          );
+          order.inboundQuantity = effectiveMembers.reduce(
+            (sum, o) => sum + (Number(o.inboundQuantity) || 0),
+            0,
+          );
+          order.outboundQuantity = effectiveMembers.reduce(
+            (sum, o) => sum + (Number(o.outboundQuantity) || 0),
+            0,
+          );
+          order.remainingQuantity = effectiveMembers.reduce(
+            (sum, o) => sum + (Number(o.remainingQuantity) || 0),
+            0,
+          );
+          order.totalWeight =
+            Math.round(
+              effectiveMembers.reduce(
+                (sum, o) => sum + (Number(o.totalWeight) || 0),
+                0,
+              ) * 1000,
+            ) / 1000;
+          order.totalVolume =
+            Math.round(
+              effectiveMembers.reduce(
+                (sum, o) => sum + (Number(o.totalVolume) || 0),
+                0,
+              ) * 1000,
+            ) / 1000;
+          order.trips = matchingOrders.flatMap((o) => o.trips || []);
+          order.inventoryTransactions = matchingOrders.flatMap(
+            (o) => o.inventoryTransactions || [],
+          );
+        }
+      }
     }
 
     if (!order) {
@@ -468,10 +522,7 @@ export class OrdersService {
 
       const applyScalar = (
         field:
-          | 'totalQuantity'
-          | 'totalWeight'
-          | 'totalVolume'
-          | 'goodsDescription',
+          'totalQuantity' | 'totalWeight' | 'totalVolume' | 'goodsDescription',
       ) => {
         const next = dto[field];
         if (next === undefined || next === null) return;
