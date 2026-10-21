@@ -6,6 +6,7 @@ import {
   OrderActivityLogEntity,
 } from './infrastructure/persistence/relational/entities/order-activity-log.entity';
 import { OrderEntity } from './infrastructure/persistence/relational/entities/order.entity';
+import { UserEntity } from '../users/infrastructure/persistence/relational/entities/user.entity';
 import {
   InventoryTransactionType,
   OrderInventoryTransactionEntity,
@@ -46,6 +47,25 @@ export class OrderActivityLogService {
       );
     }
 
+    // Tự động truy vấn email nếu actorEmail chưa có
+    if (!dto.actorEmail && dto.actorUserId) {
+      const userRepo = manager
+        ? manager.getRepository(UserEntity)
+        : this.activityLogRepo.manager.getRepository(UserEntity);
+      const userRecord = await userRepo.findOne({
+        where: { id: Number(dto.actorUserId) },
+      });
+      if (userRecord?.email) {
+        dto.actorEmail = userRecord.email;
+      }
+    }
+
+    if (!dto.actorEmail) {
+      throw new BadRequestException(
+        'actorEmail là bắt buộc và không được null khi ghi nhật ký hoạt động đơn hàng.',
+      );
+    }
+
     try {
       const repo = manager
         ? manager.getRepository(OrderActivityLogEntity)
@@ -56,7 +76,7 @@ export class OrderActivityLogService {
         orderCode: dto.orderCode,
         action: dto.action,
         actorUserId: Number(dto.actorUserId),
-        actorEmail: dto.actorEmail ?? null,
+        actorEmail: dto.actorEmail,
         actorRole: dto.actorRole ?? null,
         hubId: Number(dto.hubId),
         hubName: dto.hubName ?? null,
@@ -71,7 +91,7 @@ export class OrderActivityLogService {
 
       const saved = await repo.save(log);
       this.logger.log(
-        `[AUDIT] Action=${dto.action} Code=${dto.orderCode} User=${dto.actorEmail || dto.actorUserId} Hub=${dto.hubId} Reason=${dto.reason || 'N/A'}`,
+        `[AUDIT] Action=${dto.action} Code=${dto.orderCode} User=${dto.actorEmail} Hub=${dto.hubId} Reason=${dto.reason || 'N/A'}`,
       );
       return saved;
     } catch (err: any) {
@@ -79,12 +99,7 @@ export class OrderActivityLogService {
         `Failed to record order activity log for ${dto.orderCode}: ${err.message}`,
         err.stack,
       );
-      // Return a non-persisted fallback instance so caller never fails purely on logging
-      return {
-        id: 0,
-        ...dto,
-        createdAt: new Date(),
-      } as any;
+      throw err;
     }
   }
 
@@ -211,12 +226,10 @@ export class OrderActivityLogService {
           orderId: primaryOrder.id,
           orderCode: primaryOrder.orderCode,
           action: OrderActivityAction.DATA_RECONCILED,
-          actorUserId: Number(performedByUser?.id ?? 1),
-          actorEmail: performedByUser?.email ?? 'System Automated Reconciler',
-          actorRole: performedByUser?.role ?? 'SYSTEM',
-          hubId: Number(
-            primaryOrder.currentHubId || primaryOrder.originHubId || 1,
-          ),
+          actorUserId: Number(performedByUser?.id),
+          actorEmail: performedByUser?.email || 'System Automated Reconciler',
+          actorRole: performedByUser?.role || 'SYSTEM',
+          hubId: Number(primaryOrder.currentHubId || primaryOrder.originHubId),
           hubName:
             primaryOrder.currentHubEntity?.name ||
             primaryOrder.originHub ||

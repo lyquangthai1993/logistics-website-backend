@@ -1508,15 +1508,10 @@ export class WarehouseService {
         }
       }
 
-      // Cơ chế bảo vệ dự phòng: nếu là Super Admin không truyền hubId, mặc định gán vào Andromeda Hub - HCM (HUB-HCM-01)
       if (!originHubId) {
-        const defaultHcmHub = await hubRepo.findOne({
-          where: [{ code: 'HUB-HCM-01' }, { id: 1 }],
-        });
-        if (defaultHcmHub) {
-          originHubId = defaultHcmHub.id;
-          originHubName = defaultHcmHub.name;
-        }
+        throw new BadRequestException(
+          'Vui lòng chọn Hub kho tiếp nhận đơn hàng (hubId không được để trống hoặc gán ngầm).',
+        );
       }
 
       // Single shared tripCode for all items on this vehicle
@@ -5904,7 +5899,7 @@ export class WarehouseService {
               actorEmail: user.email,
               actorRole: 'SUPER_ADMIN',
               hubId: Number(
-                operatingHubId || ord.currentHubId || ord.originHubId || 1,
+                operatingHubId || ord.currentHubId || ord.originHubId,
               ),
               hubName: ord.originHub || 'Hub',
               tripCode: normTripCode,
@@ -5968,6 +5963,13 @@ export class WarehouseService {
     }
 
     const auditReason = reason?.trim() || 'Admin xóa dòng giao dịch kho';
+    const userWithHub = await this.loadUserWithHub(user);
+    const actorEmail = userWithHub.email;
+    const actorUserId = Number(userWithHub.id);
+    const actorRole =
+      (typeof userWithHub.role === 'object'
+        ? userWithHub.role?.name
+        : userWithHub.role) || 'SUPER_ADMIN';
 
     return this.dataSource.transaction(async (manager) => {
       const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
@@ -6077,12 +6079,10 @@ export class WarehouseService {
           orderId: order.id,
           orderCode: order.orderCode,
           action: OrderActivityAction.TRANSACTION_DELETED,
-          actorUserId: Number(user.id),
-          actorEmail: user.email,
-          actorRole: 'SUPER_ADMIN',
-          hubId: Number(
-            tx.hubId || order.currentHubId || order.originHubId || 1,
-          ),
+          actorUserId,
+          actorEmail,
+          actorRole,
+          hubId: Number(tx.hubId || order.currentHubId || order.originHubId),
           hubName: tx.hub?.name || order.originHub || 'N/A Hub',
           tripCode: tx.tripCode || null,
           quantity: tx.quantity,
@@ -6144,6 +6144,13 @@ export class WarehouseService {
     }
 
     const auditReason = reason?.trim() || 'Admin khôi phục dòng giao dịch kho';
+    const userWithHub = await this.loadUserWithHub(user);
+    const actorEmail = userWithHub.email;
+    const actorUserId = Number(userWithHub.id);
+    const actorRole =
+      (typeof userWithHub.role === 'object'
+        ? userWithHub.role?.name
+        : userWithHub.role) || 'SUPER_ADMIN';
 
     return this.dataSource.transaction(async (manager) => {
       const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
@@ -6253,12 +6260,10 @@ export class WarehouseService {
           orderId: order.id,
           orderCode: order.orderCode,
           action: OrderActivityAction.TRANSACTION_RESTORED,
-          actorUserId: Number(user.id),
-          actorEmail: user.email,
-          actorRole: 'SUPER_ADMIN',
-          hubId: Number(
-            tx.hubId || order.currentHubId || order.originHubId || 1,
-          ),
+          actorUserId,
+          actorEmail,
+          actorRole,
+          hubId: Number(tx.hubId || order.currentHubId || order.originHubId),
           hubName: tx.hub?.name || order.originHub || 'N/A Hub',
           tripCode: tx.tripCode || null,
           quantity: tx.quantity,
