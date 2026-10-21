@@ -2614,17 +2614,17 @@ export class WarehouseService {
         }
       }
 
-      // When saving draft edits on a shared trip, remove any PENDING draft lines deleted by the user
-      if (isKeepStatus && sharedTripCode && savedOrders.length > 0) {
+      // Synchronize removed lines on the inbound trip (for BOTH save draft and confirm inbound)
+      if (sharedTripCode && savedOrders.length > 0) {
         const keptOrderIds = new Set(savedOrders.map((o) => o.id));
         const allTripLines = await tripRepo.find({
           where: { tripCode: sharedTripCode },
         });
         const removedTripLines = allTripLines.filter(
           (t) =>
-            t.status === 'PENDING' &&
             t.type === 'INBOUND' &&
-            !keptOrderIds.has(t.orderId),
+            !keptOrderIds.has(t.orderId) &&
+            (!hubId || !t.originHubId || t.originHubId === hubId),
         );
         if (removedTripLines.length > 0) {
           const removedOrderIds = removedTripLines.map((t) => t.orderId);
@@ -2633,12 +2633,45 @@ export class WarehouseService {
             const otherTripsCount = await tripRepo.count({
               where: { orderId: remOrderId },
             });
-            if (otherTripsCount === 0) {
-              const remOrder = await orderRepo.findOne({
-                where: { id: remOrderId },
-              });
-              if (remOrder && DRAFT_LIKE_STATUSES.includes(remOrder.status)) {
+            const priorInboundTxCount = await txRepo.count({
+              where: {
+                orderId: remOrderId,
+                type: InventoryTransactionType.INBOUND,
+              },
+            });
+
+            const remOrder = await orderRepo.findOne({
+              where: { id: remOrderId },
+            });
+
+            if (remOrder) {
+              let hasPriorInbound = priorInboundTxCount > 0;
+              if (!hasPriorInbound && remOrder.orderCode) {
+                const codeTxCount = await txRepo
+                  .createQueryBuilder('tx')
+                  .innerJoin('tx.order', 'o')
+                  .where('o.orderCode = :code', { code: remOrder.orderCode })
+                  .andWhere('tx.type = :type', {
+                    type: InventoryTransactionType.INBOUND,
+                  })
+                  .andWhere('tx.deletedAt IS NULL')
+                  .getCount();
+                if (codeTxCount > 0) hasPriorInbound = true;
+              }
+
+              if (
+                otherTripsCount === 0 &&
+                !hasPriorInbound &&
+                DRAFT_LIKE_STATUSES.includes(remOrder.status)
+              ) {
+                // Case 1: Đơn tạo mới theo chuyến xe nhưng bị xóa khi nhận xe (thực tế không có hàng)
+                // -> Xóa triệt để đơn hàng kho để không lưu lại đơn nháp rác
                 await orderRepo.softDelete(remOrder.id);
+              } else if (remOrder.currentTripCode === sharedTripCode) {
+                // Case 2: Đơn đã có lưu kho trước (hàng về nhiều đợt)
+                // -> Các thông tin của mã vận đơn này KHÔNG THAY ĐỔI, chỉ gỡ mã chuyến xe hiện tại
+                remOrder.currentTripCode = null;
+                await orderRepo.save(remOrder);
               }
             }
           }
