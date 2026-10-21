@@ -619,7 +619,7 @@ export class OrdersService {
           actorEmail: admin.email,
           actorRole: 'SUPER_ADMIN',
           hubId: Number(saved.originHubId ?? admin.hubId ?? 1),
-          hubName: saved.originHub || 'Andromeda Hub - HCM',
+          hubName: saved.originHub || 'N/A Hub',
           reason: auditReason,
           bearerToken: bearerToken ?? null,
           oldValues: { ...currentVals },

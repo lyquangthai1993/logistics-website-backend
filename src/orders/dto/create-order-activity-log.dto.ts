@@ -61,7 +61,7 @@ export class CreateOrderActivityLogDto {
   hubId: number;
 
   @ApiPropertyOptional({
-    example: 'Andromeda Hub - HCM',
+    example: 'N/A Hub',
     description: 'Tên Hub bến bãi',
   })
   @IsOptional()

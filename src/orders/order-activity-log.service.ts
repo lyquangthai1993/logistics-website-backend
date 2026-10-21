@@ -220,7 +220,7 @@ export class OrderActivityLogService {
           hubName:
             primaryOrder.currentHubEntity?.name ||
             primaryOrder.originHub ||
-            'Andromeda Hub - HCM',
+            'N/A Hub',
           oldValues,
           newValues,
           reason,

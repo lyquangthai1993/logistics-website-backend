@@ -6083,7 +6083,7 @@ export class WarehouseService {
           hubId: Number(
             tx.hubId || order.currentHubId || order.originHubId || 1,
           ),
-          hubName: tx.hub?.name || order.originHub || 'Andromeda Hub - HCM',
+          hubName: tx.hub?.name || order.originHub || 'N/A Hub',
           tripCode: tx.tripCode || null,
           quantity: tx.quantity,
           reason: auditReason,
@@ -6259,7 +6259,7 @@ export class WarehouseService {
           hubId: Number(
             tx.hubId || order.currentHubId || order.originHubId || 1,
           ),
-          hubName: tx.hub?.name || order.originHub || 'Andromeda Hub - HCM',
+          hubName: tx.hub?.name || order.originHub || 'N/A Hub',
           tripCode: tx.tripCode || null,
           quantity: tx.quantity,
           reason: auditReason,
