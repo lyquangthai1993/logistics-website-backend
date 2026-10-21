@@ -31,6 +31,8 @@ import {
   InventoryTransactionType,
 } from './infrastructure/persistence/relational/entities/order-inventory-transaction.entity';
 import { OrderCodeService } from './order-code.service';
+import { OrderActivityAction } from './infrastructure/persistence/relational/entities/order-activity-log.entity';
+import { OrderActivityLogService } from './order-activity-log.service';
 import {
   DRAFT_LIKE_STATUSES,
   OperationalLedgerService,
@@ -127,6 +129,7 @@ export class WarehouseService {
     private readonly transactionRepository: Repository<OrderInventoryTransactionEntity>,
     private readonly orderCodeService: OrderCodeService,
     private readonly ledgerService: OperationalLedgerService,
+    private readonly activityLogService: OrderActivityLogService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -5659,6 +5662,7 @@ export class WarehouseService {
     user: UserEntity,
     tripCodeParam: string,
     dto?: { reason?: string; hubId?: number },
+    bearerToken?: string | null,
   ): Promise<{
     success: boolean;
     tripCode: string;
@@ -5887,6 +5891,38 @@ export class WarehouseService {
         );
       }
 
+      // Record Order Activity Log for all affected orders
+      for (const orderId of affectedOrderIds) {
+        const ord = await orderRepo.findOne({ where: { id: orderId } });
+        if (ord) {
+          await this.activityLogService.logActivity(
+            {
+              orderId: ord.id,
+              orderCode: ord.orderCode,
+              action: OrderActivityAction.TRIP_ROLLBACK,
+              actorUserId: Number(user.id),
+              actorEmail: user.email,
+              actorRole: 'SUPER_ADMIN',
+              hubId: Number(
+                operatingHubId || ord.currentHubId || ord.originHubId || 1,
+              ),
+              hubName: ord.originHub || 'Hub',
+              tripCode: normTripCode,
+              quantity: ord.remainingQuantity ?? 0,
+              reason: dto?.reason?.trim() || 'Admin rollback chuyến xe',
+              bearerToken: bearerToken ?? null,
+              newValues: {
+                tripCode: normTripCode,
+                tripType: isOutbound ? 'OUTBOUND' : 'INBOUND',
+                status: ord.status,
+                remainingQuantity: ord.remainingQuantity,
+              },
+            },
+            manager,
+          );
+        }
+      }
+
       this.logger.log(
         `[ADMIN ROLLBACK TRIP] Quản trị viên ${user.id} (${user.email || 'Admin'}) đã rollback chuyến xe ${normTripCode} (${isOutbound ? 'XUẤT KHO' : 'NHẬP KHO'}) về trạng thái PENDING. Lý do: ${dto?.reason || 'Không ghi nhận'}. Đơn hàng bị ảnh hưởng: ${affectedOrderIds.size}`,
       );
@@ -5899,5 +5935,447 @@ export class WarehouseService {
         message: `Đã mở lại chuyến xe ${normTripCode} thành công. Chuyến xe và tồn kho hàng hóa đã được hoàn tác về trạng thái Chờ xử lý.`,
       };
     });
+  }
+
+  /**
+   * ACID Transaction: Soft-delete an inventory transaction line.
+   * Only accessible by SUPER_ADMIN.
+   * Enforces invariant: newTotalInbound >= newTotalOutbound.
+   * Recalculates order quantities and status, updates sibling orders sharing orderCode.
+   * Records immutable OrderActivityLog with actorUserId, hubId, reason and bearerToken.
+   */
+  async deleteTransaction(
+    transactionId: number,
+    user: UserEntity,
+    reason?: string,
+    bearerToken?: string | null,
+  ) {
+    const roleId = Number(
+      user?.role?.id || (typeof user?.role === 'number' ? user.role : 0),
+    );
+    const roleName = String(
+      (user?.role as any)?.name || user?.role || '',
+    ).toUpperCase();
+    const isSuperAdmin =
+      roleId === RoleEnum.SUPER_ADMIN ||
+      roleName === 'SUPER_ADMIN' ||
+      roleName === 'ADMIN';
+
+    if (!isSuperAdmin) {
+      throw new ForbiddenException(
+        'Chỉ Quản trị viên (Super Admin) mới có quyền xóa dòng giao dịch kho.',
+      );
+    }
+
+    const auditReason = reason?.trim() || 'Admin xóa dòng giao dịch kho';
+
+    return this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
+      const orderRepo = manager.getRepository(OrderEntity);
+
+      const tx = await txRepo.findOne({
+        where: { id: transactionId },
+        relations: ['order', 'hub'],
+        withDeleted: true,
+      });
+
+      if (!tx) {
+        throw new NotFoundException('Không tìm thấy giao dịch kho cần xóa.');
+      }
+
+      if (tx.deletedAt) {
+        throw new BadRequestException(
+          'Dòng giao dịch này đã được xóa trước đó.',
+        );
+      }
+
+      const order = await orderRepo.findOne({
+        where: { id: tx.orderId },
+      });
+
+      if (!order) {
+        throw new NotFoundException(
+          `Không tìm thấy đơn hàng liên kết (orderId: ${tx.orderId}).`,
+        );
+      }
+
+      // Soft delete the transaction line
+      await txRepo.softDelete(transactionId);
+
+      // Query all remaining active transactions for this orderCode
+      const siblingOrders = await orderRepo.find({
+        where: { orderCode: order.orderCode.trim() },
+        select: ['id'],
+      });
+      const siblingOrderIds = siblingOrders.map((o) => o.id);
+
+      const remainingActiveTxs = await txRepo.find({
+        where: { orderId: In(siblingOrderIds) },
+        order: { createdAt: 'ASC' },
+      });
+
+      const newTotalInbound = remainingActiveTxs
+        .filter((t) => t.type === 'INBOUND')
+        .reduce((sum, t) => sum + (Number(t.quantity) || 0), 0);
+
+      const newTotalOutbound = remainingActiveTxs
+        .filter((t) => t.type === 'OUTBOUND' || t.type === 'TRANSFER')
+        .reduce((sum, t) => sum + (Number(t.quantity) || 0), 0);
+
+      if (newTotalInbound < newTotalOutbound) {
+        throw new BadRequestException(
+          `Không thể xóa dòng giao dịch này vì sẽ gây âm kho! (Tổng nhập còn lại: ${newTotalInbound} kiện, nhưng tổng xuất đã là: ${newTotalOutbound} kiện).`,
+        );
+      }
+
+      const newRemaining = Math.max(0, newTotalInbound - newTotalOutbound);
+      let newStatus = order.status;
+      if (newTotalInbound === 0) {
+        newStatus = 'PENDING';
+      } else if (newRemaining === 0 && newTotalOutbound > 0) {
+        newStatus = 'COMPLETED_OUTBOUND';
+      } else if (newTotalOutbound > 0 && newRemaining > 0) {
+        newStatus = 'PARTIALLY_DELIVERED';
+      } else {
+        newStatus = 'STORED';
+      }
+
+      const oldValues = {
+        totalQuantity: order.totalQuantity,
+        inboundQuantity: order.inboundQuantity,
+        outboundQuantity: order.outboundQuantity,
+        remainingQuantity: order.remainingQuantity,
+        status: order.status,
+      };
+
+      // Sync across all sibling order records sharing orderCode
+      for (const sibId of siblingOrderIds) {
+        await orderRepo.update(sibId, {
+          totalQuantity: newTotalInbound,
+          inboundQuantity: newTotalInbound,
+          outboundQuantity: newTotalOutbound,
+          remainingQuantity: newRemaining,
+          status: newStatus,
+          updatedAt: new Date(),
+        });
+      }
+
+      const newValues = {
+        totalQuantity: newTotalInbound,
+        inboundQuantity: newTotalInbound,
+        outboundQuantity: newTotalOutbound,
+        remainingQuantity: newRemaining,
+        status: newStatus,
+        transactionId: tx.id,
+        transactionType: tx.type,
+        quantity: tx.quantity,
+      };
+
+      // Record Activity Log with actorUserId, hubId, reason and bearerToken
+      await this.activityLogService.logActivity(
+        {
+          orderId: order.id,
+          orderCode: order.orderCode,
+          action: OrderActivityAction.TRANSACTION_DELETED,
+          actorUserId: Number(user.id),
+          actorEmail: user.email,
+          actorRole: 'SUPER_ADMIN',
+          hubId: Number(
+            tx.hubId || order.currentHubId || order.originHubId || 1,
+          ),
+          hubName: tx.hub?.name || order.originHub || 'Andromeda Hub - HCM',
+          tripCode: tx.tripCode || null,
+          quantity: tx.quantity,
+          reason: auditReason,
+          bearerToken: bearerToken ?? null,
+          oldValues,
+          newValues,
+          metadata: {
+            transactionId: tx.id,
+            invoiceCode: tx.invoiceCode,
+            licensePlate: tx.licensePlate,
+            driverName: tx.driverName,
+            txType: tx.type,
+          },
+        },
+        manager,
+      );
+
+      return {
+        success: true,
+        message: `Đã xóa dòng giao dịch #${transactionId} (${tx.type} ${tx.quantity} kiện) thành công. Tồn kho đã được cân bằng lại.`,
+        transactionId,
+        orderCode: order.orderCode,
+        inboundQuantity: newTotalInbound,
+        outboundQuantity: newTotalOutbound,
+        remainingQuantity: newRemaining,
+      };
+    });
+  }
+
+  /**
+   * ACID Transaction: Restore a soft-deleted inventory transaction line.
+   * Only accessible by SUPER_ADMIN.
+   * Enforces invariant: newTotalInbound >= newTotalOutbound.
+   * Recalculates order quantities and status, updates sibling orders sharing orderCode.
+   * Records immutable OrderActivityLog with actorUserId, hubId, reason and bearerToken.
+   */
+  async restoreTransaction(
+    transactionId: number,
+    user: UserEntity,
+    reason?: string,
+    bearerToken?: string | null,
+  ) {
+    const roleId = Number(
+      user?.role?.id || (typeof user?.role === 'number' ? user.role : 0),
+    );
+    const roleName = String(
+      (user?.role as any)?.name || user?.role || '',
+    ).toUpperCase();
+    const isSuperAdmin =
+      roleId === RoleEnum.SUPER_ADMIN ||
+      roleName === 'SUPER_ADMIN' ||
+      roleName === 'ADMIN';
+
+    if (!isSuperAdmin) {
+      throw new ForbiddenException(
+        'Chỉ Quản trị viên (Super Admin) mới có quyền khôi phục dòng giao dịch kho.',
+      );
+    }
+
+    const auditReason = reason?.trim() || 'Admin khôi phục dòng giao dịch kho';
+
+    return this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
+      const orderRepo = manager.getRepository(OrderEntity);
+
+      const tx = await txRepo.findOne({
+        where: { id: transactionId },
+        relations: ['order', 'hub'],
+        withDeleted: true,
+      });
+
+      if (!tx) {
+        throw new NotFoundException(
+          'Không tìm thấy giao dịch kho cần khôi phục.',
+        );
+      }
+
+      if (!tx.deletedAt) {
+        throw new BadRequestException(
+          'Dòng giao dịch này đang hoạt động bình thường, không cần khôi phục.',
+        );
+      }
+
+      const order = await orderRepo.findOne({
+        where: { id: tx.orderId },
+      });
+
+      if (!order) {
+        throw new NotFoundException(
+          `Không tìm thấy đơn hàng liên kết (orderId: ${tx.orderId}).`,
+        );
+      }
+
+      // Restore the transaction line
+      await txRepo.restore(transactionId);
+
+      const siblingOrders = await orderRepo.find({
+        where: { orderCode: order.orderCode.trim() },
+        select: ['id'],
+      });
+      const siblingOrderIds = siblingOrders.map((o) => o.id);
+
+      const restoredActiveTxs = await txRepo.find({
+        where: { orderId: In(siblingOrderIds) },
+        order: { createdAt: 'ASC' },
+      });
+
+      const newTotalInbound = restoredActiveTxs
+        .filter((t) => t.type === 'INBOUND')
+        .reduce((sum, t) => sum + (Number(t.quantity) || 0), 0);
+
+      const newTotalOutbound = restoredActiveTxs
+        .filter((t) => t.type === 'OUTBOUND' || t.type === 'TRANSFER')
+        .reduce((sum, t) => sum + (Number(t.quantity) || 0), 0);
+
+      if (newTotalInbound < newTotalOutbound) {
+        throw new BadRequestException(
+          `Không thể khôi phục dòng giao dịch này vì sẽ gây âm kho! (Tổng nhập: ${newTotalInbound} kiện, tổng xuất: ${newTotalOutbound} kiện).`,
+        );
+      }
+
+      const newRemaining = Math.max(0, newTotalInbound - newTotalOutbound);
+      let newStatus = order.status;
+      if (newTotalInbound === 0) {
+        newStatus = 'PENDING';
+      } else if (newRemaining === 0 && newTotalOutbound > 0) {
+        newStatus = 'COMPLETED_OUTBOUND';
+      } else if (newTotalOutbound > 0 && newRemaining > 0) {
+        newStatus = 'PARTIALLY_DELIVERED';
+      } else {
+        newStatus = 'STORED';
+      }
+
+      const oldValues = {
+        totalQuantity: order.totalQuantity,
+        inboundQuantity: order.inboundQuantity,
+        outboundQuantity: order.outboundQuantity,
+        remainingQuantity: order.remainingQuantity,
+        status: order.status,
+      };
+
+      for (const sibId of siblingOrderIds) {
+        await orderRepo.update(sibId, {
+          totalQuantity: newTotalInbound,
+          inboundQuantity: newTotalInbound,
+          outboundQuantity: newTotalOutbound,
+          remainingQuantity: newRemaining,
+          status: newStatus,
+          updatedAt: new Date(),
+        });
+      }
+
+      const newValues = {
+        totalQuantity: newTotalInbound,
+        inboundQuantity: newTotalInbound,
+        outboundQuantity: newTotalOutbound,
+        remainingQuantity: newRemaining,
+        status: newStatus,
+        transactionId: tx.id,
+        transactionType: tx.type,
+        quantity: tx.quantity,
+      };
+
+      // Record Activity Log with actorUserId, hubId, reason and bearerToken
+      await this.activityLogService.logActivity(
+        {
+          orderId: order.id,
+          orderCode: order.orderCode,
+          action: OrderActivityAction.TRANSACTION_RESTORED,
+          actorUserId: Number(user.id),
+          actorEmail: user.email,
+          actorRole: 'SUPER_ADMIN',
+          hubId: Number(
+            tx.hubId || order.currentHubId || order.originHubId || 1,
+          ),
+          hubName: tx.hub?.name || order.originHub || 'Andromeda Hub - HCM',
+          tripCode: tx.tripCode || null,
+          quantity: tx.quantity,
+          reason: auditReason,
+          bearerToken: bearerToken ?? null,
+          oldValues,
+          newValues,
+          metadata: {
+            transactionId: tx.id,
+            invoiceCode: tx.invoiceCode,
+            licensePlate: tx.licensePlate,
+            driverName: tx.driverName,
+            txType: tx.type,
+          },
+        },
+        manager,
+      );
+
+      return {
+        success: true,
+        message: `Đã hoàn tác dòng giao dịch #${transactionId} (${tx.type} ${tx.quantity} kiện) thành công. Tồn kho đã được cân bằng lại.`,
+        transactionId,
+        orderCode: order.orderCode,
+        inboundQuantity: newTotalInbound,
+        outboundQuantity: newTotalOutbound,
+        remainingQuantity: newRemaining,
+      };
+    });
+  }
+
+  /**
+   * Get all chronological order inventory transactions (including soft-deleted).
+   */
+  async getOrderTransactions(orderCode: string) {
+    const orderRepo = this.dataSource.getRepository(OrderEntity);
+    const txRepo = this.dataSource.getRepository(
+      OrderInventoryTransactionEntity,
+    );
+
+    const orders = await orderRepo.find({
+      where: { orderCode: orderCode.trim() },
+      select: [
+        'id',
+        'orderCode',
+        'totalQuantity',
+        'inboundQuantity',
+        'outboundQuantity',
+        'remainingQuantity',
+        'status',
+      ],
+    });
+
+    if (orders.length === 0) {
+      throw new NotFoundException(
+        `Không tìm thấy đơn hàng với mã '${orderCode}'`,
+      );
+    }
+
+    const order = orders[0];
+    const orderIds = orders.map((o) => o.id);
+
+    const rawTxs = await txRepo
+      .createQueryBuilder('tx')
+      .withDeleted()
+      .leftJoinAndSelect('tx.hub', 'hub')
+      .where('tx.orderId IN (:...orderIds)', { orderIds })
+      .orderBy('tx.createdAt', 'ASC')
+      .addOrderBy('tx.id', 'ASC')
+      .getMany();
+
+    // Map running balance on active transactions
+    let running = 0;
+    const transactions = rawTxs.map((tx) => {
+      const isDeleted = !!tx.deletedAt;
+      const isIn = tx.type === 'INBOUND';
+      const q = Number(tx.quantity) || 0;
+      if (!isDeleted) {
+        if (isIn) {
+          running += q;
+        } else {
+          running = Math.max(0, running - q);
+        }
+      }
+      return {
+        id: tx.id,
+        orderId: tx.orderId,
+        type: tx.type,
+        invoiceCode: tx.invoiceCode,
+        hubId: tx.hubId,
+        hubName: tx.hub?.name || null,
+        tripCode: tx.tripCode,
+        licensePlate: tx.licensePlate,
+        driverName: tx.driverName,
+        quantity: tx.quantity,
+        remainingQuantity: tx.remainingQuantity,
+        weight: tx.weight,
+        volume: tx.volume,
+        destination: tx.destination,
+        notes: tx.notes,
+        deletedAt: tx.deletedAt,
+        createdAt: tx.createdAt,
+        isDeleted,
+        cumulativeStock: isDeleted ? null : running,
+      };
+    });
+
+    return {
+      order: {
+        id: order.id,
+        orderCode: order.orderCode,
+        totalQuantity: order.totalQuantity,
+        inboundQuantity: order.inboundQuantity,
+        outboundQuantity: order.outboundQuantity,
+        remainingQuantity: order.remainingQuantity,
+        status: order.status,
+      },
+      transactions,
+    };
   }
 }

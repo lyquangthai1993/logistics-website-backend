@@ -436,6 +436,70 @@ export class WarehouseController {
     @Param('tripCode') tripCode: string,
     @Body() dto?: { reason?: string; hubId?: number },
   ) {
-    return this.warehouseService.rollbackTrip(req.user, tripCode, dto);
+    return this.warehouseService.rollbackTrip(
+      req.user,
+      tripCode,
+      dto,
+      req.headers?.authorization,
+    );
+  }
+
+  @Get('orders/:orderCode/transactions')
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.WAREHOUSE_MANAGER,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+  )
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Lấy danh sách toàn bộ các dòng giao dịch kho của đơn hàng (bao gồm cả dòng đã xóa mềm)',
+  })
+  async getOrderTransactions(
+    @Request() req: any,
+    @Param('orderCode') orderCode: string,
+  ) {
+    return this.warehouseService.getOrderTransactions(orderCode);
+  }
+
+  @Delete('transactions/:id')
+  @Roles(RoleEnum.SUPER_ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Xóa mềm dòng giao dịch kho (Chỉ Super Admin, đảm bảo ACID & cập nhật tồn kho)',
+  })
+  async deleteTransaction(
+    @Request() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body?: { reason?: string },
+  ) {
+    return this.warehouseService.deleteTransaction(
+      id,
+      req.user,
+      body?.reason,
+      req.headers?.authorization,
+    );
+  }
+
+  @Post('transactions/:id/restore')
+  @Roles(RoleEnum.SUPER_ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Khôi phục dòng giao dịch kho đã xóa (Chỉ Super Admin, đảm bảo ACID & cập nhật tồn kho)',
+  })
+  async restoreTransaction(
+    @Request() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body?: { reason?: string },
+  ) {
+    return this.warehouseService.restoreTransaction(
+      id,
+      req.user,
+      body?.reason,
+      req.headers?.authorization,
+    );
   }
 }
