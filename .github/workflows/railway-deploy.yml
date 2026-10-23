@@ -72,7 +72,7 @@ jobs:
           node-version: 22
 
       - name: Install Dependencies
-        run: npm ci --prefer-offline
+        run: npm ci --prefer-offline --legacy-peer-deps
 
       - name: Run NestJS Build Verification
         run: npm run build

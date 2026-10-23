@@ -36,6 +36,7 @@ import { QueryOrderDto } from './dto/query-order.dto';
 import { QueryOrderStatsDto } from './dto/query-order-stats.dto';
 import { AdminOverrideOrderDto } from './dto/admin-override-order.dto';
 import { OrderEntity } from './infrastructure/persistence/relational/entities/order.entity';
+import { OrderActivityLogService } from './order-activity-log.service';
 
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -45,7 +46,10 @@ import { OrderEntity } from './infrastructure/persistence/relational/entities/or
   version: '1',
 })
 export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
+  constructor(
+    private readonly ordersService: OrdersService,
+    private readonly activityLogService: OrderActivityLogService,
+  ) {}
 
   @ApiCreatedResponse({
     type: OrderEntity,
@@ -206,7 +210,8 @@ export class OrdersController {
     @Body() dto: AdminOverrideOrderDto,
     @Request() req: any,
   ): Promise<OrderEntity> {
-    return this.ordersService.adminOverride(+id, dto, req.user);
+    const bearerToken = req.headers?.authorization || null;
+    return this.ordersService.adminOverride(+id, dto, req.user, bearerToken);
   }
 
   @ApiOkResponse({
@@ -270,5 +275,31 @@ export class OrdersController {
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id') id: string, @Request() req: any): Promise<void> {
     return this.ordersService.remove(+id, req.user);
+  }
+  @Get('code/:orderCode/activity-logs')
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.WAREHOUSE_MANAGER,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+  )
+  @ApiOperation({
+    summary: 'Lấy lịch sử thao tác của người dùng trên đơn hàng',
+  })
+  getActivityLogs(@Param('orderCode') orderCode: string) {
+    return this.activityLogService.getActivityLogs(orderCode);
+  }
+
+  @Post('code/:orderCode/reconcile')
+  @Roles(RoleEnum.SUPER_ADMIN)
+  @ApiOperation({
+    summary: 'Tái đồng bộ số lượng tồn kho theo sổ cái giao dịch thực tế',
+  })
+  reconcileOrder(@Param('orderCode') orderCode: string, @Request() req: any) {
+    return this.activityLogService.reconcileOrderQuantities(
+      orderCode,
+      req.user,
+      'Admin manual reconciliation request',
+    );
   }
 }

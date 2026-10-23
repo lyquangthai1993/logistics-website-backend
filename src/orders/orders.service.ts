@@ -73,6 +73,8 @@ export interface OrderLedgerEntry {
 }
 
 import { OrderCodeService } from './order-code.service';
+import { OrderActivityLogService } from './order-activity-log.service';
+import { OrderActivityAction } from './infrastructure/persistence/relational/entities/order-activity-log.entity';
 
 @Injectable()
 export class OrdersService {
@@ -91,6 +93,7 @@ export class OrdersService {
     private readonly ledgerService: OperationalLedgerService,
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
+    private readonly activityLogService: OrderActivityLogService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -486,6 +489,7 @@ export class OrdersService {
     id: number,
     dto: AdminOverrideOrderDto,
     admin: UserEntity,
+    bearerToken?: string | null,
   ): Promise<OrderEntity> {
     if (admin?.role?.id !== RoleEnum.SUPER_ADMIN) {
       throw new ForbiddenException(
@@ -510,6 +514,15 @@ export class OrdersService {
         throw new NotFoundException('Không tìm thấy đơn hàng cần điều chỉnh.');
       }
 
+      const currentVals = {
+        totalQuantity: order.totalQuantity,
+        totalWeight: order.totalWeight,
+        totalVolume: order.totalVolume,
+        goodsDescription: order.goodsDescription,
+        originHubId: order.originHubId,
+        destinationHubId: order.destinationHubId,
+      };
+
       const LABELS: Record<string, string> = {
         totalQuantity: 'Số kiện',
         totalWeight: 'Khối lượng (kg)',
@@ -522,7 +535,10 @@ export class OrdersService {
 
       const applyScalar = (
         field:
-          'totalQuantity' | 'totalWeight' | 'totalVolume' | 'goodsDescription',
+          | 'totalQuantity'
+          | 'totalWeight'
+          | 'totalVolume'
+          | 'goodsDescription',
       ) => {
         const next = dto[field];
         if (next === undefined || next === null) return;
@@ -580,7 +596,7 @@ export class OrdersService {
           orderId: saved.id,
           type: InventoryTransactionType.ADJUSTMENT,
           invoiceCode,
-          hubId: admin.hubId ?? null,
+          hubId: saved.originHubId ?? admin.hubId ?? null,
           quantity: 0,
           remainingQuantity: saved.remainingQuantity ?? 0,
           weight: 0,
@@ -593,6 +609,24 @@ export class OrdersService {
 
       this.logger.warn(
         `[ADMIN OVERRIDE] order=${saved.orderCode} by userId=${admin.id}: ${changes.join('; ')} | reason=${auditReason}`,
+      );
+      await this.activityLogService.logActivity(
+        {
+          orderId: saved.id,
+          orderCode: saved.orderCode,
+          action: OrderActivityAction.ADMIN_OVERRIDE,
+          actorUserId: Number(admin.id),
+          actorEmail: admin.email || 'admin@example.com',
+          actorRole: 'SUPER_ADMIN',
+          hubId: Number(saved.originHubId ?? admin.hubId),
+          hubName: saved.originHub || 'N/A Hub',
+          reason: auditReason,
+          bearerToken: bearerToken ?? null,
+          oldValues: { ...currentVals },
+          newValues: { ...dto },
+          metadata: { changes, invoiceCode },
+        },
+        manager,
       );
 
       return saved;

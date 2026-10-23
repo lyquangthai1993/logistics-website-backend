@@ -13,6 +13,8 @@ import { MailModule } from '../mail/mail.module';
 import { TripEntity } from '../trips/infrastructure/persistence/relational/entities/trip.entity';
 import { TripStopEntity } from '../trips/infrastructure/persistence/relational/entities/trip-stop.entity';
 import { OrderInventoryTransactionEntity } from './infrastructure/persistence/relational/entities/order-inventory-transaction.entity';
+import { OrderActivityLogEntity } from './infrastructure/persistence/relational/entities/order-activity-log.entity';
+import { OrderActivityLogService } from './order-activity-log.service';
 import { WarehouseController } from './warehouse.controller';
 import { WarehouseService } from './warehouse.service';
 import { OperationalLedgerService } from './operational-ledger.service';
@@ -27,6 +29,7 @@ import { OperationalLedgerService } from './operational-ledger.service';
       TripEntity,
       TripStopEntity,
       OrderInventoryTransactionEntity,
+      OrderActivityLogEntity,
     ]),
     NotificationsModule,
     MailModule,
@@ -37,12 +40,14 @@ import { OperationalLedgerService } from './operational-ledger.service';
     OrderCodeService,
     WarehouseService,
     OperationalLedgerService,
+    OrderActivityLogService,
   ],
   exports: [
     OrdersService,
     OrderCodeService,
     WarehouseService,
     OperationalLedgerService,
+    OrderActivityLogService,
     TypeOrmModule,
   ],
 })

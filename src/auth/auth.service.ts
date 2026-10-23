@@ -84,6 +84,7 @@ export class AuthService {
     const { token, refreshToken, tokenExpires } = await this.getTokensData({
       id: user.id,
       role: user.role,
+      email: user.email,
       sessionId: session.id,
       hash,
     });
@@ -185,6 +186,7 @@ export class AuthService {
     } = await this.getTokensData({
       id: user.id,
       role: user.role,
+      email: user.email,
       sessionId: session.id,
       hash,
     });
@@ -548,6 +550,7 @@ export class AuthService {
       role: {
         id: user.role.id,
       },
+      email: user.email,
       sessionId: session.id,
       hash,
     });
@@ -600,6 +603,7 @@ export class AuthService {
   private async getTokensData(data: {
     id: User['id'];
     role: User['role'];
+    email?: User['email'];
     sessionId: Session['id'];
     hash: Session['hash'];
   }) {
@@ -614,6 +618,7 @@ export class AuthService {
         {
           id: data.id,
           role: data.role,
+          email: data.email,
           sessionId: data.sessionId,
         },
         {
