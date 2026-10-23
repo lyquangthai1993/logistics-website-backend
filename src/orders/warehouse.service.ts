@@ -4696,7 +4696,7 @@ export class WarehouseService {
     const baseQb = () =>
       this.tripRepository
         .createQueryBuilder('trip')
-        .leftJoinAndSelect('trip.order', 'order')
+        .innerJoinAndSelect('trip.order', 'order')
         .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
         .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
         .leftJoinAndSelect('trip.destinationHub', 'tripDestinationHub')
@@ -4752,6 +4752,7 @@ export class WarehouseService {
     const seen = new Set<number>();
     const lines = trips
       .filter((t) => {
+        if (!t.order) return false;
         if (seen.has(t.orderId)) return false;
         seen.add(t.orderId);
         return true;
