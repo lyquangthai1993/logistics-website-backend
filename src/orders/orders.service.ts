@@ -140,7 +140,24 @@ export class OrdersService {
       createdByUserId: userId,
     });
 
-    return this.orderRepository.save(order);
+    const saved = await this.orderRepository.save(order);
+    await this.activityLogService.safeLogActivity({
+      orderId: saved.id,
+      orderCode: saved.orderCode,
+      action: OrderActivityAction.ORDER_CREATED,
+      actorUserId: Number(userId || 0),
+      hubId: Number(saved.originHubId || saved.currentHubId || 0),
+      hubName: saved.originHub || 'N/A Hub',
+      quantity: saved.totalQuantity ?? 1,
+      reason: 'Khởi tạo vận đơn mới',
+      newValues: {
+        totalQuantity: saved.totalQuantity,
+        inboundQuantity: saved.inboundQuantity,
+        remainingQuantity: saved.remainingQuantity,
+        status: saved.status,
+      },
+    });
+    return saved;
   }
 
   async refreshMetrics(orderIds: number[]): Promise<
@@ -472,12 +489,39 @@ export class OrdersService {
       );
     }
 
+    const oldSnapshot = {
+      totalQuantity: order.totalQuantity,
+      inboundQuantity: order.inboundQuantity,
+      outboundQuantity: order.outboundQuantity,
+      remainingQuantity: order.remainingQuantity,
+      status: order.status,
+    };
+
     Object.assign(order, {
       ...updateOrderDto,
       orderCode: order.orderCode,
     });
 
-    return this.orderRepository.save(order);
+    const saved = await this.orderRepository.save(order);
+    await this.activityLogService.safeLogActivity({
+      orderId: saved.id,
+      orderCode: saved.orderCode,
+      action: OrderActivityAction.ORDER_UPDATED,
+      actorUserId: Number(saved.createdByUserId || 0),
+      hubId: Number(saved.currentHubId || saved.originHubId || 0),
+      hubName: saved.originHub || 'N/A Hub',
+      quantity: saved.totalQuantity ?? 1,
+      reason: 'Cập nhật thông tin vận đơn',
+      oldValues: oldSnapshot,
+      newValues: {
+        totalQuantity: saved.totalQuantity,
+        inboundQuantity: saved.inboundQuantity,
+        outboundQuantity: saved.outboundQuantity,
+        remainingQuantity: saved.remainingQuantity,
+        status: saved.status,
+      },
+    });
+    return saved;
   }
 
   /**
@@ -733,6 +777,27 @@ export class OrdersService {
       }
     }
     await this.orderRepository.softRemove(order);
+    await this.activityLogService.safeLogActivity({
+      orderId: order.id,
+      orderCode: order.orderCode,
+      action: OrderActivityAction.ORDER_DELETED,
+      actorUserId: Number(user?.id || order.createdByUserId || 0),
+      actorEmail: user?.email || undefined,
+      actorRole:
+        (typeof user?.role === 'object' ? (user?.role as any)?.name : String(user?.role || '')) ||
+        undefined,
+      hubId: Number(order.currentHubId || order.originHubId || user?.hubId || 0),
+      hubName: order.originHub || 'N/A Hub',
+      quantity: order.totalQuantity ?? 0,
+      reason: 'Xóa vận đơn',
+      oldValues: {
+        totalQuantity: order.totalQuantity,
+        inboundQuantity: order.inboundQuantity,
+        outboundQuantity: order.outboundQuantity,
+        remainingQuantity: order.remainingQuantity,
+        status: order.status,
+      },
+    });
   }
 
   // ---------------------------------------------------------------------------
