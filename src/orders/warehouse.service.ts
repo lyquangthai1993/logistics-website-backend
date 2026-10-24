@@ -2326,6 +2326,83 @@ export class WarehouseService {
                 },
               });
               if (already) {
+                const requestedQty = Number(
+                  row.actualQuantity ?? row.totalQuantity,
+                );
+                if (isSuperAdmin && requestedQty > 0) {
+                  const qtyDiff = requestedQty - Number(already.quantity);
+                  already.quantity = requestedQty;
+                  if (
+                    row.totalWeight !== undefined &&
+                    Number(row.totalWeight) >= 0
+                  ) {
+                    already.weight = Number(row.totalWeight);
+                  }
+                  if (
+                    row.totalVolume !== undefined &&
+                    Number(row.totalVolume) >= 0
+                  ) {
+                    already.volume = Number(row.totalVolume);
+                  }
+                  await txRepo.save(already);
+
+                  if (qtyDiff !== 0) {
+                    found.inboundQuantity = Math.max(
+                      0,
+                      (Number(found.inboundQuantity) || 0) + qtyDiff,
+                    );
+                    if (
+                      Number(found.inboundQuantity) >
+                      (Number(found.totalQuantity) || 0)
+                    ) {
+                      found.totalQuantity = Number(found.inboundQuantity);
+                    }
+                    found.remainingQuantity = Math.max(
+                      0,
+                      Number(found.inboundQuantity) -
+                        (Number(found.outboundQuantity) || 0),
+                    );
+                  }
+                  if (
+                    row.totalWeight !== undefined &&
+                    Number(row.totalWeight) >= 0
+                  ) {
+                    found.totalWeight = Number(row.totalWeight);
+                  }
+                  if (
+                    row.totalVolume !== undefined &&
+                    Number(row.totalVolume) >= 0
+                  ) {
+                    found.totalVolume = Number(row.totalVolume);
+                  }
+                  if (row.notes !== undefined) {
+                    found.notes = row.notes?.trim() || null;
+                  }
+                  await orderRepo.save(found);
+
+                  const existingTrip = await tripRepo.findOne({
+                    where: { orderId: found.id, tripCode: checkTripCode },
+                  });
+                  if (existingTrip) {
+                    existingTrip.quantityAllocated = requestedQty;
+                    if (
+                      row.totalWeight !== undefined &&
+                      Number(row.totalWeight) >= 0
+                    ) {
+                      existingTrip.weightAllocated = Number(row.totalWeight);
+                    }
+                    if (
+                      row.totalVolume !== undefined &&
+                      Number(row.totalVolume) >= 0
+                    ) {
+                      existingTrip.volumeAllocated = Number(row.totalVolume);
+                    }
+                    if (inboundPlate) existingTrip.licensePlate = inboundPlate;
+                    if (inboundDriver) existingTrip.driverName = inboundDriver;
+                    await tripRepo.save(existingTrip);
+                  }
+                }
+
                 let deliv = '';
                 if (found.route && found.route.includes('→')) {
                   deliv = found.route.split('→')[1]?.trim() || '';
@@ -4379,7 +4456,27 @@ export class WarehouseService {
           if (trip.tripCode && tripCodes.includes(trip.tripCode)) {
             const list = ordersByTripCode.get(trip.tripCode) || [];
             if (!list.some((o) => o.id === order.id)) {
-              list.push(enrichedOrder);
+              const tripEnrichedOrder = {
+                ...enrichedOrder,
+                tripId: trip.id,
+                quantityAllocated:
+                  trip.quantityAllocated != null &&
+                  Number(trip.quantityAllocated) > 0
+                    ? Number(trip.quantityAllocated)
+                    : Number(order.totalQuantity) || 1,
+                weightAllocated:
+                  trip.weightAllocated != null &&
+                  Number(trip.weightAllocated) >= 0
+                    ? Number(trip.weightAllocated)
+                    : Number(order.totalWeight) || 0,
+                volumeAllocated:
+                  trip.volumeAllocated != null &&
+                  Number(trip.volumeAllocated) >= 0
+                    ? Number(trip.volumeAllocated)
+                    : Number(order.totalVolume) || 0,
+                tripNotes: trip.notes,
+              };
+              list.push(tripEnrichedOrder);
               ordersByTripCode.set(trip.tripCode, list);
             }
           }
