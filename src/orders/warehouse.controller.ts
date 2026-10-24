@@ -460,7 +460,49 @@ export class WarehouseController {
     @Request() req: any,
     @Param('orderCode') orderCode: string,
   ) {
-    return this.warehouseService.getOrderTransactions(orderCode);
+    return this.warehouseService.getOrderTransactions(orderCode, req.user);
+  }
+
+  @Patch('transactions/:id/quantity')
+  @Roles(RoleEnum.SUPER_ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Điều chỉnh số lượng kiện của dòng giao dịch kho (Chỉ Super Admin, đảm bảo ACID & cập nhật tồn kho)',
+  })
+  async updateTransactionQuantity(
+    @Request() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { quantity: number; reason?: string },
+  ) {
+    return this.warehouseService.updateTransactionQuantity(
+      id,
+      body?.quantity,
+      req.user,
+      body?.reason,
+      req.headers?.authorization,
+    );
+  }
+
+  @Patch('transactions/:id')
+  @Roles(RoleEnum.SUPER_ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Điều chỉnh số lượng kiện của dòng giao dịch kho (Alias PATCH /transactions/:id)',
+  })
+  async updateTransaction(
+    @Request() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { quantity: number; reason?: string },
+  ) {
+    return this.warehouseService.updateTransactionQuantity(
+      id,
+      body?.quantity,
+      req.user,
+      body?.reason,
+      req.headers?.authorization,
+    );
   }
 
   @Delete('transactions/:id')

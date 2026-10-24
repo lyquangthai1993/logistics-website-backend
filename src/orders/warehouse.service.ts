@@ -2820,6 +2820,33 @@ export class WarehouseService {
         }
       }
 
+      if (!isKeepStatus) {
+        for (const ord of savedOrders) {
+          await this.activityLogService.safeLogActivity(
+            {
+              orderId: ord.id,
+              orderCode: ord.orderCode,
+              action: OrderActivityAction.INBOUND_CONFIRMED,
+              actorUserId: Number(user?.id || 0),
+              actorEmail: user?.email || undefined,
+              hubId: Number(hubId || ord.currentHubId || ord.originHubId || 0),
+              hubName: hubName || ord.originHub || 'N/A Hub',
+              tripCode: sharedTripCode || null,
+              quantity: ord.inboundQuantity ?? ord.totalQuantity ?? 1,
+              reason: `Xác nhận nhập kho${sharedTripCode ? ` chuyến ${sharedTripCode}` : ''}${inboundPlate ? ` (xe ${inboundPlate})` : ''}`,
+              newValues: {
+                totalQuantity: ord.totalQuantity,
+                inboundQuantity: ord.inboundQuantity,
+                outboundQuantity: ord.outboundQuantity,
+                remainingQuantity: ord.remainingQuantity,
+                status: ord.status,
+              },
+            },
+            manager,
+          );
+        }
+      }
+
       return {
         updatedCount: savedOrders.length - newCreatedCount,
         newCount: newCreatedCount,
@@ -3327,6 +3354,31 @@ export class WarehouseService {
         }
       }
 
+      for (const ord of saved) {
+        await this.activityLogService.safeLogActivity(
+          {
+            orderId: ord.id,
+            orderCode: ord.orderCode,
+            action: OrderActivityAction.OUTBOUND_CONFIRMED,
+            actorUserId: Number(user?.id || 0),
+            actorEmail: user?.email || undefined,
+            hubId: Number(originHubId || ord.currentHubId || ord.originHubId || 0),
+            hubName: ord.originHub || 'N/A Hub',
+            tripCode: tripCode || null,
+            quantity: ord.outboundQuantity ?? 0,
+            reason: `Xác nhận xuất kho chuyến ${tripCode}${dto.licensePlate ? ` (xe ${dto.licensePlate})` : ''}`,
+            newValues: {
+              totalQuantity: ord.totalQuantity,
+              inboundQuantity: ord.inboundQuantity,
+              outboundQuantity: ord.outboundQuantity,
+              remainingQuantity: ord.remainingQuantity,
+              status: ord.status,
+            },
+          },
+          manager,
+        );
+      }
+
       return {
         updatedCount: saved.length,
         orders: saved,
@@ -3618,12 +3670,33 @@ export class WarehouseService {
     }
     const userHubId = (await this.resolveUserHubId(user)) ?? null;
     await this.dataSource.transaction(async (manager) => {
-      await this.discardOutboundDraftLines(manager, tripCode, userHubId);
+      const droppedLines = await this.discardOutboundDraftLines(manager, tripCode, userHubId);
       await manager.query(
         `UPDATE "trip_stop" SET "deletedAt" = NOW()
          WHERE "tripCode" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL`,
         [tripCode],
       );
+      const orderIds = Array.from(new Set(droppedLines.map((l) => l.orderId).filter(Boolean)));
+      if (orderIds.length > 0) {
+        const affectedOrders = await manager.getRepository(OrderEntity).find({ where: { id: In(orderIds) } });
+        for (const ord of affectedOrders) {
+          await this.activityLogService.safeLogActivity(
+            {
+              orderId: ord.id,
+              orderCode: ord.orderCode,
+              action: OrderActivityAction.DRAFT_CANCELLED,
+              actorUserId: Number(user?.id || 0),
+              actorEmail: user?.email || undefined,
+              hubId: Number(userHubId || ord.currentHubId || ord.originHubId || 0),
+              hubName: ord.originHub || 'N/A Hub',
+              tripCode,
+              quantity: ord.remainingQuantity ?? 0,
+              reason: `Hủy chuyến nháp xuất kho ${tripCode}`,
+            },
+            manager,
+          );
+        }
+      }
     });
     return { tripCode, cancelled: true };
   }
@@ -6426,9 +6499,239 @@ export class WarehouseService {
   }
 
   /**
+   * ACID Transaction: Update package quantity of an active inventory transaction line.
+   * Only accessible by SUPER_ADMIN.
+   * Enforces invariant: newTotalInbound >= newTotalOutbound and recalculates running balances & sibling orders.
+   * Records immutable OrderActivityLog with action TRANSACTION_UPDATED.
+   */
+  async updateTransactionQuantity(
+    transactionId: number,
+    newQuantity: number,
+    user: UserEntity,
+    reason?: string,
+    bearerToken?: string | null,
+  ) {
+    const roleId = Number(
+      user?.role?.id || (typeof user?.role === 'number' ? user.role : 0),
+    );
+    const roleName = String(
+      (user?.role as any)?.name || user?.role || '',
+    ).toUpperCase();
+    const isSuperAdmin =
+      roleId === RoleEnum.SUPER_ADMIN ||
+      roleName === 'SUPER_ADMIN' ||
+      roleName === 'SUPER ADMIN' ||
+      roleName === 'ADMIN';
+
+    if (!isSuperAdmin) {
+      throw new ForbiddenException(
+        'Chỉ Quản trị viên (Super Admin) mới có quyền điều chỉnh số lượng kiện giao dịch kho.',
+      );
+    }
+
+    const parsedQty = Number(newQuantity);
+    if (!Number.isFinite(parsedQty) || parsedQty < 1 || !Number.isInteger(parsedQty)) {
+      throw new BadRequestException(
+        'Số lượng kiện điều chỉnh phải là số nguyên lớn hơn hoặc bằng 1.',
+      );
+    }
+
+    const auditReason =
+      reason?.trim() || 'Admin điều chỉnh số lượng kiện giao dịch kho';
+    const userWithHub = await this.loadUserWithHub(user);
+    const actorEmail = userWithHub.email;
+    const actorUserId = Number(userWithHub.id);
+    const actorRole =
+      (typeof userWithHub.role === 'object'
+        ? userWithHub.role?.name
+        : userWithHub.role) || 'SUPER_ADMIN';
+
+    return this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
+      const orderRepo = manager.getRepository(OrderEntity);
+      const tripRepo = manager.getRepository(TripEntity);
+
+      const tx = await txRepo.findOne({
+        where: { id: transactionId },
+        relations: ['order', 'hub'],
+        withDeleted: true,
+      });
+
+      if (!tx) {
+        throw new NotFoundException(
+          'Không tìm thấy giao dịch kho cần điều chỉnh.',
+        );
+      }
+
+      if (tx.deletedAt) {
+        throw new BadRequestException(
+          'Không thể điều chỉnh số lượng trên dòng giao dịch đã bị xóa. Vui lòng hoàn tác dòng xóa trước.',
+        );
+      }
+
+      const order = await orderRepo.findOne({
+        where: { id: tx.orderId },
+      });
+
+      if (!order) {
+        throw new NotFoundException(
+          `Không tìm thấy đơn hàng liên kết (orderId: ${tx.orderId}).`,
+        );
+      }
+
+      const oldTxQuantity = Number(tx.quantity) || 0;
+
+      // Update transaction quantity
+      await txRepo.update(transactionId, {
+        quantity: parsedQty,
+      });
+
+      // Query all active transactions for this orderCode
+      const siblingOrders = await orderRepo.find({
+        where: { orderCode: order.orderCode.trim() },
+        select: ['id'],
+      });
+      const siblingOrderIds = siblingOrders.map((o) => o.id);
+
+      const activeTxs = await txRepo.find({
+        where: { orderId: In(siblingOrderIds) },
+        order: { createdAt: 'ASC', id: 'ASC' },
+      });
+
+      const newTotalInbound = activeTxs
+        .filter((t) => t.type === 'INBOUND')
+        .reduce((sum, t) => sum + (Number(t.quantity) || 0), 0);
+
+      const newTotalOutbound = activeTxs
+        .filter((t) => t.type === 'OUTBOUND' || t.type === 'TRANSFER')
+        .reduce((sum, t) => sum + (Number(t.quantity) || 0), 0);
+
+      if (newTotalInbound < newTotalOutbound) {
+        throw new BadRequestException(
+          `Không thể điều chỉnh thành ${parsedQty} kiện vì sẽ gây âm kho! (Tổng nhập sau điều chỉnh: ${newTotalInbound} kiện, nhưng tổng xuất đã là: ${newTotalOutbound} kiện).`,
+        );
+      }
+
+      // Update chronological running balance on each active transaction
+      let runningStock = 0;
+      for (const activeTx of activeTxs) {
+        const q = Number(activeTx.quantity) || 0;
+        if (activeTx.type === 'INBOUND') {
+          runningStock += q;
+        } else {
+          runningStock = Math.max(0, runningStock - q);
+        }
+        if (Number(activeTx.remainingQuantity) !== runningStock) {
+          await txRepo.update(activeTx.id, { remainingQuantity: runningStock });
+        }
+      }
+
+      // Sync TripEntity.quantityAllocated if linked to a tripCode
+      if (tx.tripCode) {
+        const matchingTrips = await tripRepo.find({
+          where: {
+            orderId: In(siblingOrderIds),
+            tripCode: tx.tripCode,
+          },
+        });
+        for (const mt of matchingTrips) {
+          await tripRepo.update(mt.id, { quantityAllocated: parsedQty });
+        }
+      }
+
+      const newRemaining = Math.max(0, newTotalInbound - newTotalOutbound);
+      let newStatus = order.status;
+      if (newTotalInbound === 0) {
+        newStatus = 'PENDING';
+      } else if (newRemaining === 0 && newTotalOutbound > 0) {
+        newStatus = 'COMPLETED_OUTBOUND';
+      } else if (newTotalOutbound > 0 && newRemaining > 0) {
+        newStatus = 'PARTIALLY_DELIVERED';
+      } else {
+        newStatus = 'STORED';
+      }
+
+      const oldValues = {
+        totalQuantity: order.totalQuantity,
+        inboundQuantity: order.inboundQuantity,
+        outboundQuantity: order.outboundQuantity,
+        remainingQuantity: order.remainingQuantity,
+        status: order.status,
+        transactionId: tx.id,
+        transactionType: tx.type,
+        quantity: oldTxQuantity,
+      };
+
+      for (const sibId of siblingOrderIds) {
+        await orderRepo.update(sibId, {
+          totalQuantity: newTotalInbound,
+          inboundQuantity: newTotalInbound,
+          outboundQuantity: newTotalOutbound,
+          remainingQuantity: newRemaining,
+          status: newStatus,
+          updatedAt: new Date(),
+        });
+      }
+
+      const newValues = {
+        totalQuantity: newTotalInbound,
+        inboundQuantity: newTotalInbound,
+        outboundQuantity: newTotalOutbound,
+        remainingQuantity: newRemaining,
+        status: newStatus,
+        transactionId: tx.id,
+        transactionType: tx.type,
+        oldQuantity: oldTxQuantity,
+        quantity: parsedQty,
+      };
+
+      await this.activityLogService.logActivity(
+        {
+          orderId: order.id,
+          orderCode: order.orderCode,
+          action: OrderActivityAction.TRANSACTION_UPDATED,
+          actorUserId,
+          actorEmail,
+          actorRole,
+          hubId: Number(tx.hubId || order.currentHubId || order.originHubId || 0),
+          hubName: tx.hub?.name || order.originHub || 'N/A Hub',
+          tripCode: tx.tripCode || null,
+          quantity: parsedQty,
+          reason: auditReason,
+          bearerToken: bearerToken ?? null,
+          oldValues,
+          newValues,
+          metadata: {
+            transactionId: tx.id,
+            invoiceCode: tx.invoiceCode,
+            licensePlate: tx.licensePlate,
+            driverName: tx.driverName,
+            txType: tx.type,
+            oldQuantity: oldTxQuantity,
+            newQuantity: parsedQty,
+          },
+        },
+        manager,
+      );
+
+      return {
+        success: true,
+        message: `Đã điều chỉnh số lượng giao dịch #${transactionId} (${tx.type}: ${oldTxQuantity} → ${parsedQty} kiện) thành công. Tồn kho đã được cân bằng lại.`,
+        transactionId,
+        orderCode: order.orderCode,
+        oldQuantity: oldTxQuantity,
+        quantity: parsedQty,
+        inboundQuantity: newTotalInbound,
+        outboundQuantity: newTotalOutbound,
+        remainingQuantity: newRemaining,
+      };
+    });
+  }
+
+  /**
    * Get all chronological order inventory transactions (including soft-deleted).
    */
-  async getOrderTransactions(orderCode: string) {
+  async getOrderTransactions(orderCode: string, user?: UserEntity) {
     const orderRepo = this.dataSource.getRepository(OrderEntity);
     const txRepo = this.dataSource.getRepository(
       OrderInventoryTransactionEntity,
@@ -6501,7 +6804,20 @@ export class WarehouseService {
       };
     });
 
+    const roleId = Number(
+      user?.role?.id || (typeof user?.role === 'number' ? user.role : 0),
+    );
+    const roleName = String(
+      (user?.role as any)?.name || user?.role || '',
+    ).toUpperCase();
+    const isSuperAdmin =
+      roleId === RoleEnum.SUPER_ADMIN ||
+      roleName === 'SUPER_ADMIN' ||
+      roleName === 'SUPER ADMIN' ||
+      roleName === 'ADMIN';
+
     return {
+      userRole: isSuperAdmin ? 'SUPER_ADMIN' : roleName || null,
       order: {
         id: order.id,
         orderCode: order.orderCode,

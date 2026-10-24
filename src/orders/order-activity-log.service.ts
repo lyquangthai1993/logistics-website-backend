@@ -47,15 +47,19 @@ export class OrderActivityLogService {
       );
     }
 
-    // Tự động truy vấn email nếu actorEmail chưa có
-    if (!dto.actorEmail && dto.actorUserId) {
+    // Tự động truy vấn email / hubId nếu chưa có
+    let userRecord: UserEntity | null = null;
+    if (
+      (!dto.actorEmail || !Number.isFinite(Number(dto.hubId))) &&
+      dto.actorUserId
+    ) {
       const userRepo = manager
         ? manager.getRepository(UserEntity)
         : this.activityLogRepo.manager.getRepository(UserEntity);
-      const userRecord = await userRepo.findOne({
+      userRecord = await userRepo.findOne({
         where: { id: Number(dto.actorUserId) },
       });
-      if (userRecord?.email) {
+      if (!dto.actorEmail && userRecord?.email) {
         dto.actorEmail = userRecord.email;
       }
     }
@@ -66,6 +70,10 @@ export class OrderActivityLogService {
       );
     }
 
+    const resolvedHubId = Number.isFinite(Number(dto.hubId))
+      ? Number(dto.hubId)
+      : Number(userRecord?.hubId) || 0;
+
     try {
       const repo = manager
         ? manager.getRepository(OrderActivityLogEntity)
@@ -75,10 +83,10 @@ export class OrderActivityLogService {
         orderId: dto.orderId ?? null,
         orderCode: dto.orderCode,
         action: dto.action,
-        actorUserId: Number(dto.actorUserId),
+        actorUserId: Number(dto.actorUserId) || 0,
         actorEmail: dto.actorEmail,
         actorRole: dto.actorRole ?? null,
-        hubId: Number(dto.hubId),
+        hubId: resolvedHubId,
         hubName: dto.hubName ?? null,
         tripCode: dto.tripCode ?? null,
         oldValues: dto.oldValues ?? null,
@@ -91,7 +99,7 @@ export class OrderActivityLogService {
 
       const saved = await repo.save(log);
       this.logger.log(
-        `[AUDIT] Action=${dto.action} Code=${dto.orderCode} User=${dto.actorEmail} Hub=${dto.hubId} Reason=${dto.reason || 'N/A'}`,
+        `[AUDIT] Action=${dto.action} Code=${dto.orderCode} User=${dto.actorEmail} Hub=${resolvedHubId} Reason=${dto.reason || 'N/A'}`,
       );
       return saved;
     } catch (err: any) {
@@ -100,6 +108,81 @@ export class OrderActivityLogService {
         err.stack,
       );
       throw err;
+    }
+  }
+
+  /**
+   * Non-blocking / resilient wrapper for operational workflow hooks (create, inbound, outbound, draft cancel)
+   * so that missing user email/hub metadata never aborts the operational transaction.
+   */
+  async safeLogActivity(
+    dto: Partial<CreateOrderActivityLogDto> & {
+      orderCode: string;
+      action: OrderActivityAction | string;
+    },
+    manager?: EntityManager,
+  ): Promise<OrderActivityLogEntity | null> {
+    try {
+      const actorUserId = Number(dto.actorUserId) || 0;
+      let actorEmail = dto.actorEmail || null;
+      let actorRole = dto.actorRole || null;
+      let hubId = Number.isFinite(Number(dto.hubId)) ? Number(dto.hubId) : 0;
+
+      if ((!actorEmail || !actorRole || !hubId) && actorUserId > 0) {
+        const userRepo = manager
+          ? manager.getRepository(UserEntity)
+          : this.activityLogRepo.manager.getRepository(UserEntity);
+        const u = await userRepo.findOne({
+          where: { id: actorUserId },
+          relations: ['role', 'hub'],
+        });
+        if (u) {
+          actorEmail =
+            actorEmail || u.email || `user-${u.id}@spider-express.vn`;
+          actorRole =
+            actorRole ||
+            (typeof u.role === 'object'
+              ? (u.role as any)?.name
+              : String(u.role || '')) ||
+            null;
+          if (!hubId && u.hubId) {
+            hubId = Number(u.hubId) || 0;
+          }
+          if (!dto.hubName && (u as any).hub?.name) {
+            dto.hubName = (u as any).hub.name;
+          }
+        }
+      }
+
+      if (!actorEmail) {
+        actorEmail = 'system@spider-express.vn';
+      }
+
+      return await this.logActivity(
+        {
+          orderId: dto.orderId ?? null,
+          orderCode: dto.orderCode,
+          action: dto.action,
+          actorUserId,
+          actorEmail,
+          actorRole: actorRole ?? 'OPERATOR',
+          hubId,
+          hubName: dto.hubName ?? 'N/A Hub',
+          tripCode: dto.tripCode ?? null,
+          oldValues: dto.oldValues ?? null,
+          newValues: dto.newValues ?? null,
+          quantity: dto.quantity,
+          reason: dto.reason ?? null,
+          bearerToken: dto.bearerToken ?? null,
+          metadata: dto.metadata ?? null,
+        },
+        manager,
+      );
+    } catch (err: any) {
+      this.logger.warn(
+        `[safeLogActivity] Non-fatal warning for ${dto.orderCode} (${dto.action}): ${err.message}`,
+      );
+      return null;
     }
   }
 
