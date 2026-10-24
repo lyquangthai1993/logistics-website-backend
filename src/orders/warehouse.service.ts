@@ -3362,7 +3362,9 @@ export class WarehouseService {
             action: OrderActivityAction.OUTBOUND_CONFIRMED,
             actorUserId: Number(user?.id || 0),
             actorEmail: user?.email || undefined,
-            hubId: Number(originHubId || ord.currentHubId || ord.originHubId || 0),
+            hubId: Number(
+              originHubId || ord.currentHubId || ord.originHubId || 0,
+            ),
             hubName: ord.originHub || 'N/A Hub',
             tripCode: tripCode || null,
             quantity: ord.outboundQuantity ?? 0,
@@ -3670,15 +3672,23 @@ export class WarehouseService {
     }
     const userHubId = (await this.resolveUserHubId(user)) ?? null;
     await this.dataSource.transaction(async (manager) => {
-      const droppedLines = await this.discardOutboundDraftLines(manager, tripCode, userHubId);
+      const droppedLines = await this.discardOutboundDraftLines(
+        manager,
+        tripCode,
+        userHubId,
+      );
       await manager.query(
         `UPDATE "trip_stop" SET "deletedAt" = NOW()
          WHERE "tripCode" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL`,
         [tripCode],
       );
-      const orderIds = Array.from(new Set(droppedLines.map((l) => l.orderId).filter(Boolean)));
+      const orderIds = Array.from(
+        new Set(droppedLines.map((l) => l.orderId).filter(Boolean)),
+      );
       if (orderIds.length > 0) {
-        const affectedOrders = await manager.getRepository(OrderEntity).find({ where: { id: In(orderIds) } });
+        const affectedOrders = await manager
+          .getRepository(OrderEntity)
+          .find({ where: { id: In(orderIds) } });
         for (const ord of affectedOrders) {
           await this.activityLogService.safeLogActivity(
             {
@@ -3687,7 +3697,9 @@ export class WarehouseService {
               action: OrderActivityAction.DRAFT_CANCELLED,
               actorUserId: Number(user?.id || 0),
               actorEmail: user?.email || undefined,
-              hubId: Number(userHubId || ord.currentHubId || ord.originHubId || 0),
+              hubId: Number(
+                userHubId || ord.currentHubId || ord.originHubId || 0,
+              ),
               hubName: ord.originHub || 'N/A Hub',
               tripCode,
               quantity: ord.remainingQuantity ?? 0,
@@ -4080,31 +4092,55 @@ export class WarehouseService {
         ...draftLines.map((t) => t.orderId),
       ]),
     );
-    const orderEntities =
-      orderIds.length > 0
-        ? await this.orderRepository
-            .createQueryBuilder('order')
-            .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
-            .leftJoinAndSelect(
-              'order.destinationHubEntity',
-              'destinationHubEntity',
-            )
-            .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
-            .leftJoinAndSelect('order.trips', 'trips')
-            .leftJoinAndSelect('trips.originHub', 'tripOriginHub')
-            .leftJoinAndSelect('trips.destinationHub', 'tripDestinationHub')
-            .leftJoinAndSelect(
-              'order.inventoryTransactions',
-              'inventoryTransactions',
-            )
-            .leftJoinAndSelect(
-              'inventoryTransactions.hub',
-              'inventoryTransactionHub',
-            )
-            .where('order.deletedAt IS NULL')
-            .andWhere('order.id IN (:...orderIds)', { orderIds })
-            .getMany()
-        : [];
+    let orderEntities: OrderEntity[] = [];
+    if (orderIds.length > 0) {
+      const [orders, trips, txs] = await Promise.all([
+        this.orderRepository
+          .createQueryBuilder('order')
+          .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+          .leftJoinAndSelect(
+            'order.destinationHubEntity',
+            'destinationHubEntity',
+          )
+          .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
+          .where('order.deletedAt IS NULL')
+          .andWhere('order.id IN (:...orderIds)', { orderIds })
+          .getMany(),
+        this.tripRepository
+          .createQueryBuilder('t')
+          .leftJoinAndSelect('t.originHub', 'tripOriginHub')
+          .leftJoinAndSelect('t.destinationHub', 'tripDestinationHub')
+          .where('t.deletedAt IS NULL')
+          .andWhere('t.orderId IN (:...orderIds)', { orderIds })
+          .getMany(),
+        this.transactionRepository
+          .createQueryBuilder('tx')
+          .leftJoinAndSelect('tx.hub', 'inventoryTransactionHub')
+          .where('tx.deletedAt IS NULL')
+          .andWhere('tx.orderId IN (:...orderIds)', { orderIds })
+          .getMany(),
+      ]);
+
+      const tripsByOrderId = new Map<number, TripEntity[]>();
+      for (const t of trips) {
+        const list = tripsByOrderId.get(t.orderId) || [];
+        list.push(t);
+        tripsByOrderId.set(t.orderId, list);
+      }
+
+      const txsByOrderId = new Map<number, OrderInventoryTransactionEntity[]>();
+      for (const tx of txs) {
+        const list = txsByOrderId.get(tx.orderId) || [];
+        list.push(tx);
+        txsByOrderId.set(tx.orderId, list);
+      }
+
+      for (const order of orders) {
+        order.trips = tripsByOrderId.get(order.id) || [];
+        order.inventoryTransactions = txsByOrderId.get(order.id) || [];
+      }
+      orderEntities = orders;
+    }
     const enriched = await this.enrichWarehouseRows(
       orderEntities,
       userHubId,
@@ -6530,7 +6566,11 @@ export class WarehouseService {
     }
 
     const parsedQty = Number(newQuantity);
-    if (!Number.isFinite(parsedQty) || parsedQty < 1 || !Number.isInteger(parsedQty)) {
+    if (
+      !Number.isFinite(parsedQty) ||
+      parsedQty < 1 ||
+      !Number.isInteger(parsedQty)
+    ) {
       throw new BadRequestException(
         'Số lượng kiện điều chỉnh phải là số nguyên lớn hơn hoặc bằng 1.',
       );
@@ -6693,7 +6733,9 @@ export class WarehouseService {
           actorUserId,
           actorEmail,
           actorRole,
-          hubId: Number(tx.hubId || order.currentHubId || order.originHubId || 0),
+          hubId: Number(
+            tx.hubId || order.currentHubId || order.originHubId || 0,
+          ),
           hubName: tx.hub?.name || order.originHub || 'N/A Hub',
           tripCode: tx.tripCode || null,
           quantity: parsedQty,
