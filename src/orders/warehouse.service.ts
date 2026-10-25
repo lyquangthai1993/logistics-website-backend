@@ -3800,16 +3800,6 @@ export class WarehouseService {
 
     const qb = this.orderRepository
       .createQueryBuilder('order')
-      .select('order.id', 'id')
-      .addSelect(statusExpr, 'hs')
-      .addSelect(
-        `CASE WHEN ${TRANSFER_INBOUND_SQL} THEN 1 ELSE 0 END`,
-        'isTransferIn',
-      )
-      .addSelect(
-        `CASE WHEN ${TRANSFER_OUTBOUND_SQL} THEN 1 ELSE 0 END`,
-        'isTransferOut',
-      )
       .where('order.deletedAt IS NULL');
 
     if (useHubContext) {
@@ -3839,39 +3829,51 @@ export class WarehouseService {
       );
     }
 
-    const rows = await qb.getRawMany();
+    const [baseSql, params] = qb
+      .select(statusExpr, 'hs')
+      .addSelect(
+        `CASE WHEN ${TRANSFER_INBOUND_SQL} THEN 1 ELSE 0 END`,
+        'isTransferIn',
+      )
+      .addSelect(
+        `CASE WHEN ${TRANSFER_OUTBOUND_SQL} THEN 1 ELSE 0 END`,
+        'isTransferOut',
+      )
+      .getQueryAndParameters();
 
-    let waitingInbound = 0;
-    let customerInbound = 0;
-    let transferInbound = 0;
-    let storedInbound = 0;
-    let customerOutbound = 0;
-    let transferOutbound = 0;
-    let completedOutbound = 0;
+    const aggSql = `
+      WITH base AS MATERIALIZED (
+        ${baseSql}
+      )
+      SELECT
+        COUNT(*)::int AS "total",
+        COUNT(*) FILTER (WHERE "hs" IN (${sqlList(WAITING_STATUSES)}))::int AS "waitingInbound",
+        COUNT(*) FILTER (WHERE "hs" IN (${sqlList(WAITING_STATUSES)}) AND "isTransferIn" = 0)::int AS "customerInbound",
+        COUNT(*) FILTER (WHERE "hs" IN (${sqlList(WAITING_STATUSES)}) AND "isTransferIn" = 1)::int AS "transferInbound",
+        COUNT(*) FILTER (WHERE "hs" IN (${sqlList(STORED_STATUSES)}))::int AS "storedInbound",
+        COUNT(*) FILTER (WHERE "hs" IN (${sqlList(STORED_STATUSES)}) AND "isTransferOut" = 0)::int AS "customerOutbound",
+        COUNT(*) FILTER (WHERE "hs" IN (${sqlList(STORED_STATUSES)}) AND "isTransferOut" = 1)::int AS "transferOutbound",
+        COUNT(*) FILTER (WHERE "hs" IN (${sqlList(DISPATCHED_STATUSES)}))::int AS "completedOutbound"
+      FROM base
+    `;
 
-    for (const r of rows) {
-      const isTransferIn = Number(r.isTransferIn) === 1;
-      const isTransferOut = Number(r.isTransferOut) === 1;
-      if (WAITING_STATUSES.includes(r.hs)) {
-        waitingInbound++;
-        if (isTransferIn) transferInbound++;
-        else customerInbound++;
-      }
-      if (STORED_STATUSES.includes(r.hs)) {
-        storedInbound++;
-        if (isTransferOut) transferOutbound++;
-        else customerOutbound++;
-      }
-      if (DISPATCHED_STATUSES.includes(r.hs)) {
-        completedOutbound++;
-      }
-    }
+    const aggRows = await this.dataSource.query(aggSql, params);
+    const row = aggRows?.[0] || {};
+
+    const waitingInbound = Number(row.waitingInbound) || 0;
+    const customerInbound = Number(row.customerInbound) || 0;
+    const transferInbound = Number(row.transferInbound) || 0;
+    const storedInbound = Number(row.storedInbound) || 0;
+    const customerOutbound = Number(row.customerOutbound) || 0;
+    const transferOutbound = Number(row.transferOutbound) || 0;
+    const completedOutbound = Number(row.completedOutbound) || 0;
+    const total = Number(row.total) || 0;
 
     const inboundTotal = waitingInbound + storedInbound;
     const outboundTotal = storedInbound + completedOutbound;
 
     return {
-      total: rows.length,
+      total,
       inboundTotal,
       outboundTotal,
       waitingInbound,
@@ -4502,19 +4504,39 @@ export class WarehouseService {
     const ordersByTripCode = new Map<string, any[]>();
 
     if (tripCodes.length > 0) {
-      const orders = await this.orderRepository
-        .createQueryBuilder('order')
-        .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
-        .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
-        .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
-        .leftJoinAndSelect('order.trips', 'trips')
-        .leftJoinAndSelect(
-          'order.inventoryTransactions',
-          'inventoryTransactions',
-        )
-        .where('order.deletedAt IS NULL')
-        .andWhere('trips.tripCode IN (:...tripCodes)', { tripCodes })
+      const trips = await this.tripRepository
+        .createQueryBuilder('t')
+        .where('t.deletedAt IS NULL')
+        .andWhere('t.tripCode IN (:...tripCodes)', { tripCodes })
+        .orderBy('t.id', 'ASC')
         .getMany();
+
+      const orderIds = Array.from(new Set(trips.map((t) => t.orderId)));
+      const orders =
+        orderIds.length > 0
+          ? await this.orderRepository
+              .createQueryBuilder('order')
+              .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+              .leftJoinAndSelect(
+                'order.destinationHubEntity',
+                'destinationHubEntity',
+              )
+              .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
+              .where('order.deletedAt IS NULL')
+              .andWhere('order.id IN (:...orderIds)', { orderIds })
+              .getMany()
+          : [];
+
+      const tripsByOrderId = new Map<number, TripEntity[]>();
+      for (const t of trips) {
+        const list = tripsByOrderId.get(t.orderId) || [];
+        list.push(t);
+        tripsByOrderId.set(t.orderId, list);
+      }
+
+      for (const order of orders) {
+        order.trips = tripsByOrderId.get(order.id) || [];
+      }
 
       for (const order of orders) {
         let deliveryAddress = '';
