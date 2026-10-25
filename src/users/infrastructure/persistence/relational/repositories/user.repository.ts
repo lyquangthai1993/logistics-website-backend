@@ -140,16 +140,27 @@ export class UsersRelationalRepository implements UserRepository {
       throw new Error('User not found');
     }
 
+    const cleanedPayload: Partial<User> = {};
+    for (const [key, value] of Object.entries(payload)) {
+      if (value !== undefined) {
+        (cleanedPayload as any)[key] = value;
+      }
+    }
+
+    const existingDomain = UserMapper.toDomain(entity);
+    const mergedDomain = {
+      ...existingDomain,
+      ...cleanedPayload,
+    };
+
+    const persistenceEntity = UserMapper.toPersistence(mergedDomain);
+
     const updatedEntity = await this.usersRepository.save(
-      this.usersRepository.create(
-        UserMapper.toPersistence({
-          ...UserMapper.toDomain(entity),
-          ...payload,
-        }),
-      ),
+      this.usersRepository.create(persistenceEntity),
     );
 
-    return UserMapper.toDomain(updatedEntity);
+    const reloaded = await this.findById(id);
+    return (reloaded ?? UserMapper.toDomain(updatedEntity)) as User;
   }
 
   async remove(id: User['id']): Promise<void> {

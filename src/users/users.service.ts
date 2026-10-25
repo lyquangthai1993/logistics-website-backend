@@ -266,49 +266,55 @@ export class UsersService {
       if (userObject && userObject?.password !== updateUserDto.password) {
         const salt = await bcrypt.genSalt();
         password = await bcrypt.hash(updateUserDto.password, salt);
+      } else {
+        password = updateUserDto.password;
       }
     }
 
     let username: string | null | undefined = undefined;
 
-    if (updateUserDto.username) {
-      const userObject = await this.usersRepository.findByUsername(
-        updateUserDto.username,
-      );
+    if (updateUserDto.username !== undefined) {
+      if (updateUserDto.username) {
+        const userObject = await this.usersRepository.findByUsername(
+          updateUserDto.username,
+        );
 
-      if (userObject && userObject.id !== id) {
-        throw new UnprocessableEntityException({
-          status: HttpStatus.UNPROCESSABLE_ENTITY,
-          errors: {
-            username: 'usernameAlreadyExists',
-          },
-        });
+        if (userObject && Number(userObject.id) !== Number(id)) {
+          throw new UnprocessableEntityException({
+            status: HttpStatus.UNPROCESSABLE_ENTITY,
+            errors: {
+              username: 'usernameAlreadyExists',
+            },
+          });
+        }
+
+        username = updateUserDto.username;
+      } else {
+        username = null;
       }
-
-      username = updateUserDto.username;
-    } else if (updateUserDto.username === null) {
-      username = null;
     }
 
     let email: string | null | undefined = undefined;
 
-    if (updateUserDto.email) {
-      const userObject = await this.usersRepository.findByEmail(
-        updateUserDto.email,
-      );
+    if (updateUserDto.email !== undefined) {
+      if (updateUserDto.email) {
+        const userObject = await this.usersRepository.findByEmail(
+          updateUserDto.email,
+        );
 
-      if (userObject && userObject.id !== id) {
-        throw new UnprocessableEntityException({
-          status: HttpStatus.UNPROCESSABLE_ENTITY,
-          errors: {
-            email: 'emailAlreadyExists',
-          },
-        });
+        if (userObject && Number(userObject.id) !== Number(id)) {
+          throw new UnprocessableEntityException({
+            status: HttpStatus.UNPROCESSABLE_ENTITY,
+            errors: {
+              email: 'emailAlreadyExists',
+            },
+          });
+        }
+
+        email = updateUserDto.email;
+      } else {
+        email = null;
       }
-
-      email = updateUserDto.email;
-    } else if (updateUserDto.email === null) {
-      email = null;
     }
 
     let photo: FileType | null | undefined = undefined;
