@@ -15,6 +15,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { RoleEnum } from '../roles/roles.enum';
 import { OperationalLedgerService } from '../orders/operational-ledger.service';
+import { RedisCacheService } from '../redis/redis-cache.service';
+import { sanitizeDateRangeGuard } from '../utils/date-range-guard';
 
 export interface PaginatedResult<T> {
   data: T[];
@@ -57,6 +59,7 @@ export class TripsService {
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
     private readonly ledgerService: OperationalLedgerService,
+    private readonly redisCacheService: RedisCacheService,
   ) {}
 
   private async resolveUserHubId(user?: UserEntity): Promise<number | null> {
@@ -406,17 +409,25 @@ export class TripsService {
     const limit = query?.limit ?? 20;
     const skip = (page - 1) * limit;
 
+    const dateRange = sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
+
     const qb = this.tripRepository
       .createQueryBuilder('trip')
       .leftJoinAndSelect('trip.order', 'order')
       .where('trip.deletedAt IS NULL')
       .orderBy('trip.createdAt', 'DESC');
 
-    // Strict hub scoping for WAREHOUSE_MANAGER
+    // Strict hub scoping for WAREHOUSE_MANAGER without correlated subqueries
     const userHubId = await this.resolveUserHubId(user);
     if (user?.role?.id === RoleEnum.WAREHOUSE_MANAGER && userHubId) {
+      qb.leftJoin(
+        'trip_stop',
+        'vts',
+        'vts.tripCode = trip.tripCode AND vts.hubId = :userHubId AND vts.deletedAt IS NULL',
+        { userHubId },
+      );
       qb.andWhere(
-        '(trip.originHubId = :userHubId OR trip.destinationHubId = :userHubId OR order.originHubId = :userHubId OR order.destinationHubId = :userHubId OR EXISTS (SELECT 1 FROM "trip_stop" ts WHERE ts."tripCode" = trip."tripCode" AND ts."hubId" = :userHubId AND ts."deletedAt" IS NULL))',
+        '(trip.originHubId = :userHubId OR trip.destinationHubId = :userHubId OR order.originHubId = :userHubId OR order.destinationHubId = :userHubId OR vts.id IS NOT NULL)',
         { userHubId },
       );
     }
@@ -443,15 +454,15 @@ export class TripsService {
       );
     }
 
-    if (query?.fromDate) {
-      const from = new Date(`${query.fromDate}T00:00:00`);
+    if (dateRange.fromDate) {
+      const from = new Date(`${dateRange.fromDate}T00:00:00`);
       qb.andWhere('trip.createdAt >= :fromDate', {
         fromDate: from.toISOString(),
       });
     }
 
-    if (query?.toDate) {
-      const to = new Date(`${query.toDate}T23:59:59.999`);
+    if (dateRange.toDate) {
+      const to = new Date(`${dateRange.toDate}T23:59:59.999`);
       qb.andWhere('trip.createdAt <= :toDate', {
         toDate: to.toISOString(),
       });
@@ -506,6 +517,11 @@ export class TripsService {
   }
 
   async getStats(query?: QueryTripStatsDto): Promise<TripStatsResult> {
+    const dateRange = sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
+    const cacheKey = `trips:stats:${dateRange.fromDate || 'default'}:${dateRange.toDate || 'default'}`;
+    const cached = await this.redisCacheService.get<TripStatsResult>(cacheKey);
+    if (cached) return cached;
+
     const now = new Date();
     const defaultFrom = new Date(now.getFullYear(), now.getMonth(), 1);
     const defaultTo = new Date(
@@ -518,11 +534,11 @@ export class TripsService {
       999,
     );
 
-    const from = query?.fromDate
-      ? new Date(`${query.fromDate}T00:00:00`)
+    const from = dateRange.fromDate
+      ? new Date(`${dateRange.fromDate}T00:00:00`)
       : defaultFrom;
-    const to = query?.toDate
-      ? new Date(`${query.toDate}T23:59:59.999`)
+    const to = dateRange.toDate
+      ? new Date(`${dateRange.toDate}T23:59:59.999`)
       : defaultTo;
 
     // Trips stats theo khoảng ngày (createdAt)
@@ -550,7 +566,7 @@ export class TripsService {
       this.orderRepository.count({ where: { status: 'NO_VEHICLE' } }),
     ]);
 
-    return {
+    const result: TripStatsResult = {
       tripsTotal,
       tripsPending: tripMap['PENDING'] ?? 0,
       tripsConfirmed: tripMap['CONFIRMED'] ?? 0,
@@ -562,6 +578,9 @@ export class TripsService {
       fromDate: from.toISOString().split('T')[0],
       toDate: to.toISOString().split('T')[0],
     };
+
+    await this.redisCacheService.set(cacheKey, result, 60);
+    return result;
   }
 
   async findOne(id: number): Promise<TripEntity> {

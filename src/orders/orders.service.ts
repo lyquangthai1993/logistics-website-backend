@@ -26,6 +26,8 @@ import {
   CONTRACT_FIELDS,
   OperationalLedgerService,
 } from './operational-ledger.service';
+import { RedisCacheService } from '../redis/redis-cache.service';
+import { sanitizeDateRangeGuard } from '../utils/date-range-guard';
 
 export interface PaginatedResult<T> {
   data: T[];
@@ -34,6 +36,7 @@ export interface PaginatedResult<T> {
     page: number;
     limit: number;
     totalPages: number;
+    cursor?: number | null;
   };
 }
 
@@ -95,6 +98,7 @@ export class OrdersService {
     private readonly mailService: MailService,
     private readonly activityLogService: OrderActivityLogService,
     private readonly dataSource: DataSource,
+    private readonly redisCacheService: RedisCacheService,
   ) {}
 
   async create(
@@ -157,6 +161,8 @@ export class OrdersService {
         status: saved.status,
       },
     });
+    void this.redisCacheService.delByPattern('orders:stats:*');
+    void this.redisCacheService.delByPattern('warehouse:kpi:*');
     return saved;
   }
 
@@ -200,7 +206,11 @@ export class OrdersService {
       .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
       .leftJoinAndSelect('order.trips', 'trips')
       .where('order.deletedAt IS NULL')
-      .orderBy('order.createdAt', 'DESC');
+      .orderBy('order.id', 'DESC');
+
+    if (query?.cursor) {
+      qb.andWhere('order.id < :cursor', { cursor: Number(query.cursor) });
+    }
 
     if (query?.status && query.status !== 'ALL') {
       // PENDING_ASSIGNMENT là alias cho trips page: lấy cả PENDING_FLEET + NO_VEHICLE
@@ -231,23 +241,30 @@ export class OrdersService {
       });
     }
 
-    if (query?.fromDate) {
-      const from = new Date(`${query.fromDate}T00:00:00`);
+    const dateRange = sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
+
+    if (dateRange.fromDate) {
+      const from = new Date(`${dateRange.fromDate}T00:00:00`);
       qb.andWhere('order.createdAt >= :fromDate', {
         fromDate: from.toISOString(),
       });
     }
 
-    if (query?.toDate) {
-      const to = new Date(`${query.toDate}T23:59:59.999`);
+    if (dateRange.toDate) {
+      const to = new Date(`${dateRange.toDate}T23:59:59.999`);
       qb.andWhere('order.createdAt <= :toDate', {
         toDate: to.toISOString(),
       });
     }
 
-    qb.skip(skip).take(limit);
+    if (query?.cursor) {
+      qb.take(limit);
+    } else {
+      qb.skip(skip).take(limit);
+    }
 
     const [data, total] = await qb.getManyAndCount();
+    const nextCursor = data.length > 0 ? data[data.length - 1].id : null;
 
     return {
       data,
@@ -256,11 +273,17 @@ export class OrdersService {
         page,
         limit,
         totalPages: Math.ceil(total / limit),
+        cursor: nextCursor,
       },
     };
   }
 
   async getStats(query?: QueryOrderStatsDto): Promise<OrderStatsResult> {
+    const dateRange = sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
+    const cacheKey = `orders:stats:${dateRange.fromDate || 'default'}:${dateRange.toDate || 'default'}`;
+    const cached = await this.redisCacheService.get<OrderStatsResult>(cacheKey);
+    if (cached) return cached;
+
     const now = new Date();
 
     // Default: đầu tháng hiện tại → hôm nay (23:59:59)
@@ -275,12 +298,12 @@ export class OrdersService {
       999,
     );
 
-    const from = query?.fromDate
-      ? new Date(`${query.fromDate}T00:00:00`)
+    const from = dateRange.fromDate
+      ? new Date(`${dateRange.fromDate}T00:00:00`)
       : defaultFrom;
     // toDate bao gồm hết ngày đó
-    const to = query?.toDate
-      ? new Date(`${query.toDate}T23:59:59.999`)
+    const to = dateRange.toDate
+      ? new Date(`${dateRange.toDate}T23:59:59.999`)
       : defaultTo;
 
     // Lấy count per status trong khoảng ngày
@@ -302,7 +325,7 @@ export class OrdersService {
       total += Number(row.count);
     }
 
-    return {
+    const result: OrderStatsResult = {
       total,
       pending: countMap['PENDING_FLEET'] ?? 0,
       assigned: countMap['ASSIGNED'] ?? 0,
@@ -313,6 +336,9 @@ export class OrdersService {
       fromDate: from.toISOString().split('T')[0],
       toDate: to.toISOString().split('T')[0],
     };
+
+    await this.redisCacheService.set(cacheKey, result, 60);
+    return result;
   }
 
   checkCodeExists(
@@ -784,9 +810,12 @@ export class OrdersService {
       actorUserId: Number(user?.id || order.createdByUserId || 0),
       actorEmail: user?.email || undefined,
       actorRole:
-        (typeof user?.role === 'object' ? (user?.role as any)?.name : String(user?.role || '')) ||
-        undefined,
-      hubId: Number(order.currentHubId || order.originHubId || user?.hubId || 0),
+        (typeof user?.role === 'object'
+          ? (user?.role as any)?.name
+          : String(user?.role || '')) || undefined,
+      hubId: Number(
+        order.currentHubId || order.originHubId || user?.hubId || 0,
+      ),
       hubName: order.originHub || 'N/A Hub',
       quantity: order.totalQuantity ?? 0,
       reason: 'Xóa vận đơn',

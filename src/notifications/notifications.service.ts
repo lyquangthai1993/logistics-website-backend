@@ -11,6 +11,7 @@ import { CreateNotificationDto } from './dto/create-notification.dto';
 import { QueryNotificationDto } from './dto/query-notification.dto';
 import { Notification } from './domain/notification';
 import { NotificationsGateway } from './notifications.gateway';
+import { RedisCacheService } from '../redis/redis-cache.service';
 
 export interface NotificationStatsResult {
   total: number;
@@ -37,6 +38,7 @@ export class NotificationsService {
     private readonly notificationRepo: Repository<NotificationEntity>,
     @Inject(forwardRef(() => NotificationsGateway))
     private readonly gateway: NotificationsGateway,
+    private readonly redisCacheService: RedisCacheService,
   ) {}
 
   async create(dto: CreateNotificationDto): Promise<Notification> {
@@ -49,6 +51,9 @@ export class NotificationsService {
       isRead: false,
     });
     const saved = await this.notificationRepo.save(entity);
+
+    // Invalidate cached stats for user
+    void this.redisCacheService.del(`notifications:stats:${saved.userId}`);
 
     // Push real-time qua WebSocket (fire-and-forget, không block)
     try {
@@ -115,6 +120,11 @@ export class NotificationsService {
 
   async getStats(userId: number): Promise<NotificationStatsResult> {
     const numericUserId = Number(userId);
+    const cacheKey = `notifications:stats:${numericUserId}`;
+    const cached =
+      await this.redisCacheService.get<NotificationStatsResult>(cacheKey);
+    if (cached) return cached;
+
     const raw = await this.notificationRepo
       .createQueryBuilder('n')
       .select('COUNT(*)::int', 'total')
@@ -161,7 +171,7 @@ export class NotificationsService {
       })
       .getRawOne();
 
-    return {
+    const result: NotificationStatsResult = {
       total: Number(raw?.total ?? 0),
       unread: Number(raw?.unread ?? 0),
       read: Number(raw?.read ?? 0),
@@ -178,6 +188,9 @@ export class NotificationsService {
         GENERIC: Number(raw?.unreadGeneric ?? 0),
       },
     };
+
+    await this.redisCacheService.set(cacheKey, result, 30);
+    return result;
   }
 
   async countUnread(userId: number): Promise<number> {
@@ -199,9 +212,11 @@ export class NotificationsService {
     }
 
     notification.isRead = true;
-    return this.notificationRepo.save(
+    const saved = (await this.notificationRepo.save(
       notification,
-    ) as unknown as Promise<Notification>;
+    )) as unknown as Notification;
+    void this.redisCacheService.del(`notifications:stats:${numericUserId}`);
+    return saved;
   }
 
   async markAllAsRead(userId: number): Promise<{ affected: number }> {
@@ -210,6 +225,7 @@ export class NotificationsService {
       { userId: numericUserId, isRead: false },
       { isRead: true },
     );
+    void this.redisCacheService.del(`notifications:stats:${numericUserId}`);
     return { affected: result.affected ?? 0 };
   }
 }
