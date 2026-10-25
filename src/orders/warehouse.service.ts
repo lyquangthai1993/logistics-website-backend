@@ -232,6 +232,64 @@ export class WarehouseService {
   }
 
   /**
+   * Date Range Guard:
+   * Prevents full-table scans across years by capping/defaulting range.
+   * If neither is provided and a default fallback is requested, defaults to past N days.
+   * If range exceeds maxSpanDays (e.g. 90 days), clamps fromDate to (toDate - maxSpanDays) to protect DB performance.
+   */
+  private sanitizeDateRangeGuard(
+    query?: { fromDate?: string; toDate?: string },
+    options: { defaultPastDays?: number; maxSpanDays?: number } = {},
+  ): { fromDate?: string; toDate?: string } {
+    const maxSpanDays = options.maxSpanDays ?? 90;
+    let fromStr = query?.fromDate?.trim();
+    let toStr = query?.toDate?.trim();
+
+    if (!fromStr && !toStr && options.defaultPastDays) {
+      const now = new Date();
+      const past = new Date(
+        now.getTime() - options.defaultPastDays * 24 * 60 * 60 * 1000,
+      );
+      return {
+        fromDate: past.toISOString().split('T')[0],
+        toDate: now.toISOString().split('T')[0],
+      };
+    }
+
+    if (fromStr && toStr) {
+      const fromTime = new Date(`${fromStr}T00:00:00`).getTime();
+      const toTime = new Date(`${toStr}T23:59:59.999`).getTime();
+      if (!isNaN(fromTime) && !isNaN(toTime)) {
+        const diffDays = (toTime - fromTime) / (24 * 60 * 60 * 1000);
+        if (diffDays > maxSpanDays) {
+          const clampedFrom = new Date(
+            toTime - maxSpanDays * 24 * 60 * 60 * 1000,
+          );
+          fromStr = clampedFrom.toISOString().split('T')[0];
+        }
+      }
+    } else if (fromStr && !toStr) {
+      const fromTime = new Date(`${fromStr}T00:00:00`).getTime();
+      if (!isNaN(fromTime)) {
+        const clampedTo = new Date(
+          fromTime + maxSpanDays * 24 * 60 * 60 * 1000,
+        );
+        toStr = clampedTo.toISOString().split('T')[0];
+      }
+    } else if (!fromStr && toStr) {
+      const toTime = new Date(`${toStr}T23:59:59.999`).getTime();
+      if (!isNaN(toTime)) {
+        const clampedFrom = new Date(
+          toTime - maxSpanDays * 24 * 60 * 60 * 1000,
+        );
+        fromStr = clampedFrom.toISOString().split('T')[0];
+      }
+    }
+
+    return { fromDate: fromStr || undefined, toDate: toStr || undefined };
+  }
+
+  /**
    * List or Lookup warehouse orders with Freetext Search, Status Filter & Pagination.
    * Strict Hub Scoping for WAREHOUSE_MANAGER; statuses are resolved from the manager's hub
    * perspective (Context-Aware status: Chờ nhập kho / Lưu kho / Đã xuất kho).
@@ -273,6 +331,7 @@ export class WarehouseService {
     const skip = isExport ? 0 : (page - 1) * limit;
 
     const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const dateRange = this.sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
     const statusExpr = useHubContext
       ? this.ledgerService.hubStatusSql()
       : 'order.status';
@@ -328,23 +387,17 @@ export class WarehouseService {
           { search: searchTerm },
         );
       }
-      if (query?.fromDate) {
-        const from = new Date(`${query.fromDate}T00:00:00`);
-        q.andWhere(
-          '(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)',
-          {
-            fromDate: from.toISOString(),
-          },
-        );
+      if (dateRange.fromDate) {
+        const from = new Date(`${dateRange.fromDate}T00:00:00`);
+        q.andWhere('order.createdAt >= :fromDate', {
+          fromDate: from.toISOString(),
+        });
       }
-      if (query?.toDate) {
-        const to = new Date(`${query.toDate}T23:59:59.999`);
-        q.andWhere(
-          '(order.createdAt <= :toDate OR order.updatedAt <= :toDate)',
-          {
-            toDate: to.toISOString(),
-          },
-        );
+      if (dateRange.toDate) {
+        const to = new Date(`${dateRange.toDate}T23:59:59.999`);
+        q.andWhere('order.createdAt <= :toDate', {
+          toDate: to.toISOString(),
+        });
       }
       return q;
     };
@@ -3818,7 +3871,8 @@ export class WarehouseService {
     completedOutbound: number;
   }> {
     const { userHubId, useHubContext } = await this.resolveHubContext(user);
-    const cacheKey = `warehouse:kpi:${user.id || user.role?.id || 'all'}:${userHubId || 'all'}:${query?.fromDate || 'none'}:${query?.toDate || 'none'}`;
+    const dateRange = this.sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
+    const cacheKey = `warehouse:kpi:${user.id || user.role?.id || 'all'}:${userHubId || 'all'}:${dateRange.fromDate || 'none'}:${dateRange.toDate || 'none'}`;
     const cached = await this.redisCacheService.get<any>(cacheKey);
     if (cached) return cached;
 
@@ -3837,24 +3891,18 @@ export class WarehouseService {
       );
     }
 
-    if (query?.fromDate) {
-      const from = new Date(`${query.fromDate}T00:00:00`);
-      qb.andWhere(
-        '(order.createdAt >= :fromDate OR order.updatedAt >= :fromDate)',
-        {
-          fromDate: from.toISOString(),
-        },
-      );
+    if (dateRange.fromDate) {
+      const from = new Date(`${dateRange.fromDate}T00:00:00`);
+      qb.andWhere('order.createdAt >= :fromDate', {
+        fromDate: from.toISOString(),
+      });
     }
 
-    if (query?.toDate) {
-      const to = new Date(`${query.toDate}T23:59:59.999`);
-      qb.andWhere(
-        '(order.createdAt <= :toDate OR order.updatedAt <= :toDate)',
-        {
-          toDate: to.toISOString(),
-        },
-      );
+    if (dateRange.toDate) {
+      const to = new Date(`${dateRange.toDate}T23:59:59.999`);
+      qb.andWhere('order.createdAt <= :toDate', {
+        toDate: to.toISOString(),
+      });
     }
 
     const [baseSql, params] = qb
@@ -3944,23 +3992,30 @@ export class WarehouseService {
     const skip = (page - 1) * limit;
 
     const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const dateRange = this.sanitizeDateRangeGuard(query, {
+      defaultPastDays: 90,
+      maxSpanDays: 90,
+    });
     const params: any[] = [];
     const bind = (value: unknown) => {
       params.push(value);
       return `$${params.length}`;
     };
 
+    const hasSearch = Boolean(query?.search && query.search.trim());
     const dispatchTypes = `('${InventoryTransactionType.OUTBOUND}', '${InventoryTransactionType.TRANSFER}')`;
     const txWhere: string[] = [
       `tx."deletedAt" IS NULL`,
       `tx."type" IN ${dispatchTypes}`,
       `tx."tripCode" IS NOT NULL`,
       `tx."tripCode" <> ''`,
-      `o."deletedAt" IS NULL`,
     ];
+    if (hasSearch) {
+      txWhere.push(`o."deletedAt" IS NULL`);
+    }
+
     const draftWhere: string[] = [
       `t."deletedAt" IS NULL`,
-      `o."deletedAt" IS NULL`,
       `t."status" = 'PENDING'`,
       `t."type" IN ('OUTBOUND', 'TRANSFER')`,
       `t."quantityAllocated" IS NOT NULL`,
@@ -3968,14 +4023,17 @@ export class WarehouseService {
       `t."tripCode" <> ''`,
       `NOT EXISTS (SELECT 1 FROM "order_inventory_transaction" dtx WHERE dtx."tripCode" = t."tripCode" AND dtx."type" IN ${dispatchTypes} AND dtx."deletedAt" IS NULL)`,
     ];
+    if (hasSearch) {
+      draftWhere.push(`o."deletedAt" IS NULL`);
+    }
 
     if (useHubContext && userHubId) {
       const p = bind(userHubId);
       txWhere.push(`tx."hubId" = ${p}`);
       draftWhere.push(`t."originHubId" = ${p}`);
     }
-    if (query?.search && query.search.trim()) {
-      const p = bind(`%${query.search.trim()}%`);
+    if (hasSearch) {
+      const p = bind(`%${query.search!.trim()}%`);
       txWhere.push(
         `(tx."tripCode" ILIKE ${p} OR tx."licensePlate" ILIKE ${p} OR tx."driverName" ILIKE ${p} OR o."orderCode" ILIKE ${p} OR o."goodsDescription" ILIKE ${p} OR EXISTS (SELECT 1 FROM "trip" st WHERE st."tripCode" = tx."tripCode" AND st."deletedAt" IS NULL AND (st."licensePlate" ILIKE ${p} OR st."driverName" ILIKE ${p})))`,
       );
@@ -3983,16 +4041,25 @@ export class WarehouseService {
         `(t."tripCode" ILIKE ${p} OR t."licensePlate" ILIKE ${p} OR t."driverName" ILIKE ${p} OR o."orderCode" ILIKE ${p} OR o."goodsDescription" ILIKE ${p})`,
       );
     }
-    if (query?.fromDate) {
-      const p = bind(new Date(`${query.fromDate}T00:00:00`).toISOString());
+    if (dateRange.fromDate) {
+      const p = bind(new Date(`${dateRange.fromDate}T00:00:00`).toISOString());
       txWhere.push(`tx."createdAt" >= ${p}`);
       draftWhere.push(`t."createdAt" >= ${p}`);
     }
-    if (query?.toDate) {
-      const p = bind(new Date(`${query.toDate}T23:59:59.999`).toISOString());
+    if (dateRange.toDate) {
+      const p = bind(
+        new Date(`${dateRange.toDate}T23:59:59.999`).toISOString(),
+      );
       txWhere.push(`tx."createdAt" <= ${p}`);
       draftWhere.push(`t."createdAt" <= ${p}`);
     }
+
+    const txJoinOrder = hasSearch
+      ? `JOIN "order" o ON o.id = tx."orderId"`
+      : '';
+    const draftJoinOrder = hasSearch
+      ? `JOIN "order" o ON o.id = t."orderId"`
+      : '';
 
     const groupedCte = `WITH base AS MATERIALIZED (
         SELECT tx."tripCode" AS "tripCode",
@@ -4000,12 +4067,12 @@ export class WarehouseService {
                tx."createdAt" AS "at",
                'COMPLETED' AS "status"
         FROM "order_inventory_transaction" tx
-        JOIN "order" o ON o.id = tx."orderId"
+        ${txJoinOrder}
         WHERE ${txWhere.join(' AND ')}
         UNION ALL
         SELECT t."tripCode", (t."type" = 'TRANSFER'), t."createdAt", 'PENDING'
         FROM "trip" t
-        JOIN "order" o ON o.id = t."orderId"
+        ${draftJoinOrder}
         WHERE ${draftWhere.join(' AND ')}
       ), g AS (
         SELECT "tripCode",
@@ -4029,8 +4096,7 @@ export class WarehouseService {
           ? 'g."isTransfer"'
           : 'TRUE';
 
-    const countRows = await this.dataSource.query(
-      `${groupedCte}
+    const countSql = `${groupedCte}
        SELECT COUNT(*) FILTER (WHERE ${typeCond})::int AS "allCount",
               COUNT(*) FILTER (WHERE g."status" = 'PENDING' AND ${typeCond})::int AS "pendingCount",
               COUNT(*) FILTER (WHERE g."status" = 'COMPLETED' AND ${typeCond})::int AS "completedCount",
@@ -4038,9 +4104,28 @@ export class WarehouseService {
               COUNT(*) FILTER (WHERE NOT g."isTransfer" AND ${statusCond})::int AS "customerCount",
               COUNT(*) FILTER (WHERE g."isTransfer" AND ${statusCond})::int AS "transferCount",
               COUNT(*) FILTER (WHERE ${statusCond} AND ${typeCond})::int AS "total"
-       FROM g`,
-      params,
-    );
+       FROM g`;
+
+    const pageSql = `${groupedCte}
+       SELECT g."tripCode", g."isTransfer", g."dispatchedAt", g."status"
+       FROM g
+       WHERE ${statusCond} AND ${typeCond}
+       ORDER BY CASE WHEN g."status" = 'PENDING' THEN 0 ELSE 1 END,
+                g."dispatchedAt" DESC, g."tripCode" DESC
+       LIMIT ${limit} OFFSET ${skip}`;
+
+    const [countRows, pageRows] = await Promise.all([
+      this.dataSource.query(countSql, params),
+      this.dataSource.query<
+        Array<{
+          tripCode: string;
+          isTransfer: boolean;
+          dispatchedAt: string;
+          status: 'PENDING' | 'COMPLETED';
+        }>
+      >(pageSql, params),
+    ]);
+
     const c = countRows?.[0] ?? {};
     const total = Number(c.total) || 0;
     const meta = {
@@ -4057,21 +4142,6 @@ export class WarehouseService {
       transferCount: Number(c.transferCount) || 0,
     };
 
-    const pageRows: Array<{
-      tripCode: string;
-      isTransfer: boolean;
-      dispatchedAt: string;
-      status: 'PENDING' | 'COMPLETED';
-    }> = await this.dataSource.query(
-      `${groupedCte}
-       SELECT g."tripCode", g."isTransfer", g."dispatchedAt", g."status"
-       FROM g
-       WHERE ${statusCond} AND ${typeCond}
-       ORDER BY CASE WHEN g."status" = 'PENDING' THEN 0 ELSE 1 END,
-                g."dispatchedAt" DESC, g."tripCode" DESC
-       LIMIT ${limit} OFFSET ${skip}`,
-      params,
-    );
     if (pageRows.length === 0) {
       return { data: [], meta };
     }
@@ -4405,6 +4475,10 @@ export class WarehouseService {
     const skip = (page - 1) * limit;
 
     const userHubId = (await this.resolveUserHubId(user)) ?? null;
+    const dateRange = this.sanitizeDateRangeGuard(query, {
+      defaultPastDays: 90,
+      maxSpanDays: 90,
+    });
     const params: any[] = [];
     const bind = (v: any) => {
       params.push(v);
@@ -4427,33 +4501,62 @@ export class WarehouseService {
       );
     }
 
-    if (query?.fromDate) {
-      const fromIso = new Date(`${query.fromDate}T00:00:00`).toISOString();
+    if (dateRange.fromDate) {
+      const fromIso = new Date(`${dateRange.fromDate}T00:00:00`).toISOString();
       where.push(`ts."createdAt" >= ${bind(fromIso)}`);
     }
 
-    if (query?.toDate) {
-      const toIso = new Date(`${query.toDate}T23:59:59.999`).toISOString();
+    if (dateRange.toDate) {
+      const toIso = new Date(`${dateRange.toDate}T23:59:59.999`).toISOString();
       where.push(`ts."createdAt" <= ${bind(toIso)}`);
     }
 
     const whereSql = where.join(' AND ');
 
-    const baseCte = `WITH base AS (
+    const baseCte = `WITH filtered_stops AS (
       SELECT ts."tripCode",
              ts."status",
+             ts."stopType",
              ts."hubId",
-             ts."createdAt",
+             ts."createdAt"
+      FROM "trip_stop" ts
+      WHERE ${whereSql}
+    ),
+    unique_trip_codes AS (
+      SELECT DISTINCT "tripCode" FROM filtered_stops
+    ),
+    trip_meta AS (
+      SELECT t."tripCode",
+             BOOL_OR(t."type" = 'TRANSFER') AS "hasTransferTrip"
+      FROM "trip" t
+      JOIN unique_trip_codes u ON u."tripCode" = t."tripCode"
+      WHERE t."deletedAt" IS NULL
+      GROUP BY t."tripCode"
+    ),
+    hub_stop_counts AS (
+      SELECT all_ts."tripCode",
+             (COUNT(DISTINCT all_ts."hubId") > 1) AS "multiHub"
+      FROM "trip_stop" all_ts
+      JOIN unique_trip_codes u ON u."tripCode" = all_ts."tripCode"
+      WHERE all_ts."deletedAt" IS NULL
+      GROUP BY all_ts."tripCode"
+    ),
+    base AS MATERIALIZED (
+      SELECT fs."tripCode",
+             fs."status",
+             fs."hubId",
+             fs."createdAt",
              (
                CASE
-                 WHEN ts."stopType" = 'TRANSIT' THEN TRUE
-                 WHEN EXISTS (SELECT 1 FROM "trip" t WHERE t."tripCode" = ts."tripCode" AND t."type" = 'TRANSFER' AND t."deletedAt" IS NULL) THEN TRUE
-                 WHEN (SELECT COUNT(DISTINCT all_ts."hubId") FROM "trip_stop" all_ts WHERE all_ts."tripCode" = ts."tripCode" AND all_ts."deletedAt" IS NULL) > 1 THEN TRUE
+                 WHEN fs."stopType" = 'TRANSIT' THEN TRUE
+                 WHEN COALESCE(tm."hasTransferTrip", FALSE) THEN TRUE
+                 WHEN COALESCE(hsc."multiHub", FALSE) THEN TRUE
                  ELSE FALSE
                END
              ) AS "isTransfer"
-      FROM "trip_stop" ts
-      WHERE ${whereSql}
+      FROM filtered_stops fs
+      LEFT JOIN trip_meta tm ON tm."tripCode" = fs."tripCode"
+      LEFT JOIN hub_stop_counts hsc ON hsc."tripCode" = fs."tripCode"
     )`;
 
     const statusUpper = query?.status?.toUpperCase();
@@ -4469,8 +4572,7 @@ export class WarehouseService {
           ? 'b."isTransfer"'
           : 'TRUE';
 
-    const countRows = await this.dataSource.query(
-      `${baseCte}
+    const countSql = `${baseCte}
        SELECT
          COUNT(*)::int AS "allCount",
          COUNT(*) FILTER (WHERE b."status" = 'PENDING')::int AS "pendingCount",
@@ -4479,41 +4581,30 @@ export class WarehouseService {
          COUNT(*) FILTER (WHERE NOT b."isTransfer" AND ${statusCond})::int AS "customerCount",
          COUNT(*) FILTER (WHERE b."isTransfer" AND ${statusCond})::int AS "transferCount",
          COUNT(*) FILTER (WHERE ${statusCond} AND ${typeCond})::int AS "total"
-       FROM base b`,
-      params,
-    );
-    const c = countRows?.[0] ?? {};
-    const total = Number(c.total) || 0;
-    const meta = {
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit) || 1,
-      allCount: Number(c.allCount) || 0,
-      pendingCount: Number(c.pendingCount) || 0,
-      completedCount: Number(c.completedCount) || 0,
-      typeAllCount: Number(c.typeAllCount) || 0,
-      customerCount: Number(c.customerCount) || 0,
-      transferCount: Number(c.transferCount) || 0,
-    };
+       FROM base b`;
 
-    const pageRows: any[] = await this.dataSource.query(
-      `${baseCte}
+    const pageSql = `${baseCte}
        SELECT ts."tripCode",
               ts."status",
               ts."stopType",
               ts."hubId",
               ts."processedAt",
               ts."createdAt",
-              b."isTransfer",
+              p."isTransfer",
               h."name" AS "hubName",
               (SELECT oh."name" FROM "trip_stop" os JOIN "hub" oh ON oh.id = os."hubId"
                WHERE os."tripCode" = ts."tripCode" AND os."stopType" = 'ORIGIN' AND os."deletedAt" IS NULL
                LIMIT 1) AS "originHubName",
               agg."firstTripId", agg."licensePlate", agg."driverName", agg."pickupDate",
               agg."ordersCount", agg."ordersForHubCount", agg."totalWeight", agg."totalVolume", agg."totalQuantity"
-       FROM base b
-       JOIN "trip_stop" ts ON ts."tripCode" = b."tripCode" AND ts."hubId" = b."hubId" AND ts."deletedAt" IS NULL
+       FROM (
+         SELECT b."tripCode", b."status", b."hubId", b."isTransfer", b."createdAt"
+         FROM base b
+         WHERE ${statusCond} AND ${typeCond}
+         ORDER BY CASE WHEN b."status" = 'PENDING' THEN 0 ELSE 1 END, b."createdAt" DESC
+         LIMIT ${limit} OFFSET ${skip}
+       ) p
+       JOIN "trip_stop" ts ON ts."tripCode" = p."tripCode" AND ts."hubId" = p."hubId" AND ts."deletedAt" IS NULL
        JOIN "hub" h ON h.id = ts."hubId"
        LEFT JOIN LATERAL (
          SELECT MIN(t.id) AS "firstTripId",
@@ -4532,11 +4623,27 @@ export class WarehouseService {
          JOIN "order" o ON o.id = t."orderId" AND o."deletedAt" IS NULL
          WHERE t."tripCode" = ts."tripCode" AND t."deletedAt" IS NULL
        ) agg ON true
-       WHERE ${statusCond} AND ${typeCond}
-       ORDER BY CASE WHEN b."status" = 'PENDING' THEN 0 ELSE 1 END, ts."createdAt" DESC
-       LIMIT ${limit} OFFSET ${skip}`,
-      params,
-    );
+       ORDER BY CASE WHEN p."status" = 'PENDING' THEN 0 ELSE 1 END, p."createdAt" DESC`;
+
+    const [countRows, pageRows] = await Promise.all([
+      this.dataSource.query(countSql, params),
+      this.dataSource.query<any[]>(pageSql, params),
+    ]);
+
+    const c = countRows?.[0] ?? {};
+    const total = Number(c.total) || 0;
+    const meta = {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+      allCount: Number(c.allCount) || 0,
+      pendingCount: Number(c.pendingCount) || 0,
+      completedCount: Number(c.completedCount) || 0,
+      typeAllCount: Number(c.typeAllCount) || 0,
+      customerCount: Number(c.customerCount) || 0,
+      transferCount: Number(c.transferCount) || 0,
+    };
 
     if (pageRows.length === 0) {
       return { data: [], meta };
