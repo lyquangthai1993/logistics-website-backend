@@ -27,6 +27,7 @@ import {
   OperationalLedgerService,
 } from './operational-ledger.service';
 import { RedisCacheService } from '../redis/redis-cache.service';
+import { sanitizeDateRangeGuard } from '../utils/date-range-guard';
 
 export interface PaginatedResult<T> {
   data: T[];
@@ -240,15 +241,17 @@ export class OrdersService {
       });
     }
 
-    if (query?.fromDate) {
-      const from = new Date(`${query.fromDate}T00:00:00`);
+    const dateRange = sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
+
+    if (dateRange.fromDate) {
+      const from = new Date(`${dateRange.fromDate}T00:00:00`);
       qb.andWhere('order.createdAt >= :fromDate', {
         fromDate: from.toISOString(),
       });
     }
 
-    if (query?.toDate) {
-      const to = new Date(`${query.toDate}T23:59:59.999`);
+    if (dateRange.toDate) {
+      const to = new Date(`${dateRange.toDate}T23:59:59.999`);
       qb.andWhere('order.createdAt <= :toDate', {
         toDate: to.toISOString(),
       });
@@ -276,7 +279,8 @@ export class OrdersService {
   }
 
   async getStats(query?: QueryOrderStatsDto): Promise<OrderStatsResult> {
-    const cacheKey = `orders:stats:${query?.fromDate || 'default'}:${query?.toDate || 'default'}`;
+    const dateRange = sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
+    const cacheKey = `orders:stats:${dateRange.fromDate || 'default'}:${dateRange.toDate || 'default'}`;
     const cached = await this.redisCacheService.get<OrderStatsResult>(cacheKey);
     if (cached) return cached;
 
@@ -294,12 +298,12 @@ export class OrdersService {
       999,
     );
 
-    const from = query?.fromDate
-      ? new Date(`${query.fromDate}T00:00:00`)
+    const from = dateRange.fromDate
+      ? new Date(`${dateRange.fromDate}T00:00:00`)
       : defaultFrom;
     // toDate bao gồm hết ngày đó
-    const to = query?.toDate
-      ? new Date(`${query.toDate}T23:59:59.999`)
+    const to = dateRange.toDate
+      ? new Date(`${dateRange.toDate}T23:59:59.999`)
       : defaultTo;
 
     // Lấy count per status trong khoảng ngày

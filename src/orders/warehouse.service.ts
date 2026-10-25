@@ -5508,6 +5508,7 @@ export class WarehouseService {
         { tripCode },
       )
       .orderBy('order.id', 'DESC')
+      .take(150)
       .getMany();
 
     const orderIds = orders.map((o) => o.id);
