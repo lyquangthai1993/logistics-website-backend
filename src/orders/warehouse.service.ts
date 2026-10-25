@@ -5302,8 +5302,20 @@ export class WarehouseService {
         .andWhere('trip.id = :id', { id: Number(legacy[1]) })
         .getMany();
     }
+
+    let tripRecord: TripEntity | null = null;
     if (trips.length === 0) {
-      throw new NotFoundException(`Không tìm thấy chuyến xe ${code}`);
+      tripRecord = await this.tripRepository.findOne({
+        where: { tripCode: code },
+        order: { id: 'ASC' },
+        withDeleted: true,
+      });
+      if (!tripRecord && legacy) {
+        tripRecord = await this.tripRepository.findOne({
+          where: { id: Number(legacy[1]) },
+          withDeleted: true,
+        });
+      }
     }
 
     const stops: any[] = await this.dataSource.query(
@@ -5313,6 +5325,10 @@ export class WarehouseService {
        ORDER BY ts."stopSequence" ASC, ts.id ASC`,
       [code],
     );
+
+    if (trips.length === 0 && !tripRecord && stops.length === 0) {
+      throw new NotFoundException(`Không tìm thấy chuyến xe ${code}`);
+    }
 
     const completedStop = stops.find(
       (s) => s.status === TripStopStatus.COMPLETED,
@@ -5541,7 +5557,7 @@ export class WarehouseService {
         };
       });
 
-    const first = trips[0];
+    const first: any = trips[0] || tripRecord || {};
     const currentStop = viewerHubId
       ? stops.find((s) => Number(s.hubId) === viewerHubId)
       : undefined;
@@ -5576,7 +5592,8 @@ export class WarehouseService {
       isTransfer:
         stops.length > 1 ||
         sums.some((s) => s.type === InventoryTransactionType.TRANSFER) ||
-        trips.some((t) => t.type === 'TRANSFER'),
+        trips.some((t) => t.type === 'TRANSFER') ||
+        first.type === 'TRANSFER',
       stops: stops.map((s) => ({
         hubId: Number(s.hubId),
         hubName: s.hubName,
