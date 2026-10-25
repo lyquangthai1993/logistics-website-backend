@@ -5326,7 +5326,20 @@ export class WarehouseService {
       [code],
     );
 
-    if (trips.length === 0 && !tripRecord && stops.length === 0) {
+    const txExists: any[] =
+      trips.length === 0 && !tripRecord && stops.length === 0
+        ? await this.dataSource.query(
+            `SELECT 1 FROM "order_inventory_transaction" WHERE "tripCode" = $1 LIMIT 1`,
+            [code],
+          )
+        : [];
+
+    if (
+      trips.length === 0 &&
+      !tripRecord &&
+      stops.length === 0 &&
+      txExists.length === 0
+    ) {
       throw new NotFoundException(`Không tìm thấy chuyến xe ${code}`);
     }
 
