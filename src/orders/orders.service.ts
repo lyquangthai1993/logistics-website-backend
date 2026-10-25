@@ -803,6 +803,39 @@ export class OrdersService {
       }
     }
     await this.orderRepository.softRemove(order);
+
+    // Tự động cascade xóa mềm các dòng chuyến xe nháp liên quan (status = 'PENDING')
+    const pendingTrips: Array<{ id: number; tripCode: string | null }> =
+      await this.dataSource.query(
+        `UPDATE "trip"
+         SET "deletedAt" = NOW()
+         WHERE "orderId" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL
+         RETURNING id, "tripCode"`,
+        [order.id],
+      );
+
+    const affectedTripCodes = Array.from(
+      new Set(
+        pendingTrips
+          .map((t) => t.tripCode)
+          .filter((code): code is string => !!code),
+      ),
+    );
+
+    // Nếu chuyến nháp không còn bất kỳ dòng hàng hợp lệ nào khác, dọn dẹp các chặng dừng nháp (trip_stop)
+    for (const tripCode of affectedTripCodes) {
+      await this.dataSource.query(
+        `UPDATE "trip_stop" ts
+         SET "deletedAt" = NOW()
+         WHERE ts."tripCode" = $1 AND ts."status" = 'PENDING' AND ts."deletedAt" IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM "trip" active_t
+             WHERE active_t."tripCode" = ts."tripCode" AND active_t."deletedAt" IS NULL
+           )`,
+        [tripCode],
+      );
+    }
+
     await this.activityLogService.safeLogActivity({
       orderId: order.id,
       orderCode: order.orderCode,
@@ -825,6 +858,12 @@ export class OrdersService {
         outboundQuantity: order.outboundQuantity,
         remainingQuantity: order.remainingQuantity,
         status: order.status,
+      },
+      metadata: {
+        cancelledPendingTrips: pendingTrips.map((t) => ({
+          tripId: t.id,
+          tripCode: t.tripCode,
+        })),
       },
     });
   }
