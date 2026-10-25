@@ -52,6 +52,7 @@ import {
   UpdateTripOrderDestinationDto,
   DeliveryModeEnum,
 } from './dto/update-trip-order-destination.dto';
+import { RedisCacheService } from '../redis/redis-cache.service';
 
 export interface WarehouseOrdersResult {
   data: Array<
@@ -75,6 +76,7 @@ export interface WarehouseOrdersResult {
     page: number;
     limit: number;
     totalPages: number;
+    cursor?: number | null;
     totalQuantity: number;
     totalWeight: number;
     totalVolume: number;
@@ -131,6 +133,7 @@ export class WarehouseService {
     private readonly ledgerService: OperationalLedgerService,
     private readonly activityLogService: OrderActivityLogService,
     private readonly dataSource: DataSource,
+    private readonly redisCacheService: RedisCacheService,
   ) {}
 
   /**
@@ -254,6 +257,8 @@ export class WarehouseService {
       groupBy?: string;
       /** Export mode flag: bypasses the 100-row pagination limit to extract all stored orders. */
       isExport?: string | boolean;
+      /** Keyset / Cursor-based pagination: id của bản ghi cuối cùng đã xem (id < cursor) */
+      cursor?: number;
     },
   ): Promise<WarehouseOrdersResult> {
     const isExport =
@@ -463,9 +468,17 @@ export class WarehouseService {
     }
 
     const qb = applyStatusFilter(applyScope(createListQb()));
-    qb.orderBy('order.createdAt', 'DESC');
+    qb.orderBy('order.id', 'DESC');
 
-    const [data, total] = await qb.skip(skip).take(limit).getManyAndCount();
+    if (query?.cursor) {
+      qb.andWhere('order.id < :cursor', { cursor: Number(query.cursor) });
+    }
+
+    const [data, total] = query?.cursor
+      ? await qb.take(limit).getManyAndCount()
+      : await qb.skip(skip).take(limit).getManyAndCount();
+
+    const nextCursor = data.length > 0 ? data[data.length - 1].id : null;
 
     // Summary totals of current dataset
     const totalQuantity = data.reduce(
@@ -494,6 +507,7 @@ export class WarehouseService {
         page,
         limit,
         totalPages: Math.ceil(total / limit) || 1,
+        cursor: nextCursor,
         totalQuantity,
         totalWeight,
         totalVolume,
@@ -510,9 +524,11 @@ export class WarehouseService {
     data: OrderEntity[],
     userHubId: number | null,
     useHubContext: boolean,
+    precomputedHubView?: Map<number, any>,
   ): Promise<any[]> {
     const hubView =
-      useHubContext && userHubId
+      precomputedHubView ??
+      (useHubContext && userHubId
         ? await this.computeHubView(
             data.map((d) => d.id),
             userHubId,
@@ -526,7 +542,7 @@ export class WarehouseService {
               pendingOutboundTripCodes: string[];
               effectiveHubStock: number;
             }
-          >();
+          >());
 
     return data.map((item) => {
       let pickupAddr = item.originHub || '';
@@ -2134,7 +2150,7 @@ export class WarehouseService {
     const inboundDate =
       body?.receiveDate || new Date().toISOString().split('T')[0];
 
-    return this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
       const orderRepo = manager.getRepository(OrderEntity);
       const tripRepo = manager.getRepository(TripEntity);
       const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
@@ -2855,6 +2871,10 @@ export class WarehouseService {
         tripCode: sharedTripCode || null,
       };
     });
+    void this.redisCacheService.delByPattern('warehouse:kpi:*');
+    void this.redisCacheService.delByPattern('orders:stats:*');
+    void this.redisCacheService.delByPattern('trips:stats:*');
+    return result;
   }
 
   /**
@@ -3048,7 +3068,7 @@ export class WarehouseService {
 
     const userHubId = (await this.resolveUserHubId(user)) ?? null;
 
-    return this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
       const orderRepo = manager.getRepository(OrderEntity);
       const tripRepo = manager.getRepository(TripEntity);
       const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
@@ -3389,6 +3409,10 @@ export class WarehouseService {
         invoiceCode,
       };
     });
+    void this.redisCacheService.delByPattern('warehouse:kpi:*');
+    void this.redisCacheService.delByPattern('orders:stats:*');
+    void this.redisCacheService.delByPattern('trips:stats:*');
+    return result;
   }
 
   /**
@@ -3794,6 +3818,10 @@ export class WarehouseService {
     completedOutbound: number;
   }> {
     const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const cacheKey = `warehouse:kpi:${user.id || user.role?.id || 'all'}:${userHubId || 'all'}:${query?.fromDate || 'none'}:${query?.toDate || 'none'}`;
+    const cached = await this.redisCacheService.get<any>(cacheKey);
+    if (cached) return cached;
+
     const statusExpr = useHubContext
       ? this.ledgerService.hubStatusSql()
       : 'order.status';
@@ -3872,7 +3900,7 @@ export class WarehouseService {
     const inboundTotal = waitingInbound + storedInbound;
     const outboundTotal = storedInbound + completedOutbound;
 
-    return {
+    const result = {
       total,
       inboundTotal,
       outboundTotal,
@@ -3886,6 +3914,8 @@ export class WarehouseService {
       completedOutbound,
       completedOutboundToday: completedOutbound,
     };
+    await this.redisCacheService.set(cacheKey, result, 60);
+    return result;
   }
 
   /**
@@ -3964,7 +3994,7 @@ export class WarehouseService {
       draftWhere.push(`t."createdAt" <= ${p}`);
     }
 
-    const groupedCte = `WITH base AS (
+    const groupedCte = `WITH base AS MATERIALIZED (
         SELECT tx."tripCode" AS "tripCode",
                (tx."type" = '${InventoryTransactionType.TRANSFER}') AS "isTransfer",
                tx."createdAt" AS "at",
@@ -4018,6 +4048,7 @@ export class WarehouseService {
       page,
       limit,
       totalPages: Math.ceil(total / limit) || 1,
+      cursor: null as string | null,
       allCount: Number(c.allCount) || 0,
       pendingCount: Number(c.pendingCount) || 0,
       completedCount: Number(c.completedCount) || 0,
@@ -4045,6 +4076,8 @@ export class WarehouseService {
       return { data: [], meta };
     }
 
+    meta.cursor = pageRows[pageRows.length - 1]?.tripCode ?? null;
+
     const completedCodes = pageRows
       .filter((r) => r.status === 'COMPLETED')
       .map((r) => r.tripCode);
@@ -4052,31 +4085,32 @@ export class WarehouseService {
       .filter((r) => r.status === 'PENDING')
       .map((r) => r.tripCode);
 
-    // Dispatch invoices of the page's dispatched trips at the viewer hub
-    let dispatchTxs: OrderInventoryTransactionEntity[] = [];
-    if (completedCodes.length > 0) {
-      const txQb = this.transactionRepository
-        .createQueryBuilder('tx')
-        .leftJoinAndSelect('tx.hub', 'hub')
-        .where('tx.deletedAt IS NULL')
-        .andWhere('tx.type IN (:...types)', {
-          types: [
-            InventoryTransactionType.OUTBOUND,
-            InventoryTransactionType.TRANSFER,
-          ],
-        })
-        .andWhere('tx.tripCode IN (:...completedCodes)', { completedCodes })
-        .orderBy('tx.id', 'ASC');
-      if (useHubContext && userHubId) {
-        txQb.andWhere('tx.hubId = :userHubId', { userHubId });
-      }
-      dispatchTxs = await txQb.getMany();
-    }
-
-    // Planned lines of the page's draft trips
-    const draftLines =
+    // Wave 1: Fetch dispatch invoices and planned draft lines in parallel
+    const [dispatchTxs, draftLines] = await Promise.all([
+      completedCodes.length > 0
+        ? (() => {
+            const txQb = this.transactionRepository
+              .createQueryBuilder('tx')
+              .leftJoinAndSelect('tx.hub', 'hub')
+              .where('tx.deletedAt IS NULL')
+              .andWhere('tx.type IN (:...types)', {
+                types: [
+                  InventoryTransactionType.OUTBOUND,
+                  InventoryTransactionType.TRANSFER,
+                ],
+              })
+              .andWhere('tx.tripCode IN (:...completedCodes)', {
+                completedCodes,
+              })
+              .orderBy('tx.id', 'ASC');
+            if (useHubContext && userHubId) {
+              txQb.andWhere('tx.hubId = :userHubId', { userHubId });
+            }
+            return txQb.getMany();
+          })()
+        : Promise.resolve([]),
       pendingCodes.length > 0
-        ? await this.tripRepository
+        ? this.tripRepository
             .createQueryBuilder('t')
             .leftJoinAndSelect('t.originHub', 'draftOriginHub')
             .leftJoinAndSelect('t.destinationHub', 'draftDestinationHub')
@@ -4086,7 +4120,8 @@ export class WarehouseService {
             .andWhere('t.quantityAllocated IS NOT NULL')
             .orderBy('t.id', 'ASC')
             .getMany()
-        : [];
+        : Promise.resolve([]),
+    ]);
 
     const orderIds = Array.from(
       new Set([
@@ -4095,8 +4130,10 @@ export class WarehouseService {
       ]),
     );
     let orderEntities: OrderEntity[] = [];
+    let hubViewMap: Map<number, any> | undefined = undefined;
     if (orderIds.length > 0) {
-      const [orders, trips, txs] = await Promise.all([
+      // Wave 2: Fetch orders, trips, txs and compute hub view simultaneously
+      const [orders, trips, txs, hubView] = await Promise.all([
         this.orderRepository
           .createQueryBuilder('order')
           .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
@@ -4121,6 +4158,9 @@ export class WarehouseService {
           .where('tx.deletedAt IS NULL')
           .andWhere('tx.orderId IN (:...orderIds)', { orderIds })
           .getMany(),
+        useHubContext && userHubId
+          ? this.computeHubView(orderIds, userHubId)
+          : Promise.resolve(new Map()),
       ]);
 
       const tripsByOrderId = new Map<number, TripEntity[]>();
@@ -4142,11 +4182,13 @@ export class WarehouseService {
         order.inventoryTransactions = txsByOrderId.get(order.id) || [];
       }
       orderEntities = orders;
+      hubViewMap = hubView;
     }
     const enriched = await this.enrichWarehouseRows(
       orderEntities,
       userHubId,
       useHubContext,
+      hubViewMap,
     );
     const orderById = new Map<number, any>(
       enriched.map((o) => [Number(o.id), o]),

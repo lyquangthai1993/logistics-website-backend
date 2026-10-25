@@ -15,6 +15,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { RoleEnum } from '../roles/roles.enum';
 import { OperationalLedgerService } from '../orders/operational-ledger.service';
+import { RedisCacheService } from '../redis/redis-cache.service';
 
 export interface PaginatedResult<T> {
   data: T[];
@@ -57,6 +58,7 @@ export class TripsService {
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
     private readonly ledgerService: OperationalLedgerService,
+    private readonly redisCacheService: RedisCacheService,
   ) {}
 
   private async resolveUserHubId(user?: UserEntity): Promise<number | null> {
@@ -506,6 +508,10 @@ export class TripsService {
   }
 
   async getStats(query?: QueryTripStatsDto): Promise<TripStatsResult> {
+    const cacheKey = `trips:stats:${query?.fromDate || 'default'}:${query?.toDate || 'default'}`;
+    const cached = await this.redisCacheService.get<TripStatsResult>(cacheKey);
+    if (cached) return cached;
+
     const now = new Date();
     const defaultFrom = new Date(now.getFullYear(), now.getMonth(), 1);
     const defaultTo = new Date(
@@ -550,7 +556,7 @@ export class TripsService {
       this.orderRepository.count({ where: { status: 'NO_VEHICLE' } }),
     ]);
 
-    return {
+    const result: TripStatsResult = {
       tripsTotal,
       tripsPending: tripMap['PENDING'] ?? 0,
       tripsConfirmed: tripMap['CONFIRMED'] ?? 0,
@@ -562,6 +568,9 @@ export class TripsService {
       fromDate: from.toISOString().split('T')[0],
       toDate: to.toISOString().split('T')[0],
     };
+
+    await this.redisCacheService.set(cacheKey, result, 60);
+    return result;
   }
 
   async findOne(id: number): Promise<TripEntity> {
