@@ -24,6 +24,15 @@ export class QueryOrderDto {
   @Max(100)
   limit?: number = 20;
 
+  @ApiPropertyOptional({
+    description:
+      'Keyset / Cursor-based pagination: id của bản ghi cuối cùng đã xem (id < cursor)',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  cursor?: number;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

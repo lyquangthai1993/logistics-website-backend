@@ -33,6 +33,7 @@ import { AllConfigType } from './config/config.type';
 import { SessionModule } from './session/session.module';
 import { MailerModule } from './mailer/mailer.module';
 import { MongooseModule } from '@nestjs/mongoose';
+import { RedisCacheModule } from './redis/redis-cache.module';
 import { MongooseConfigService } from './database/mongoose-config.service';
 import { DatabaseConfig } from './database/config/database-config.type';
 import { ThrottlerModule } from '@nestjs/throttler';
@@ -149,6 +150,7 @@ const infrastructureDatabaseModule = (databaseConfig() as DatabaseConfig)
     OrdersModule,
     TripsModule,
     NotificationsModule,
+    RedisCacheModule,
     ThrottlerModule.forRoot([
       {
         name: 'default',
