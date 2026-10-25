@@ -1765,6 +1765,7 @@ export class WarehouseService {
             quantityAllocated: qty,
             weightAllocated: weight,
             volumeAllocated: vol,
+            assignedByUserId: user.id,
             notes: `[NHẬP KHO] Xe ${plate} tiếp nhận ${qty} kiện tại ${originHubName || 'Kho'}`,
           }),
         );
@@ -3687,6 +3688,7 @@ export class WarehouseService {
               item?.volumeToExport ??
                 this.proportional(order.totalVolume, qty, order.totalQuantity),
             ),
+            assignedByUserId: user.id,
             notes: isTransferLine
               ? `[NHÁP XUẤT KHO - LUÂN CHUYỂN] Dự kiến xuất ${qty} kiện${draftAddrSuffix}`
               : `[NHÁP XUẤT KHO - GIAO KHÁCH] Dự kiến xuất ${qty} kiện${draftAddrSuffix}`,
@@ -4264,6 +4266,86 @@ export class WarehouseService {
       enriched.map((o) => [Number(o.id), o]),
     );
 
+    const pageTripCodes = pageRows.map((r) => r.tripCode);
+    const tripStops: Array<{
+      tripCode: string;
+      processedByUserId: number | null;
+    }> =
+      pageTripCodes.length > 0
+        ? await this.dataSource.query(
+            `SELECT "tripCode", "processedByUserId" FROM "trip_stop" WHERE "tripCode" = ANY($1) AND "deletedAt" IS NULL AND "processedByUserId" IS NOT NULL`,
+            [pageTripCodes],
+          )
+        : [];
+
+    const orderCreatorRows: Array<{
+      id: number;
+      createdByUserId: number | null;
+    }> =
+      orderIds.length > 0
+        ? await this.dataSource.query(
+            `SELECT id, "createdByUserId" FROM "order" WHERE id = ANY($1) AND "createdByUserId" IS NOT NULL`,
+            [orderIds],
+          )
+        : [];
+    const orderCreatorMap = new Map<number, number>(
+      orderCreatorRows.map((r) => [Number(r.id), Number(r.createdByUserId)]),
+    );
+
+    const relevantUserIds = Array.from(
+      new Set(
+        [
+          ...draftLines.map((t) => t.assignedByUserId),
+          ...dispatchTxs.map((tx) => tx.performedByUserId),
+          ...orderEntities.map((o) => o.createdByUserId),
+          ...orderCreatorRows.map((r) => r.createdByUserId),
+          ...tripStops.map((ts) => ts.processedByUserId),
+        ].filter((id): id is number => typeof id === 'number' && id > 0),
+      ),
+    );
+
+    const userMap = new Map<
+      number,
+      {
+        id: number;
+        name: string;
+        username: string | null;
+        email: string | null;
+      }
+    >();
+    if (relevantUserIds.length > 0) {
+      const userRows = await this.dataSource.query<
+        Array<{
+          id: number;
+          firstName: string | null;
+          lastName: string | null;
+          username: string | null;
+          email: string | null;
+        }>
+      >(
+        `SELECT id, "firstName", "lastName", username, email FROM "user" WHERE id = ANY($1)`,
+        [relevantUserIds],
+      );
+      for (const u of userRows) {
+        const name =
+          [u.firstName, u.lastName].filter(Boolean).join(' ').trim() ||
+          u.username ||
+          u.email ||
+          '';
+        userMap.set(u.id, {
+          id: u.id,
+          name: name || '',
+          username: u.username || null,
+          email: u.email || null,
+        });
+      }
+    }
+
+    const formatUserInfo = (uid?: number | null) => {
+      if (!uid) return null;
+      return userMap.get(uid) || null;
+    };
+
     const data = pageRows.map((row) => {
       const isDraft = row.status === 'PENDING';
       const sourceLines: Array<{
@@ -4422,6 +4504,44 @@ export class WarehouseService {
           .flatMap((o) => o.trips ?? [])
           .find((t: any) => t?.tripCode === row.tripCode);
 
+      const matchedDrafts = draftLines.filter(
+        (t) => t.tripCode === row.tripCode,
+      );
+      const matchedTxs = dispatchTxs.filter((t) => t.tripCode === row.tripCode);
+      const matchedStops = tripStops.filter(
+        (ts) => ts.tripCode === row.tripCode,
+      );
+      const tripOrders = orders.filter((o) =>
+        (o.trips ?? []).some((t: any) => t?.tripCode === row.tripCode),
+      );
+
+      const draftAssignerId =
+        matchedDrafts.find((t) => t.assignedByUserId)?.assignedByUserId ?? null;
+      const draftOrderCreatorId =
+        matchedDrafts
+          .map((t) => orderCreatorMap.get(t.orderId))
+          .find((id) => !!id) ?? null;
+      const orderCreatorId =
+        tripOrders.find((o) => o.createdByUserId)?.createdByUserId ??
+        orders.find((o) => o.createdByUserId)?.createdByUserId ??
+        draftOrderCreatorId ??
+        null;
+      const txPerformerId =
+        matchedTxs.find((t) => t.performedByUserId)?.performedByUserId ?? null;
+      const stopProcessorId =
+        matchedStops.find((ts) => ts.processedByUserId)?.processedByUserId ??
+        null;
+
+      const creatorUserId = draftAssignerId || orderCreatorId || null;
+      const operatorUserId = isDraft
+        ? creatorUserId || txPerformerId || stopProcessorId
+        : txPerformerId || stopProcessorId || creatorUserId;
+
+      const creator = formatUserInfo(creatorUserId);
+      const operator = formatUserInfo(operatorUserId);
+      const creatorName = creator?.name || null;
+      const operatorName = operator?.name || creatorName || null;
+
       return {
         tripCode: row.tripCode,
         type: row.isTransfer ? 'TRANSFER' : 'CUSTOMER',
@@ -4443,6 +4563,10 @@ export class WarehouseService {
         totalVolume: Math.round(totalVolume * 1000) / 1000,
         notes: isDraft ? '' : tripRecord?.notes || '',
         orders,
+        creator,
+        operator,
+        creatorName,
+        operatorName,
       };
     });
 
@@ -4589,6 +4713,7 @@ export class WarehouseService {
               ts."stopType",
               ts."hubId",
               ts."processedAt",
+              ts."processedByUserId",
               ts."createdAt",
               p."isTransfer",
               h."name" AS "hubName",
@@ -4651,9 +4776,11 @@ export class WarehouseService {
 
     const tripCodes = pageRows.map((r) => r.tripCode);
     const ordersByTripCode = new Map<string, any[]>();
+    let trips: TripEntity[] = [];
+    let orders: OrderEntity[] = [];
 
     if (tripCodes.length > 0) {
-      const trips = await this.tripRepository
+      trips = await this.tripRepository
         .createQueryBuilder('t')
         .where('t.deletedAt IS NULL')
         .andWhere('t.tripCode IN (:...tripCodes)', { tripCodes })
@@ -4661,7 +4788,7 @@ export class WarehouseService {
         .getMany();
 
       const orderIds = Array.from(new Set(trips.map((t) => t.orderId)));
-      const orders =
+      orders =
         orderIds.length > 0
           ? await this.orderRepository
               .createQueryBuilder('order')
@@ -4764,6 +4891,67 @@ export class WarehouseService {
       }
     }
 
+    const txs: Array<{ tripCode: string; performedByUserId: number | null }> =
+      tripCodes.length > 0
+        ? await this.dataSource.query(
+            `SELECT "tripCode", "performedByUserId" FROM "order_inventory_transaction" WHERE "tripCode" = ANY($1) AND "deletedAt" IS NULL AND "performedByUserId" IS NOT NULL ORDER BY id DESC`,
+            [tripCodes],
+          )
+        : [];
+
+    const relevantUserIds = Array.from(
+      new Set(
+        [
+          ...pageRows.map((r) => r.processedByUserId),
+          ...trips.map((t) => t.assignedByUserId),
+          ...orders.map((o) => o.createdByUserId),
+          ...txs.map((tx) => tx.performedByUserId),
+        ].filter((id): id is number => typeof id === 'number' && id > 0),
+      ),
+    );
+
+    const userMap = new Map<
+      number,
+      {
+        id: number;
+        name: string;
+        username: string | null;
+        email: string | null;
+      }
+    >();
+    if (relevantUserIds.length > 0) {
+      const userRows = await this.dataSource.query<
+        Array<{
+          id: number;
+          firstName: string | null;
+          lastName: string | null;
+          username: string | null;
+          email: string | null;
+        }>
+      >(
+        `SELECT id, "firstName", "lastName", username, email FROM "user" WHERE id = ANY($1)`,
+        [relevantUserIds],
+      );
+      for (const u of userRows) {
+        const name =
+          [u.firstName, u.lastName].filter(Boolean).join(' ').trim() ||
+          u.username ||
+          u.email ||
+          '';
+        userMap.set(u.id, {
+          id: u.id,
+          name: name || '',
+          username: u.username || null,
+          email: u.email || null,
+        });
+      }
+    }
+
+    const formatUserInfo = (uid?: number | null) => {
+      if (!uid) return null;
+      return userMap.get(uid) || null;
+    };
+
     const formatted = pageRows.map((r) => {
       const tripOrders = ordersByTripCode.get(r.tripCode) || [];
       const descs = Array.from(
@@ -4781,6 +4969,24 @@ export class WarehouseService {
         (r.createdAt
           ? new Date(r.createdAt).toISOString().split('T')[0]
           : undefined);
+
+      const tripTx = txs.find((tx) => tx.tripCode === r.tripCode);
+      const tripOrder = tripOrders.find((o) => o.createdByUserId);
+      const matchedTrip = trips.find(
+        (t) => t.tripCode === r.tripCode && t.assignedByUserId,
+      );
+
+      const creatorUserId =
+        matchedTrip?.assignedByUserId || tripOrder?.createdByUserId || null;
+      const operatorUserId =
+        r.status === 'COMPLETED'
+          ? r.processedByUserId || tripTx?.performedByUserId || creatorUserId
+          : creatorUserId || r.processedByUserId || tripTx?.performedByUserId;
+
+      const creator = formatUserInfo(creatorUserId);
+      const operator = formatUserInfo(operatorUserId);
+      const creatorName = creator?.name || null;
+      const operatorName = operator?.name || creatorName || null;
 
       return {
         id: r.firstTripId != null ? Number(r.firstTripId) : null,
@@ -4806,6 +5012,10 @@ export class WarehouseService {
         goodsDescription: goodsDesc,
         processedAt: r.processedAt,
         orders: tripOrders,
+        creator,
+        operator,
+        creatorName,
+        operatorName,
       };
     });
 
