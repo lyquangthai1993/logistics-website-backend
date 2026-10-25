@@ -108,4 +108,78 @@ describe('Users Module E2E', () => {
       expect(res.body.data[0].password).toBeUndefined();
     });
   });
+
+  describe('Update User & Change Password: /api/v1/users/:id (PATCH)', () => {
+    const patchSuffix = Date.now();
+    const testEmail = `patch.test.${patchSuffix}@example.com`;
+    const initialPassword = 'initialPassword123';
+    const updatedPassword = 'newPassword456';
+    let targetUserId: number;
+
+    beforeAll(async () => {
+      const createRes = await request(app.getHttpServer())
+        .post('/api/v1/users')
+        .auth(apiToken, { type: 'bearer' })
+        .send({
+          email: testEmail,
+          password: initialPassword,
+          firstName: 'OriginalFirst',
+          lastName: 'OriginalLast',
+          role: { id: RoleEnum.DISPATCHER },
+          status: { id: StatusEnum.active },
+        })
+        .expect(201);
+      targetUserId = createRes.body.id;
+    });
+
+    it('should update user info while keeping existing email without 422 error', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/users/${targetUserId}`)
+        .auth(apiToken, { type: 'bearer' })
+        .send({
+          firstName: 'UpdatedFirst',
+          lastName: 'UpdatedLast',
+          email: testEmail,
+          role: { id: RoleEnum.DISPATCHER },
+          status: { id: StatusEnum.active },
+        })
+        .expect(200);
+
+      expect(res.body.firstName).toBe('UpdatedFirst');
+      expect(res.body.lastName).toBe('UpdatedLast');
+      expect(res.body.email).toBe(testEmail);
+    });
+
+    it('should update user password and allow login with new password', async () => {
+      await request(app.getHttpServer())
+        .patch(`/api/v1/users/${targetUserId}`)
+        .auth(apiToken, { type: 'bearer' })
+        .send({
+          password: updatedPassword,
+        })
+        .expect(200);
+
+      // Old password must fail
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/email/login')
+        .send({
+          email: testEmail,
+          password: initialPassword,
+        })
+        .expect(422);
+
+      // New password must succeed
+      const loginRes = await request(app.getHttpServer())
+        .post('/api/v1/auth/email/login')
+        .send({
+          email: testEmail,
+          password: updatedPassword,
+        })
+        .expect(200);
+
+      expect(loginRes.body.token).toBeDefined();
+      expect(loginRes.body.user.email).toBe(testEmail);
+      expect(loginRes.body.user.firstName).toBe('UpdatedFirst');
+    });
+  });
 });
