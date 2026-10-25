@@ -4317,11 +4317,11 @@ export class WarehouseService {
       let totalWeight = 0;
       let totalVolume = 0;
       for (const line of sourceLines) {
+        const order = orderById.get(Number(line.orderId));
+        if (!order) continue;
         totalQuantity += line.quantity;
         totalWeight += line.weight;
         totalVolume += line.volume;
-        const order = orderById.get(Number(line.orderId));
-        if (!order) continue;
         const basePendingQty = Number(order.pendingOutboundQuantity) || 0;
         const basePendingTripCodes: string[] =
           order.pendingOutboundTripCodes || [];
