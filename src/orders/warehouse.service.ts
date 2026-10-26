@@ -1592,6 +1592,58 @@ export class WarehouseService {
         DRAFT_LIKE_STATUSES.includes(i.initialStatus || 'INBOUND'),
       );
 
+      // 1. Pre-fetch destination hubs in 1 batch query
+      const destHubIds = Array.from(
+        new Set(
+          dto.items
+            .map((i) => i.destinationHubId)
+            .filter((id): id is number => typeof id === 'number' && id > 0),
+        ),
+      );
+      const destHubMap = new Map<number, HubEntity>();
+      if (destHubIds.length > 0) {
+        const destHubs = await hubRepo.find({ where: { id: In(destHubIds) } });
+        for (const dh of destHubs) {
+          destHubMap.set(dh.id, dh);
+        }
+      }
+
+      // 2. Pre-fetch existing orders in 1 batch query for non-placeholder codes
+      const providedCodes = Array.from(
+        new Set(
+          dto.items
+            .map((i) => i.orderCode?.trim())
+            .filter((c): c is string => !!c && !isPlaceholderCode(c)),
+        ),
+      );
+      const existingOrdersList =
+        providedCodes.length > 0
+          ? await orderRepo.find({
+              where: { orderCode: In(providedCodes) },
+              order: { id: 'ASC' },
+            })
+          : [];
+      const existingOrdersByCode = new Map<string, OrderEntity[]>();
+      for (const o of existingOrdersList) {
+        const list = existingOrdersByCode.get(o.orderCode) || [];
+        list.push(o);
+        existingOrdersByCode.set(o.orderCode, list);
+      }
+
+      // 3. Prepare orders, trips, and transaction metadata in memory
+      const workingOrdersMap = new Map<string, OrderEntity>();
+      interface PreparedItemMeta {
+        orderCode: string;
+        effectiveDestHubId: number | null;
+        effectiveDeliveryAddr: string;
+        isDraft: boolean;
+        qty: number;
+        weight: number;
+        vol: number;
+        notes?: string;
+      }
+      const itemMetas: PreparedItemMeta[] = [];
+
       for (const item of dto.items) {
         let finalOrderCode = item.orderCode?.trim();
         if (isPlaceholderCode(finalOrderCode)) {
@@ -1603,9 +1655,7 @@ export class WarehouseService {
 
         let destinationHubName: string | null = null;
         if (item.destinationHubId) {
-          const destHub = await hubRepo.findOne({
-            where: { id: item.destinationHubId },
-          });
+          const destHub = destHubMap.get(item.destinationHubId);
           if (destHub) {
             destinationHubName = destHub.name;
           }
@@ -1633,44 +1683,47 @@ export class WarehouseService {
         const deliveryAddr =
           item.deliveryAddress?.trim() || destinationHubName || 'Điểm đến';
 
-        const existingOrders = finalOrderCode
-          ? await orderRepo.find({
-              where: { orderCode: finalOrderCode },
-              order: { id: 'ASC' },
-            })
-          : [];
-
-        let savedOrder: OrderEntity;
         let effectiveDeliveryAddr = deliveryAddr;
         let effectiveDestHubId = item.destinationHubId || null;
 
-        if (existingOrders.length > 0) {
-          const firstEntry = existingOrders[0];
-          let activeEntry =
-            existingOrders.find(
-              (o) => !DRAFT_LIKE_STATUSES.includes(o.status),
-            ) || firstEntry;
-          if (existingOrders.length > 1) {
-            activeEntry = await this.consolidateSiblingOrdersByCode(
-              manager,
-              activeEntry,
-            );
-          }
+        // Check if already in working map (from previous row in same batch)
+        let activeEntry = finalOrderCode
+          ? workingOrdersMap.get(finalOrderCode)
+          : undefined;
 
-          const lockedGoodsDesc = firstEntry.goodsDescription || finalGoodsDesc;
+        if (!activeEntry && finalOrderCode) {
+          const existingOrders = existingOrdersByCode.get(finalOrderCode) || [];
+          if (existingOrders.length > 0) {
+            const firstEntry = existingOrders[0];
+            activeEntry =
+              existingOrders.find(
+                (o) => !DRAFT_LIKE_STATUSES.includes(o.status),
+              ) || firstEntry;
+            if (existingOrders.length > 1) {
+              activeEntry = await this.consolidateSiblingOrdersByCode(
+                manager,
+                activeEntry,
+              );
+            }
+          }
+        }
+
+        if (activeEntry) {
+          const lockedGoodsDesc =
+            activeEntry.goodsDescription || finalGoodsDesc;
           const lockedDestHubName =
-            firstEntry.destinationHub || destinationHubName;
+            activeEntry.destinationHub || destinationHubName;
           const lockedDestHubId =
-            firstEntry.destinationHubId ?? (item.destinationHubId || null);
+            activeEntry.destinationHubId ?? (item.destinationHubId || null);
           const lockedProvince =
-            firstEntry.province || item.province?.trim() || null;
+            activeEntry.province || item.province?.trim() || null;
           const lockedAccompanyingDocs =
-            firstEntry.accompanyingDocs ||
+            activeEntry.accompanyingDocs ||
             item.accompanyingDocs?.trim() ||
             null;
           const lockedDeliveryAddr =
-            (firstEntry.route && firstEntry.route.includes('→')
-              ? firstEntry.route.split('→')[1]?.trim()
+            (activeEntry.route && activeEntry.route.includes('→')
+              ? activeEntry.route.split('→')[1]?.trim()
               : '') ||
             lockedDestHubName ||
             deliveryAddr;
@@ -1722,7 +1775,7 @@ export class WarehouseService {
             activeEntry.notes = item.notes.trim();
           }
 
-          savedOrder = await orderRepo.save(activeEntry);
+          workingOrdersMap.set(finalOrderCode!, activeEntry);
         } else {
           const order = orderRepo.create({
             orderCode: finalOrderCode,
@@ -1747,40 +1800,67 @@ export class WarehouseService {
             isExternalVehicleNeeded: false,
           });
 
-          savedOrder = await orderRepo.save(order);
+          workingOrdersMap.set(finalOrderCode!, order);
         }
 
-        // Create TripEntity linked to this order with shared tripCode
-        const trip = await tripRepo.save(
-          tripRepo.create({
-            orderId: savedOrder.id,
-            tripCode: sharedTripCode,
-            originHubId,
-            destinationHubId: effectiveDestHubId,
-            type: 'INBOUND',
-            licensePlate: plate,
-            driverName: driver,
-            status: isDraft ? 'PENDING' : 'COMPLETED',
-            pickupDate: date,
-            quantityAllocated: qty,
-            weightAllocated: weight,
-            volumeAllocated: vol,
-            assignedByUserId: user.id,
-            notes: `[NHẬP KHO] Xe ${plate} tiếp nhận ${qty} kiện tại ${originHubName || 'Kho'}`,
-          }),
-        );
-        savedOrder.trips = [trip];
+        itemMetas.push({
+          orderCode: finalOrderCode!,
+          effectiveDestHubId,
+          effectiveDeliveryAddr,
+          isDraft,
+          qty,
+          weight,
+          vol,
+          notes: item.notes?.trim(),
+        });
+      }
 
-        // Inbound Receipt invoice (one shared receipt code for the whole vehicle)
-        if (!isDraft) {
-          if (!invoiceCode) {
-            invoiceCode = await this.ledgerService.generateInvoiceCode(
-              InventoryTransactionType.INBOUND,
-              originHubId,
-              manager,
-            );
-          }
-          await txRepo.save(
+      // 4. Batch Save Orders in 1 operation
+      const uniqueOrdersToSave = Array.from(workingOrdersMap.values());
+      const savedOrdersList = await orderRepo.save(uniqueOrdersToSave);
+      const savedOrdersMap = new Map<string, OrderEntity>();
+      for (const so of savedOrdersList) {
+        savedOrdersMap.set(so.orderCode, so);
+      }
+
+      // 5. Batch Save Trips in 1 operation
+      const tripsToSave = itemMetas.map((meta) => {
+        const savedOrder = savedOrdersMap.get(meta.orderCode)!;
+        return tripRepo.create({
+          orderId: savedOrder.id,
+          tripCode: sharedTripCode,
+          originHubId,
+          destinationHubId: meta.effectiveDestHubId,
+          type: 'INBOUND',
+          licensePlate: plate,
+          driverName: driver,
+          status: meta.isDraft ? 'PENDING' : 'COMPLETED',
+          pickupDate: date,
+          quantityAllocated: meta.qty,
+          weightAllocated: meta.weight,
+          volumeAllocated: meta.vol,
+          assignedByUserId: user.id,
+          notes: `[NHẬP KHO] Xe ${plate} tiếp nhận ${meta.qty} kiện tại ${originHubName || 'Kho'}`,
+        });
+      });
+      const savedTrips = await tripRepo.save(tripsToSave);
+
+      // 6. Batch Save Inventory Transactions in 1 operation (for non-draft)
+      if (!allDraft) {
+        invoiceCode = await this.ledgerService.generateInvoiceCode(
+          InventoryTransactionType.INBOUND,
+          originHubId,
+          manager,
+        );
+
+        const txsToSave: OrderInventoryTransactionEntity[] = [];
+        for (let idx = 0; idx < itemMetas.length; idx++) {
+          const meta = itemMetas[idx];
+          if (meta.isDraft) continue;
+          const trip = savedTrips[idx];
+          const savedOrder = savedOrdersMap.get(meta.orderCode)!;
+
+          txsToSave.push(
             txRepo.create({
               orderId: savedOrder.id,
               type: InventoryTransactionType.INBOUND,
@@ -1788,24 +1868,33 @@ export class WarehouseService {
               hubId: originHubId,
               tripId: trip.id,
               tripCode: sharedTripCode,
-              quantity: qty,
-              expectedQuantity: qty,
+              quantity: meta.qty,
+              expectedQuantity: meta.qty,
               discrepancyQuantity: 0,
               remainingQuantity: savedOrder.remainingQuantity,
-              weight: weight,
-              volume: vol,
+              weight: meta.weight,
+              volume: meta.vol,
               licensePlate: plate,
               driverName: driver,
-              notes:
-                item.notes?.trim() ||
-                `Tiếp nhận xe ${plate} - ${sharedTripCode}`,
-              destination: effectiveDeliveryAddr || null,
+              notes: meta.notes || `Tiếp nhận xe ${plate} - ${sharedTripCode}`,
+              destination: meta.effectiveDeliveryAddr || null,
               performedByUserId: user.id,
             }),
           );
         }
 
-        (savedOrder as any).deliveryAddress = effectiveDeliveryAddr;
+        if (txsToSave.length > 0) {
+          await txRepo.save(txsToSave);
+        }
+      }
+
+      // 7. Attach trips & metadata to savedOrders for return payload
+      for (let idx = 0; idx < itemMetas.length; idx++) {
+        const meta = itemMetas[idx];
+        const savedOrder = savedOrdersMap.get(meta.orderCode)!;
+        const trip = savedTrips[idx];
+        savedOrder.trips = [trip];
+        (savedOrder as any).deliveryAddress = meta.effectiveDeliveryAddr;
         (savedOrder as any).unit = 'Kiện';
         savedOrders.push(savedOrder);
       }

@@ -414,6 +414,7 @@ export class HubSeedService {
 
       const existing = await this.repository.findOne({
         where: searchConditions,
+        withDeleted: true,
       });
 
       if (existing) {
@@ -426,6 +427,7 @@ export class HubSeedService {
         existing.contactPhone = h.contactPhone;
         existing.managerName = h.managerName;
         existing.isActive = h.isActive;
+        existing.deletedAt = null;
         await this.repository.save(existing);
       } else {
         await this.repository.save(
