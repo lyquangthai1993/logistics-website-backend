@@ -413,7 +413,24 @@ export class TripsService {
 
     const qb = this.tripRepository
       .createQueryBuilder('trip')
-      .leftJoinAndSelect('trip.order', 'order')
+      .leftJoin('trip.order', 'order')
+      .addSelect([
+        'order.id',
+        'order.orderCode',
+        'order.senderName',
+        'order.receiverName',
+        'order.originHub',
+        'order.destinationHub',
+        'order.originHubId',
+        'order.destinationHubId',
+        'order.currentHubId',
+        'order.status',
+        'order.totalQuantity',
+        'order.totalWeight',
+        'order.totalVolume',
+        'order.isExternalVehicleNeeded',
+        'order.externalNote',
+      ])
       .where('trip.deletedAt IS NULL')
       .orderBy('trip.createdAt', 'DESC');
 

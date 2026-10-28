@@ -204,7 +204,17 @@ export class OrdersService {
       .createQueryBuilder('order')
       .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
       .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
-      .leftJoinAndSelect('order.trips', 'trips')
+      .leftJoin('order.trips', 'trips')
+      .addSelect([
+        'trips.id',
+        'trips.tripCode',
+        'trips.licensePlate',
+        'trips.driverName',
+        'trips.status',
+        'trips.weightAllocated',
+        'trips.volumeAllocated',
+        'trips.pickupDate',
+      ])
       .where('order.deletedAt IS NULL')
       .orderBy('order.id', 'DESC');
 
@@ -355,16 +365,42 @@ export class OrdersService {
       typeof idOrCode === 'number' ||
       (!isNaN(Number(idOrCode)) && Number.isInteger(Number(idOrCode)))
     ) {
-      order = await this.orderRepository.findOne({
-        where: { id: Number(idOrCode) },
-        relations: [
-          'trips',
-          'inventoryTransactions',
-          'originHubEntity',
-          'destinationHubEntity',
-          'currentHubEntity',
-        ],
-      });
+      order = await this.orderRepository
+        .createQueryBuilder('order')
+        .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+        .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
+        .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
+        .leftJoin('order.trips', 'trips')
+        .addSelect([
+          'trips.id',
+          'trips.tripCode',
+          'trips.licensePlate',
+          'trips.driverName',
+          'trips.status',
+          'trips.weightAllocated',
+          'trips.volumeAllocated',
+          'trips.pickupDate',
+          'trips.createdAt',
+        ])
+        .leftJoin('order.inventoryTransactions', 'it')
+        .addSelect([
+          'it.id',
+          'it.type',
+          'it.quantity',
+          'it.expectedQuantity',
+          'it.discrepancyQuantity',
+          'it.discrepancyReason',
+          'it.invoiceCode',
+          'it.hubId',
+          'it.tripCode',
+          'it.licensePlate',
+          'it.driverName',
+          'it.createdAt',
+        ])
+        .where('order.id = :id AND order.deletedAt IS NULL', {
+          id: Number(idOrCode),
+        })
+        .getOne();
     }
 
     if (!order && typeof idOrCode === 'string' && idOrCode.trim()) {
