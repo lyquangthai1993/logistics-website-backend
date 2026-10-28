@@ -1191,14 +1191,6 @@ export class WarehouseService {
   }
 
   private async loadUserWithHub(user: UserEntity): Promise<UserEntity> {
-    if (
-      user &&
-      user.id &&
-      user.role &&
-      (user.hub !== undefined || user.hubId !== undefined)
-    ) {
-      return user;
-    }
     const userWithHub = await this.userRepository.findOne({
       where: { id: user.id },
       relations: ['hub', 'role'],
@@ -1223,16 +1215,10 @@ export class WarehouseService {
     targetHubId?: number,
     actionName: string = 'thao tác',
   ): Promise<{ isCompleted: boolean; isAdmin: boolean }> {
-    const userWithHub =
-      user &&
-      user.id &&
-      user.role &&
-      (user.hub !== undefined || user.hubId !== undefined)
-        ? user
-        : await this.userRepository.findOne({
-            where: { id: user.id },
-            relations: ['hub', 'role'],
-          });
+    const userWithHub = await this.userRepository.findOne({
+      where: { id: user.id },
+      relations: ['hub', 'role'],
+    });
     const roleId = Number(
       userWithHub?.role?.id ?? user.role?.id ?? (user.role as any),
     );
@@ -5250,28 +5236,28 @@ export class WarehouseService {
         );
       }
 
-      // Gộp 1 câu Query duy nhất (Trips + Orders + Origin/Destination Hubs)
-      const trips = await this.tripRepository
-        .createQueryBuilder('trip')
-        .leftJoinAndSelect('trip.order', 'order')
-        .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
-        .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
-        .where('trip.tripCode = :tripCode AND trip.deletedAt IS NULL', {
-          tripCode,
-        })
-        .getMany();
+      const trips = await this.tripRepository.find({
+        where: { tripCode, deletedAt: IsNull() },
+        relations: [
+          'order',
+          'order.originHubEntity',
+          'order.destinationHubEntity',
+        ],
+      });
 
       if (trips.length > 0) {
         licensePlate = trips[0].licensePlate || '';
         driverName = trips[0].driverName || '';
         createdAt = trips[0].createdAt || trips[0].pickupDate;
-        const orderMap = new Map();
-        for (const t of trips) {
-          if (t.order && !orderMap.has(t.order.id)) {
-            orderMap.set(t.order.id, t.order);
-          }
+        const orderIds = Array.from(
+          new Set(trips.map((t) => t.orderId).filter(Boolean)),
+        );
+        if (orderIds.length > 0) {
+          orders = await this.orderRepository.find({
+            where: { id: In(orderIds), deletedAt: IsNull() },
+            relations: ['originHubEntity', 'destinationHubEntity'],
+          });
         }
-        orders = Array.from(orderMap.values());
       }
     }
 
