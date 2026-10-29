@@ -1408,10 +1408,6 @@ export class WarehouseService {
         } else {
           activeEntry.totalQuantity =
             (Number(activeEntry.totalQuantity) || 0) + finalQuantity;
-          activeEntry.inboundQuantity =
-            (Number(activeEntry.inboundQuantity) || 0) + finalQuantity;
-          activeEntry.remainingQuantity =
-            (Number(activeEntry.remainingQuantity) || 0) + finalQuantity;
           activeEntry.totalWeight =
             Math.round(
               ((Number(activeEntry.totalWeight) || 0) + finalWeight) * 1000,
@@ -1421,6 +1417,10 @@ export class WarehouseService {
               ((Number(activeEntry.totalVolume) || 0) + finalVolume) * 1000,
             ) / 1000;
           if (!isDraft) {
+            activeEntry.inboundQuantity =
+              (Number(activeEntry.inboundQuantity) || 0) + finalQuantity;
+            activeEntry.remainingQuantity =
+              (Number(activeEntry.remainingQuantity) || 0) + finalQuantity;
             activeEntry.status = 'INBOUND';
             activeEntry.currentHubId = originHubId;
           }
@@ -1444,9 +1444,9 @@ export class WarehouseService {
           orderCode: finalOrderCode,
           goodsDescription: finalGoodsDescription,
           totalQuantity: finalQuantity,
-          inboundQuantity: finalQuantity,
+          inboundQuantity: isDraft ? 0 : finalQuantity,
           outboundQuantity: 0,
-          remainingQuantity: finalQuantity,
+          remainingQuantity: isDraft ? 0 : finalQuantity,
           totalWeight: finalWeight,
           totalVolume: finalVolume,
           route: `${pickupAddr} → ${deliveryAddr}`,
@@ -1757,10 +1757,6 @@ export class WarehouseService {
           } else {
             activeEntry.totalQuantity =
               (Number(activeEntry.totalQuantity) || 0) + qty;
-            activeEntry.inboundQuantity =
-              (Number(activeEntry.inboundQuantity) || 0) + qty;
-            activeEntry.remainingQuantity =
-              (Number(activeEntry.remainingQuantity) || 0) + qty;
             activeEntry.totalWeight =
               Math.round(
                 ((Number(activeEntry.totalWeight) || 0) + weight) * 1000,
@@ -1770,6 +1766,10 @@ export class WarehouseService {
                 ((Number(activeEntry.totalVolume) || 0) + vol) * 1000,
               ) / 1000;
             if (!isDraft) {
+              activeEntry.inboundQuantity =
+                (Number(activeEntry.inboundQuantity) || 0) + qty;
+              activeEntry.remainingQuantity =
+                (Number(activeEntry.remainingQuantity) || 0) + qty;
               activeEntry.status = 'INBOUND';
               activeEntry.currentHubId = originHubId;
             }
@@ -1795,9 +1795,9 @@ export class WarehouseService {
             orderCode: finalOrderCode,
             goodsDescription: finalGoodsDesc,
             totalQuantity: qty,
-            inboundQuantity: qty,
+            inboundQuantity: isDraft ? 0 : qty,
             outboundQuantity: 0,
-            remainingQuantity: qty,
+            remainingQuantity: isDraft ? 0 : qty,
             totalWeight: weight,
             totalVolume: vol,
             route: `${pickupAddr} → ${deliveryAddr}`,
@@ -3921,6 +3921,15 @@ export class WarehouseService {
     }
 
     await this.dataSource.transaction(async (manager) => {
+      // Truy vấn danh sách các dòng chuyến xe nháp trước khi xóa
+      const tripLinesToCancel = await manager.query(
+        `SELECT t.id, t."orderId", t."quantityAllocated", o."orderCode", o."status" as "orderStatus"
+         FROM "trip" t
+         JOIN "order" o ON o.id = t."orderId"
+         WHERE t."tripCode" = $1 AND t."status" = 'PENDING' AND t."deletedAt" IS NULL`,
+        [tripCode],
+      );
+
       if (userHubId) {
         await manager.query(
           `UPDATE "trip_stop" SET "deletedAt" = NOW()
@@ -3935,6 +3944,7 @@ export class WarehouseService {
         );
       }
 
+      // Xóa mềm các đơn hàng DRAFT/PENDING hoàn toàn thuộc về chuyến này
       await manager.query(
         `UPDATE "order" SET "deletedAt" = NOW()
          WHERE id IN (SELECT t."orderId" FROM "trip" t WHERE t."tripCode" = $1)
@@ -3943,11 +3953,35 @@ export class WarehouseService {
         [tripCode],
       );
 
+      // Xóa mềm chuyến xe
       await manager.query(
         `UPDATE "trip" SET "deletedAt" = NOW()
          WHERE "tripCode" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL`,
         [tripCode],
       );
+
+      // Đối với các đơn hàng đã LƯU KHO (INBOUND) có chuyến nháp này là xe kế tiếp:
+      // Tự động đối soát và trừ trả lại số lượng theo đúng sổ cái giao dịch thực tế
+      const processedCodes = new Set();
+      for (const line of tripLinesToCancel) {
+        if (
+          line.orderCode &&
+          !processedCodes.has(line.orderCode) &&
+          !['DRAFT', 'PENDING'].includes(line.orderStatus)
+        ) {
+          processedCodes.add(line.orderCode);
+          await this.activityLogService.reconcileOrderQuantities(
+            line.orderCode,
+            {
+              id: user.id,
+              email: user.email || 'system@spider-express.vn',
+              role: (user.role as any)?.name || String(user.role || 'USER'),
+            },
+            `Hủy chuyến nháp ${tripCode}, tự động đồng bộ lại tồn kho theo sổ cái thực tế`,
+            manager,
+          );
+        }
+      }
     });
     return { tripCode, cancelled: true };
   }

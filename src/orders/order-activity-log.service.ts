@@ -189,10 +189,7 @@ export class OrderActivityLogService {
   /**
    * Retrieve chronological activity logs for an orderCode.
    */
-  async getActivityLogs(
-    orderCode: string,
-    orderId?: number,
-  ): Promise<OrderActivityLogEntity[]> {
+  async getActivityLogs(orderCode: string, orderId?: number): Promise<any[]> {
     const qb = this.activityLogRepo
       .createQueryBuilder('log')
       .where('log.orderCode = :orderCode', { orderCode })
@@ -202,7 +199,49 @@ export class OrderActivityLogService {
       qb.orWhere('log.orderId = :orderId', { orderId });
     }
 
-    return qb.getMany();
+    const logs = await qb.getMany();
+    if (!logs || logs.length === 0) return [];
+
+    const actorUserIds = Array.from(
+      new Set(
+        logs
+          .map((l) => Number(l.actorUserId))
+          .filter((id) => Boolean(id) && id > 0),
+      ),
+    );
+
+    const userMap = new Map<number, string>();
+    if (actorUserIds.length > 0) {
+      const userRepo = this.activityLogRepo.manager.getRepository(UserEntity);
+      const users = await userRepo
+        .createQueryBuilder('u')
+        .select(['u.id', 'u.username', 'u.email', 'u.firstName', 'u.lastName'])
+        .where('u.id IN (:...actorUserIds)', { actorUserIds })
+        .getMany();
+
+      users.forEach((u) => {
+        const fullName = [u.firstName, u.lastName]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        const displayName =
+          fullName || u.username || (u.email ? u.email.split('@')[0] : null);
+        if (displayName) {
+          userMap.set(u.id, displayName);
+        }
+      });
+    }
+
+    return logs.map((log) => {
+      const displayName = userMap.get(Number(log.actorUserId));
+      return {
+        ...log,
+        actorName:
+          displayName || (log.actorEmail ? log.actorEmail.split('@')[0] : null),
+        actorUsername:
+          displayName || (log.actorEmail ? log.actorEmail.split('@')[0] : null),
+      };
+    });
   }
 
   /**
@@ -276,10 +315,24 @@ export class OrderActivityLogService {
 
     // If transactions exist, the real totalQuantity & inboundQuantity must match actual inbound transactions
     if (activeTxs.length > 0) {
+      // Kiểm tra xem đơn hàng còn các chuyến xe nháp khác (status = PENDING) vẫn đang được lên kế hoạch không
+      const pendingTripsRes = manager
+        ? await manager.query(
+            `SELECT COALESCE(SUM("quantityAllocated"), 0)::int as "pendingQty"
+             FROM "trip" WHERE "orderId" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL`,
+            [primaryOrder.id],
+          )
+        : await this.orderRepo.manager.query(
+            `SELECT COALESCE(SUM("quantityAllocated"), 0)::int as "pendingQty"
+             FROM "trip" WHERE "orderId" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL`,
+            [primaryOrder.id],
+          );
+      const pendingQty = Number(pendingTripsRes[0]?.pendingQty) || 0;
+
       primaryOrder.inboundQuantity = totalInbound;
       primaryOrder.outboundQuantity = totalOutbound;
       primaryOrder.remainingQuantity = exactRemaining;
-      primaryOrder.totalQuantity = totalInbound; // Exact physical quantity received
+      primaryOrder.totalQuantity = totalInbound + pendingQty;
       if (exactRemaining === 0 && totalOutbound > 0) {
         primaryOrder.status = 'COMPLETED_INBOUND';
       } else if (totalInbound > 0) {
