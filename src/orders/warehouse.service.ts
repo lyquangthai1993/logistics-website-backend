@@ -2865,7 +2865,7 @@ export class WarehouseService {
       }
 
       // Synchronize removed lines on the inbound trip (for BOTH save draft and confirm inbound)
-      if (sharedTripCode && savedOrders.length > 0) {
+      if (sharedTripCode && savedOrders.length > 0 && !keepTripPending) {
         const keptOrderIds = new Set(savedOrders.map((o) => o.id));
         const allTripLines = await tripRepo.find({
           where: { tripCode: sharedTripCode },
