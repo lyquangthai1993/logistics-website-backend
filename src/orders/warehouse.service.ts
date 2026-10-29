@@ -199,10 +199,13 @@ export class WarehouseService {
         pendingOutboundQuantity: number;
         pendingOutboundTripCodes: string[];
         effectiveHubStock: number;
+        pendingInboundQuantity: number;
+        pendingInboundTripCodes: string[];
+        hasPendingInboundTrip: boolean;
       }
     >();
     if (orderIds.length === 0) return map;
-    const [rows, pendingAllocMap] = await Promise.all([
+    const [rows, pendingAllocMap, pendingInboundMap] = await Promise.all([
       this.orderRepository
         .createQueryBuilder('order')
         .select('order.id', 'id')
@@ -212,6 +215,7 @@ export class WarehouseService {
         .setParameter('userHubId', hubId)
         .getRawMany(),
       this.ledgerService.getBatchPendingOutboundAllocations(orderIds, hubId),
+      this.ledgerService.getBatchPendingInboundAllocations(orderIds, hubId),
     ]);
     for (const r of rows) {
       const id = Number(r.id);
@@ -220,12 +224,19 @@ export class WarehouseService {
       const pendingOutboundQuantity = pendingAlloc?.pendingQty ?? 0;
       const pendingOutboundTripCodes = pendingAlloc?.tripCodes ?? [];
       const effectiveHubStock = Math.max(0, hubStock - pendingOutboundQuantity);
+      const pendingInbound = pendingInboundMap.get(id);
+      const pendingInboundQuantity = pendingInbound?.pendingQty ?? 0;
+      const pendingInboundTripCodes = pendingInbound?.tripCodes ?? [];
+      const hasPendingInboundTrip = pendingInboundTripCodes.length > 0;
       map.set(id, {
         hubStatus: r.hubStatus,
         hubStock,
         pendingOutboundQuantity,
         pendingOutboundTripCodes,
         effectiveHubStock,
+        pendingInboundQuantity,
+        pendingInboundTripCodes,
+        hasPendingInboundTrip,
       });
     }
     return map;
@@ -366,7 +377,7 @@ export class WarehouseService {
       }
       if (flowUpper === 'OUTBOUND_LOOKUP') {
         q.andWhere(
-          `(${statusExpr} IN (${sqlList(STORED_STATUSES)}) OR (${statusExpr} IN (${sqlList(DRAFT_LIKE_STATUSES)}) AND NOT EXISTS (SELECT 1 FROM "trip" inbt WHERE inbt."orderId" = order.id AND inbt."type" = 'INBOUND' AND inbt."deletedAt" IS NULL)))`,
+          `(${statusExpr} IN (${sqlList(STORED_STATUSES)}) OR ${statusExpr} IN (${sqlList(DRAFT_LIKE_STATUSES)}))`,
         );
       } else if (isAllStatus && flowUpper === 'INBOUND') {
         // Only items physically in or inbound to the warehouse (exclude departed ones)
@@ -814,6 +825,9 @@ export class WarehouseService {
         pendingOutboundQuantity: view ? view.pendingOutboundQuantity : 0,
         pendingOutboundTripCodes: view ? view.pendingOutboundTripCodes : [],
         effectiveHubStock: view ? view.effectiveHubStock : null,
+        pendingInboundQuantity: view ? view.pendingInboundQuantity : 0,
+        pendingInboundTripCodes: view ? view.pendingInboundTripCodes : [],
+        hasPendingInboundTrip: view ? view.hasPendingInboundTrip : false,
         effectiveStock: effectiveStock,
         isContractLocked: !DRAFT_LIKE_STATUSES.includes(item.status),
         inboundDate: inboundDate ? new Date(inboundDate).toISOString() : null,
@@ -5841,18 +5855,27 @@ export class WarehouseService {
       .getMany();
 
     const orderIds = orders.map((o) => o.id);
-    const pendingAllocMap =
-      await this.ledgerService.getBatchPendingOutboundAllocations(
+    const [pendingAllocMap, pendingInboundMap] = await Promise.all([
+      this.ledgerService.getBatchPendingOutboundAllocations(
         orderIds,
         currentHubId,
         tripCode || undefined,
-      );
+      ),
+      this.ledgerService.getBatchPendingInboundAllocations(
+        orderIds,
+        currentHubId,
+      ),
+    ]);
 
     const availableOrders = orders
       .map((order) => {
         const pending = pendingAllocMap.get(order.id);
         const pendingOutboundQuantity = pending?.pendingQty ?? 0;
         const pendingOutboundTripCodes = pending?.tripCodes ?? [];
+        const pendingInbound = pendingInboundMap.get(order.id);
+        const pendingInboundQuantity = pendingInbound?.pendingQty ?? 0;
+        const pendingInboundTripCodes = pendingInbound?.tripCodes ?? [];
+        const hasPendingInboundTrip = pendingInboundTripCodes.length > 0;
         const baseStock = Number(
           order.remainingQuantity ?? order.totalQuantity ?? 0,
         );
@@ -5863,6 +5886,9 @@ export class WarehouseService {
         (order as any).pendingOutboundQuantity = pendingOutboundQuantity;
         (order as any).pendingOutboundTripCodes = pendingOutboundTripCodes;
         (order as any).effectiveHubStock = effectiveHubStock;
+        (order as any).pendingInboundQuantity = pendingInboundQuantity;
+        (order as any).pendingInboundTripCodes = pendingInboundTripCodes;
+        (order as any).hasPendingInboundTrip = hasPendingInboundTrip;
         return order;
       })
       .filter((order) => (order as any).effectiveHubStock > 0);

@@ -219,6 +219,39 @@ export class OperationalLedgerService {
   /**
    * Batch calculation of pending outbound allocation for multiple orders at a hub.
    */
+  /**
+   * Batch calculation of pending inbound allocations (draft/pending inbound trips) for multiple orders at a hub.
+   */
+  async getBatchPendingInboundAllocations(
+    orderIds: number[],
+    hubId?: number | null,
+    manager?: EntityManager,
+  ): Promise<Map<number, { pendingQty: number; tripCodes: string[] }>> {
+    const map = new Map<number, { pendingQty: number; tripCodes: string[] }>();
+    if (orderIds.length === 0) return map;
+    const em = this.em(manager);
+    const rows = await em.query(
+      `SELECT "orderId",
+              COALESCE(SUM(COALESCE("quantityAllocated", 0)), 0)::int AS "pendingQty",
+              array_agg(DISTINCT "tripCode") FILTER (WHERE "tripCode" IS NOT NULL AND COALESCE("quantityAllocated", 0) > 0) AS "tripCodes"
+       FROM "trip"
+       WHERE "orderId" = ANY($1)
+         AND "status" = 'PENDING'
+         AND "type" = 'INBOUND'
+         AND "deletedAt" IS NULL
+         ${hubId ? 'AND ("originHubId" = $2 OR "originHubId" IS NULL)' : ''}
+       GROUP BY "orderId"`,
+      hubId ? [orderIds, hubId] : [orderIds],
+    );
+    for (const r of rows) {
+      map.set(Number(r.orderId), {
+        pendingQty: Number(r.pendingQty) || 0,
+        tripCodes: r.tripCodes || [],
+      });
+    }
+    return map;
+  }
+
   async getBatchPendingOutboundAllocations(
     orderIds: number[],
     hubId: number | null | undefined,
