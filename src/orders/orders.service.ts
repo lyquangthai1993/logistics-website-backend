@@ -441,6 +441,29 @@ export class OrdersService {
       );
     }
 
+    const pendingInboundTrips = (order.trips || []).filter(
+      (t: any) =>
+        t &&
+        t.type === 'INBOUND' &&
+        (t.status === 'PENDING' || t.status === 'WAITING') &&
+        !t.deletedAt,
+    );
+    const pendingInboundTripCodes = Array.from(
+      new Set(
+        pendingInboundTrips
+          .map((t: any) => t.tripCode)
+          .filter((tc: any) => Boolean(tc)),
+      ),
+    );
+    const pendingInboundQuantity = pendingInboundTrips.reduce(
+      (sum: number, t: any) => sum + (Number(t.quantityAllocated) || 0),
+      0,
+    );
+
+    (order as any).pendingInboundTripCodes = pendingInboundTripCodes;
+    (order as any).pendingInboundQuantity = pendingInboundQuantity;
+    (order as any).hasPendingInboundTrip = pendingInboundTripCodes.length > 0;
+
     return order;
   }
 
