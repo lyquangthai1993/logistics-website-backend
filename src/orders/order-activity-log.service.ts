@@ -189,10 +189,7 @@ export class OrderActivityLogService {
   /**
    * Retrieve chronological activity logs for an orderCode.
    */
-  async getActivityLogs(
-    orderCode: string,
-    orderId?: number,
-  ): Promise<OrderActivityLogEntity[]> {
+  async getActivityLogs(orderCode: string, orderId?: number): Promise<any[]> {
     const qb = this.activityLogRepo
       .createQueryBuilder('log')
       .where('log.orderCode = :orderCode', { orderCode })
@@ -202,7 +199,41 @@ export class OrderActivityLogService {
       qb.orWhere('log.orderId = :orderId', { orderId });
     }
 
-    return qb.getMany();
+    const logs = await qb.getMany();
+    if (!logs || logs.length === 0) return [];
+
+    const actorUserIds = Array.from(
+      new Set(
+        logs
+          .map((l) => Number(l.actorUserId))
+          .filter((id) => Boolean(id) && id > 0),
+      ),
+    );
+
+    const userMap = new Map<number, string>();
+    if (actorUserIds.length > 0) {
+      const userRepo = this.activityLogRepo.manager.getRepository(UserEntity);
+      const users = await userRepo
+        .createQueryBuilder('u')
+        .select(['u.id', 'u.username', 'u.email'])
+        .where('u.id IN (:...actorUserIds)', { actorUserIds })
+        .getMany();
+
+      users.forEach((u) => {
+        if (u.username) {
+          userMap.set(u.id, u.username);
+        }
+      });
+    }
+
+    return logs.map((log) => {
+      const username = userMap.get(Number(log.actorUserId));
+      return {
+        ...log,
+        actorUsername:
+          username || (log.actorEmail ? log.actorEmail.split('@')[0] : null),
+      };
+    });
   }
 
   /**
