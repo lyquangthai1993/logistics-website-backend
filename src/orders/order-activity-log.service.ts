@@ -307,10 +307,24 @@ export class OrderActivityLogService {
 
     // If transactions exist, the real totalQuantity & inboundQuantity must match actual inbound transactions
     if (activeTxs.length > 0) {
+      // Kiểm tra xem đơn hàng còn các chuyến xe nháp khác (status = PENDING) vẫn đang được lên kế hoạch không
+      const pendingTripsRes = manager
+        ? await manager.query(
+            `SELECT COALESCE(SUM("quantityAllocated"), 0)::int as "pendingQty"
+             FROM "trip" WHERE "orderId" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL`,
+            [primaryOrder.id],
+          )
+        : await this.orderRepo.manager.query(
+            `SELECT COALESCE(SUM("quantityAllocated"), 0)::int as "pendingQty"
+             FROM "trip" WHERE "orderId" = $1 AND "status" = 'PENDING' AND "deletedAt" IS NULL`,
+            [primaryOrder.id],
+          );
+      const pendingQty = Number(pendingTripsRes[0]?.pendingQty) || 0;
+
       primaryOrder.inboundQuantity = totalInbound;
       primaryOrder.outboundQuantity = totalOutbound;
       primaryOrder.remainingQuantity = exactRemaining;
-      primaryOrder.totalQuantity = totalInbound; // Exact physical quantity received
+      primaryOrder.totalQuantity = totalInbound + pendingQty;
       if (exactRemaining === 0 && totalOutbound > 0) {
         primaryOrder.status = 'COMPLETED_INBOUND';
       } else if (totalInbound > 0) {
