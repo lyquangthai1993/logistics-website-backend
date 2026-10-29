@@ -215,23 +215,31 @@ export class OrderActivityLogService {
       const userRepo = this.activityLogRepo.manager.getRepository(UserEntity);
       const users = await userRepo
         .createQueryBuilder('u')
-        .select(['u.id', 'u.username', 'u.email'])
+        .select(['u.id', 'u.username', 'u.email', 'u.firstName', 'u.lastName'])
         .where('u.id IN (:...actorUserIds)', { actorUserIds })
         .getMany();
 
       users.forEach((u) => {
-        if (u.username) {
-          userMap.set(u.id, u.username);
+        const fullName = [u.firstName, u.lastName]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        const displayName =
+          fullName || u.username || (u.email ? u.email.split('@')[0] : null);
+        if (displayName) {
+          userMap.set(u.id, displayName);
         }
       });
     }
 
     return logs.map((log) => {
-      const username = userMap.get(Number(log.actorUserId));
+      const displayName = userMap.get(Number(log.actorUserId));
       return {
         ...log,
+        actorName:
+          displayName || (log.actorEmail ? log.actorEmail.split('@')[0] : null),
         actorUsername:
-          username || (log.actorEmail ? log.actorEmail.split('@')[0] : null),
+          displayName || (log.actorEmail ? log.actorEmail.split('@')[0] : null),
       };
     });
   }
