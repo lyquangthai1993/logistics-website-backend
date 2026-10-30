@@ -11,6 +11,13 @@ export class DriverSeedService {
   ) {}
 
   async run() {
+    const driverCount = await this.repository.count();
+    if (driverCount > 0) {
+      console.log(
+        "ℹ️ Drivers already exist in database. Skipping DriverSeedService to preserve operational data.",
+      );
+      return;
+    }
     const seedDrivers = [
       {
         fullName: 'Nguyễn Văn Tài',
