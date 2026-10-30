@@ -11,6 +11,13 @@ export class HubSeedService {
   ) {}
 
   async run() {
+    const hubCount = await this.repository.count();
+    if (hubCount > 0) {
+      console.log(
+        'ℹ️ Hubs already exist in database. Skipping HubSeedService to preserve operational data.',
+      );
+      return;
+    }
     const seedHubs = [
       // ── Hub Cấp 1 (Main Hubs) ──
       {
@@ -18,9 +25,10 @@ export class HubSeedService {
         legacyCodes: ['HUB-SGN-01'],
         name: 'Andromeda Hub - HCM',
         city: 'TP. Hồ Chí Minh',
-        address: 'Khu Công Nghệ Cao, TP. Thủ Đức, TP. Hồ Chí Minh',
-        contactPhone: '028-3736-8888',
-        managerName: 'Lê Hoàng Nam',
+        address:
+          'Số 16 Đường 15, Khu chế xuất Linh Trung, Phường Linh Xuân, TP. Hồ Chí Minh',
+        contactPhone: '0367476197',
+        managerName: 'MAI CÔNG ĐỨC',
         isActive: true,
       },
       {
@@ -28,9 +36,10 @@ export class HubSeedService {
         legacyCodes: ['HUB-DAD-01'],
         name: 'Magellan Hub - Đà Nẵng',
         city: 'Đà Nẵng',
-        address: 'KCN Hòa Khánh, Quận Liên Chiểu, TP. Đà Nẵng',
-        contactPhone: '0236-3732-555',
-        managerName: 'Trần Đình Kho',
+        address:
+          'Đường số 2, Khu công nghiệp Hòa Cầm, phường Cẩm Lệ, TP Đà Nẵng',
+        contactPhone: '0969336292',
+        managerName: 'ĐỖ QUỐC THIỆP',
         isActive: true,
       },
       {
@@ -38,9 +47,9 @@ export class HubSeedService {
         legacyCodes: ['HUB-HAN-01'],
         name: 'Polaris Hub - Hưng Yên',
         city: 'Hưng Yên',
-        address: 'KCN Thăng Long II, Huyện Mỹ Hào, Tỉnh Hưng Yên',
-        contactPhone: '0221-3974-888',
-        managerName: 'Nguyễn Văn Quản',
+        address: 'Văn Giang, Hưng Yên',
+        contactPhone: '0966839361',
+        managerName: 'NGUYỄN THANH TÙNG',
         isActive: true,
       },
       // ── Hub Cấp 2 (34 Tuyến Xe Bo ứng với 34 Tỉnh Thành Việt Nam sau sắp xếp 1/7/2025-2026) ──
@@ -418,17 +427,8 @@ export class HubSeedService {
       });
 
       if (existing) {
-        existing.code = h.code;
-        existing.orderCodePrefix = prefix;
-        existing.level = level;
-        existing.name = h.name;
-        existing.city = h.city;
-        existing.address = h.address;
-        existing.contactPhone = h.contactPhone;
-        existing.managerName = h.managerName;
-        existing.isActive = h.isActive;
-        existing.deletedAt = null;
-        await this.repository.save(existing);
+        // Preserve all user-managed operational data (address, phone, manager, name)
+        continue;
       } else {
         await this.repository.save(
           this.repository.create({
