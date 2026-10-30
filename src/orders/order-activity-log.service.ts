@@ -98,8 +98,13 @@ export class OrderActivityLogService {
       });
 
       const saved = await repo.save(log);
+      const qtyStr =
+        dto.quantity !== null && dto.quantity !== undefined
+          ? ` Qty=${dto.quantity}`
+          : '';
+      const tripStr = dto.tripCode ? ` Trip=${dto.tripCode}` : '';
       this.logger.log(
-        `[AUDIT] Action=${dto.action} Code=${dto.orderCode} User=${dto.actorEmail} Hub=${resolvedHubId} Reason=${dto.reason || 'N/A'}`,
+        `[AUDIT] Action=${dto.action} Code=${dto.orderCode}${qtyStr}${tripStr} User=${dto.actorEmail} Hub=${resolvedHubId} Reason=${dto.reason || 'N/A'}`,
       );
       return saved;
     } catch (err: any) {

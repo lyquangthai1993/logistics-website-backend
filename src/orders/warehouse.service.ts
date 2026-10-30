@@ -1533,6 +1533,33 @@ export class WarehouseService {
             performedByUserId: user.id,
           }),
         );
+
+        await this.activityLogService.safeLogActivity(
+          {
+            orderId: savedOrder.id,
+            orderCode: savedOrder.orderCode,
+            action: OrderActivityAction.INBOUND_CONFIRMED,
+            actorUserId: Number(user?.id || 0),
+            actorEmail: user?.email || undefined,
+            hubId: Number(originHubId || savedOrder.currentHubId || 0),
+            hubName: originHubName || savedOrder.originHub || 'N/A Hub',
+            tripCode: finalTripCode || null,
+            quantity: finalQuantity,
+            reason: `Tiếp nhận nhập kho ${finalQuantity} kiện${finalTripCode ? ` chuyến ${finalTripCode}` : ''}${plate ? ` (xe ${plate})` : ''}`,
+            newValues: {
+              totalQuantity: savedOrder.totalQuantity,
+              inboundQuantity: savedOrder.inboundQuantity,
+              outboundQuantity: savedOrder.outboundQuantity,
+              remainingQuantity: savedOrder.remainingQuantity,
+              status: savedOrder.status,
+            },
+          },
+          manager,
+        );
+
+        this.logger.log(
+          `[INBOUND CREATED] Đơn ${savedOrder.orderCode} (${finalQuantity} kiện)${finalTripCode ? ` chuyến ${finalTripCode}` : ''}${plate ? ` xe ${plate}` : ''} tiếp nhận nhập kho thành công bởi ${user?.email || 'N/A'} tại Hub ${originHubId || 'N/A'}`,
+        );
       }
 
       return savedOrder;
@@ -1926,6 +1953,48 @@ export class WarehouseService {
             userId: user.id,
           },
           manager,
+        );
+      }
+
+      if (!allDraft) {
+        for (let idx = 0; idx < itemMetas.length; idx++) {
+          const meta = itemMetas[idx];
+          const savedOrder = savedOrdersMap.get(meta.orderCode);
+          if (savedOrder && !DRAFT_LIKE_STATUSES.includes(savedOrder.status)) {
+            await this.activityLogService.safeLogActivity(
+              {
+                orderId: savedOrder.id,
+                orderCode: savedOrder.orderCode,
+                action: OrderActivityAction.INBOUND_CONFIRMED,
+                actorUserId: Number(user?.id || 0),
+                actorEmail: user?.email || undefined,
+                hubId: Number(originHubId || savedOrder.currentHubId || 0),
+                hubName: originHubName || savedOrder.originHub || 'N/A Hub',
+                tripCode: sharedTripCode || null,
+                quantity: meta.qty,
+                reason: `Tiếp nhận nhập kho ${meta.qty} kiện chuyến ${sharedTripCode}${plate ? ` (xe ${plate})` : ''}`,
+                newValues: {
+                  totalQuantity: savedOrder.totalQuantity,
+                  inboundQuantity: savedOrder.inboundQuantity,
+                  outboundQuantity: savedOrder.outboundQuantity,
+                  remainingQuantity: savedOrder.remainingQuantity,
+                  status: savedOrder.status,
+                },
+              },
+              manager,
+            );
+          }
+        }
+
+        const orderSummaryList = savedOrders
+          .map(
+            (o) =>
+              `${o.orderCode} (${o.inboundQuantity || o.totalQuantity} kiện)`,
+          )
+          .join(', ');
+        const totalBatchQty = itemMetas.reduce((sum, m) => sum + m.qty, 0);
+        this.logger.log(
+          `[INBOUND BATCH CREATED] Chuyến ${sharedTripCode}${plate ? ` (xe ${plate})` : ''} tiếp nhận nhập kho ${savedOrders.length} đơn (${totalBatchQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${originHubId || 'N/A'}: ${orderSummaryList}`,
         );
       }
     });
@@ -2756,6 +2825,7 @@ export class WarehouseService {
         }
         (order as any).deliveryAddress = deliv;
         (order as any).unit = 'Kiện';
+        (order as any).thisInboundQty = actualQty;
         savedOrders.push(order);
 
         // Link the order to the vehicle trip (allocation row) and sync allocated metrics
@@ -2995,6 +3065,11 @@ export class WarehouseService {
 
       if (!isKeepStatus) {
         for (const ord of savedOrders) {
+          const thisInboundQty =
+            (ord as any).thisInboundQty ??
+            ord.inboundQuantity ??
+            ord.totalQuantity ??
+            1;
           await this.activityLogService.safeLogActivity(
             {
               orderId: ord.id,
@@ -3005,8 +3080,8 @@ export class WarehouseService {
               hubId: Number(hubId || ord.currentHubId || ord.originHubId || 0),
               hubName: hubName || ord.originHub || 'N/A Hub',
               tripCode: sharedTripCode || null,
-              quantity: ord.inboundQuantity ?? ord.totalQuantity ?? 1,
-              reason: `Xác nhận nhập kho${sharedTripCode ? ` chuyến ${sharedTripCode}` : ''}${inboundPlate ? ` (xe ${inboundPlate})` : ''}`,
+              quantity: thisInboundQty,
+              reason: `Xác nhận nhập kho ${thisInboundQty} kiện${sharedTripCode ? ` chuyến ${sharedTripCode}` : ''}${inboundPlate ? ` (xe ${inboundPlate})` : ''}`,
               newValues: {
                 totalQuantity: ord.totalQuantity,
                 inboundQuantity: ord.inboundQuantity,
@@ -3018,6 +3093,27 @@ export class WarehouseService {
             manager,
           );
         }
+
+        const orderSummaryList = savedOrders
+          .map(
+            (o) =>
+              `${o.orderCode} (${(o as any).thisInboundQty ?? o.inboundQuantity ?? o.totalQuantity ?? 1} kiện)`,
+          )
+          .join(', ');
+        const totalInboundQty = savedOrders.reduce(
+          (sum, o) =>
+            sum +
+            Number(
+              (o as any).thisInboundQty ??
+                o.inboundQuantity ??
+                o.totalQuantity ??
+                1,
+            ),
+          0,
+        );
+        this.logger.log(
+          `[INBOUND CONFIRMED] ${sharedTripCode ? `Chuyến ${sharedTripCode} ` : ''}${inboundPlate ? `(xe ${inboundPlate}) ` : ''}nhập kho thành công ${savedOrders.length} đơn (${totalInboundQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${hubId || 'N/A'}: ${orderSummaryList}`,
+        );
       }
 
       return {
@@ -3295,6 +3391,7 @@ export class WarehouseService {
         dto.dispatchDate || new Date().toISOString().split('T')[0];
 
       let createdTrip: TripEntity | undefined;
+      const itemExportQtyMap = new Map<number, number>();
 
       for (const order of orders) {
         const item = this.mergeOutboundItemsForOrder(dto.items, order);
@@ -3328,6 +3425,8 @@ export class WarehouseService {
           item && item.quantityToExport !== undefined
             ? Number(item.quantityToExport)
             : effectiveAvailable;
+
+        itemExportQtyMap.set(order.id, qtyToExport);
 
         if (qtyToExport <= 0) {
           throw new UnprocessableEntityException(
@@ -3532,6 +3631,8 @@ export class WarehouseService {
       }
 
       for (const ord of saved) {
+        const thisExportQty =
+          itemExportQtyMap.get(ord.id) ?? ord.outboundQuantity ?? 0;
         await this.activityLogService.safeLogActivity(
           {
             orderId: ord.id,
@@ -3544,8 +3645,8 @@ export class WarehouseService {
             ),
             hubName: ord.originHub || 'N/A Hub',
             tripCode: tripCode || null,
-            quantity: ord.outboundQuantity ?? 0,
-            reason: `Xác nhận xuất kho chuyến ${tripCode}${dto.licensePlate ? ` (xe ${dto.licensePlate})` : ''}`,
+            quantity: thisExportQty,
+            reason: `Xác nhận xuất kho ${thisExportQty} kiện chuyến ${tripCode}${dto.licensePlate ? ` (xe ${dto.licensePlate})` : ''}`,
             newValues: {
               totalQuantity: ord.totalQuantity,
               inboundQuantity: ord.inboundQuantity,
@@ -3557,6 +3658,20 @@ export class WarehouseService {
           manager,
         );
       }
+
+      const orderSummaryList = saved
+        .map(
+          (o) =>
+            `${o.orderCode} (${itemExportQtyMap.get(o.id) ?? o.outboundQuantity ?? 0} kiện)`,
+        )
+        .join(', ');
+      const totalExportedQty = Array.from(itemExportQtyMap.values()).reduce(
+        (sum, q) => sum + q,
+        0,
+      );
+      this.logger.log(
+        `[OUTBOUND CONFIRMED] Chuyến ${tripCode}${dto.licensePlate ? ` (xe ${dto.licensePlate})` : ''} xuất kho thành công ${saved.length} đơn (${totalExportedQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${originHubId || 'N/A'}: ${orderSummaryList}`,
+      );
 
       return {
         updatedCount: saved.length,
