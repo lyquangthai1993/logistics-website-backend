@@ -14,6 +14,13 @@ export class VehicleSeedService {
   ) {}
 
   async run() {
+    const vehicleCount = await this.repository.count();
+    if (vehicleCount > 0) {
+      console.log(
+        "ℹ️ Vehicles already exist in database. Skipping VehicleSeedService to preserve operational data.",
+      );
+      return;
+    }
     // Get all hubs for mapping
     const hubs = await this.hubRepository.find();
     const findHubId = (hubCode: string) => {
@@ -353,13 +360,8 @@ export class VehicleSeedService {
       if (!existing) {
         await this.repository.save(this.repository.create(v));
       } else {
-        existing.hubId = v.hubId;
-        existing.currentHub = v.currentHub;
-        existing.model = null; // Không quản lý model, dọn sạch nếu từng tồn tại
-        existing.type = v.type;
-        existing.maxWeight = v.maxWeight;
-        existing.maxVolume = v.maxVolume;
-        await this.repository.save(existing);
+        // Preserve all user-managed operational vehicle data
+        continue;
       }
     }
   }
