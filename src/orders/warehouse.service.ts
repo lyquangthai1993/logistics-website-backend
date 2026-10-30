@@ -1155,16 +1155,30 @@ export class WarehouseService {
     const groupOutboundDestination =
       distinctJoin((it) => it.outboundDestination) || null;
 
+    const isDraftOrPendingGroup =
+      hubStatus === 'DRAFT' ||
+      hubStatus === 'PENDING' ||
+      hubStatus === 'PENDING_INBOUND' ||
+      hubStatus === 'WAITING' ||
+      (totalInbound === 0 && rawStock === 0);
+
+    const effectiveInbound = isDraftOrPendingGroup
+      ? totalInbound
+      : Math.max(totalInbound, normalizedTotalQty);
+
+    const effectiveRemaining = isDraftOrPendingGroup
+      ? 0
+      : (normalizedHubStock ?? Math.max(0, normalizedTotalQty - totalOutbound));
+
     return {
       ...first,
       id: primaryRow.id,
       orderCode,
       goodsDescription: canonicalGoodsDescription,
       totalQuantity: normalizedTotalQty,
-      inboundQuantity: Math.max(totalInbound, normalizedTotalQty),
+      inboundQuantity: effectiveInbound,
       outboundQuantity: totalOutbound,
-      remainingQuantity:
-        normalizedHubStock ?? Math.max(0, normalizedTotalQty - totalOutbound),
+      remainingQuantity: effectiveRemaining,
       totalWeight: round3(sum((it) => it.totalWeight)),
       totalVolume: round3(sum((it) => it.totalVolume)),
       hubStock: normalizedHubStock,
