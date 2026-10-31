@@ -15,6 +15,15 @@ import { CreateOrderActivityLogDto } from './dto/create-order-activity-log.dto';
 
 export { CreateOrderActivityLogDto };
 
+function truncateVarchar(
+  value: string | null | undefined,
+  maxLength: number,
+): string | null {
+  if (value === null || value === undefined) return null;
+  const str = String(value);
+  return str.length > maxLength ? str.slice(0, maxLength) : str;
+}
+
 @Injectable()
 export class OrderActivityLogService {
   private readonly logger = new Logger(OrderActivityLogService.name);
@@ -81,14 +90,14 @@ export class OrderActivityLogService {
 
       const log = repo.create({
         orderId: dto.orderId ?? null,
-        orderCode: dto.orderCode,
-        action: dto.action,
+        orderCode: truncateVarchar(dto.orderCode, 255) || 'UNKNOWN',
+        action: truncateVarchar(String(dto.action), 50) || 'ORDER_UPDATED',
         actorUserId: Number(dto.actorUserId) || 0,
-        actorEmail: dto.actorEmail,
-        actorRole: dto.actorRole ?? null,
+        actorEmail: truncateVarchar(dto.actorEmail, 500),
+        actorRole: truncateVarchar(dto.actorRole ?? null, 255),
         hubId: resolvedHubId,
-        hubName: dto.hubName ?? null,
-        tripCode: dto.tripCode ?? null,
+        hubName: truncateVarchar(dto.hubName ?? null, 1000),
+        tripCode: truncateVarchar(dto.tripCode ?? null, 255),
         oldValues: dto.oldValues ?? null,
         newValues: dto.newValues ?? null,
         quantity: dto.quantity !== undefined ? dto.quantity : null,
@@ -118,7 +127,7 @@ export class OrderActivityLogService {
 
   /**
    * Non-blocking / resilient wrapper for operational workflow hooks (create, inbound, outbound, draft cancel)
-   * so that missing user email/hub metadata never aborts the operational transaction.
+   * so that missing user email/hub metadata or SQL errors never abort the operational transaction.
    */
   async safeLogActivity(
     dto: Partial<CreateOrderActivityLogDto> & {
@@ -127,7 +136,12 @@ export class OrderActivityLogService {
     },
     manager?: EntityManager,
   ): Promise<OrderActivityLogEntity | null> {
+    const savepointName = manager ? 'sp_safe_activity_log' : null;
     try {
+      if (manager && savepointName) {
+        await manager.query(`SAVEPOINT ${savepointName}`);
+      }
+
       const actorUserId = Number(dto.actorUserId) || 0;
       let actorEmail = dto.actorEmail || null;
       let actorRole = dto.actorRole || null;
@@ -163,17 +177,18 @@ export class OrderActivityLogService {
         actorEmail = 'system@spider-express.vn';
       }
 
-      return await this.logActivity(
+      const saved = await this.logActivity(
         {
           orderId: dto.orderId ?? null,
-          orderCode: dto.orderCode,
-          action: dto.action,
+          orderCode: truncateVarchar(dto.orderCode, 255) || 'UNKNOWN',
+          action: truncateVarchar(String(dto.action), 50) || 'ORDER_UPDATED',
           actorUserId,
-          actorEmail,
-          actorRole: actorRole ?? 'OPERATOR',
+          actorEmail:
+            truncateVarchar(actorEmail, 500) || 'system@spider-express.vn',
+          actorRole: truncateVarchar(actorRole ?? 'OPERATOR', 255),
           hubId,
-          hubName: dto.hubName ?? 'N/A Hub',
-          tripCode: dto.tripCode ?? null,
+          hubName: truncateVarchar(dto.hubName ?? 'N/A Hub', 1000),
+          tripCode: truncateVarchar(dto.tripCode ?? null, 255),
           oldValues: dto.oldValues ?? null,
           newValues: dto.newValues ?? null,
           quantity: dto.quantity,
@@ -183,7 +198,19 @@ export class OrderActivityLogService {
         },
         manager,
       );
+
+      if (manager && savepointName) {
+        await manager.query(`RELEASE SAVEPOINT ${savepointName}`);
+      }
+      return saved;
     } catch (err: any) {
+      if (manager && savepointName) {
+        try {
+          await manager.query(`ROLLBACK TO SAVEPOINT ${savepointName}`);
+        } catch {
+          // ignore savepoint rollback error
+        }
+      }
       this.logger.warn(
         `[safeLogActivity] Non-fatal warning for ${dto.orderCode} (${dto.action}): ${err.message}`,
       );

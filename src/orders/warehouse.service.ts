@@ -114,6 +114,15 @@ const normalizeTripCode = (code?: string | null) => {
   return c && c !== '—' ? c : '';
 };
 
+const truncateVarchar = (
+  val: string | null | undefined,
+  maxLen: number,
+): string | null => {
+  if (val === null || val === undefined) return null;
+  const str = String(val);
+  return str.length > maxLen ? str.slice(0, maxLen) : str;
+};
+
 @Injectable()
 export class WarehouseService {
   private readonly logger = new Logger(WarehouseService.name);
@@ -1543,7 +1552,7 @@ export class WarehouseService {
             licensePlate: plate || null,
             driverName: driver || null,
             notes: dto.notes?.trim() || 'Tiếp nhận nhập kho ban đầu',
-            destination: effectiveDeliveryAddr || null,
+            destination: truncateVarchar(effectiveDeliveryAddr || null, 2000),
             performedByUserId: user.id,
           }),
         );
@@ -1932,7 +1941,7 @@ export class WarehouseService {
               licensePlate: plate,
               driverName: driver,
               notes: meta.notes || `Tiếp nhận xe ${plate} - ${sharedTripCode}`,
-              destination: meta.effectiveDeliveryAddr || null,
+              destination: truncateVarchar(meta.effectiveDeliveryAddr || null, 2000),
               performedByUserId: user.id,
             }),
           );
@@ -2261,7 +2270,7 @@ export class WarehouseService {
           notes: isHubOutbound
             ? `Xuất thêm hàng từ ${originHubName} đi ${destinationHubName} trên xe ${licensePlate} (Chuyến ${tripCode})`
             : `Bốc thêm hàng dọc đường tại ${pickupAddr} chở về ${destinationHubName} trên xe ${licensePlate} (Chuyến ${tripCode})`,
-          destination: deliveryAddr,
+          destination: truncateVarchar(deliveryAddr, 2000),
           performedByUserId: user.id,
         }),
       );
@@ -2933,7 +2942,7 @@ export class WarehouseService {
               volume: actualVolume,
               licensePlate: inboundPlate || null,
               driverName: inboundDriver || null,
-              destination: order.destinationHub || order.province || null,
+              destination: truncateVarchar(order.destinationHub || order.province || null, 2000),
               performedByUserId: user.id,
               notes:
                 discrepancy !== 0
@@ -3581,12 +3590,15 @@ export class WarehouseService {
             volume,
             licensePlate: dto.licensePlate || null,
             driverName: dto.driverName || null,
-            destination: isTransferLine
-              ? outboundTargetName
-              : outboundDeliveryAddress ||
-                order.destinationHub ||
-                order.province ||
-                'Giao khách',
+            destination: truncateVarchar(
+              isTransferLine
+                ? outboundTargetName
+                : outboundDeliveryAddress ||
+                    order.destinationHub ||
+                    order.province ||
+                    'Giao khách',
+              2000,
+            ),
             performedByUserId: user.id,
             notes: isTransferLine
               ? `Xuất ${qtyToExport} kiện luân chuyển đến ${outboundTargetName} trên chuyến ${tripCode}`
@@ -3657,7 +3669,7 @@ export class WarehouseService {
             hubId: Number(
               originHubId || ord.currentHubId || ord.originHubId || 0,
             ),
-            hubName: ord.originHub || 'N/A Hub',
+            hubName: truncateVarchar(ord.originHub || 'N/A Hub', 1000) || 'N/A Hub',
             tripCode: tripCode || null,
             quantity: thisExportQty,
             reason: `Xác nhận xuất kho ${thisExportQty} kiện chuyến ${tripCode}${dto.licensePlate ? ` (xe ${dto.licensePlate})` : ''}`,
@@ -6282,7 +6294,7 @@ export class WarehouseService {
             notes:
               dto.notes ||
               `Xuất hàng từ ${currentHubName} lên xe ${licensePlate} (${tripCode}) đi ${orderDestHubName || 'trạm kế tiếp'}`,
-            destination: orderDestHubName || routeDest || '',
+            destination: truncateVarchar(orderDestHubName || routeDest || '', 2000) || '',
             performedByUserId: user.id,
           }),
         );
@@ -6559,7 +6571,7 @@ export class WarehouseService {
             (perm.isCompleted
               ? `[ADMIN ĐIỀU CHUYỂN ĐÍCH] Quản trị viên cập nhật đích đến đơn ${order.orderCode} sang ${destHubName || finalDeliveryAddress || 'Giao khách'} (${dto.deliveryMode})`
               : `[ĐIỀU CHUYỂN ĐÍCH] Cập nhật đích đến đơn ${order.orderCode} sang ${destHubName || finalDeliveryAddress || 'Giao khách'} (${dto.deliveryMode})`),
-          destination: destHubName || finalDeliveryAddress || '',
+          destination: truncateVarchar(destHubName || finalDeliveryAddress || '', 2000) || '',
           performedByUserId: user.id,
         }),
       );
