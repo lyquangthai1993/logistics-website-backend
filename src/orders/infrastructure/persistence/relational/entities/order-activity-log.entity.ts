@@ -62,7 +62,7 @@ export class OrderActivityLogEntity {
   @Column({ type: 'int', nullable: false })
   hubId: number;
 
-  @Column({ type: String, length: 1000, nullable: true })
+  @Column({ type: 'text', nullable: true })
   hubName: string | null;
 
   @Index()
@@ -105,9 +105,6 @@ export class OrderActivityLogEntity {
     }
     if (this.actorRole && this.actorRole.length > 255) {
       this.actorRole = this.actorRole.slice(0, 255);
-    }
-    if (this.hubName && this.hubName.length > 1000) {
-      this.hubName = this.hubName.slice(0, 1000);
     }
     if (this.tripCode && this.tripCode.length > 255) {
       this.tripCode = this.tripCode.slice(0, 255);
