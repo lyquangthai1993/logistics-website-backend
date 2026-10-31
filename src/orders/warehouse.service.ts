@@ -114,9 +114,6 @@ const normalizeTripCode = (code?: string | null) => {
   return c && c !== '—' ? c : '';
 };
 
-  const str = String(val);
-  return str.length > maxLen ? str.slice(0, maxLen) : str;
-};
 
 @Injectable()
 export class WarehouseService {
