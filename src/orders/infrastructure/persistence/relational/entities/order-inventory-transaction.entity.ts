@@ -1,4 +1,6 @@
 import {
+  BeforeInsert,
+  BeforeUpdate,
   Column,
   Entity,
   Index,
@@ -59,13 +61,13 @@ export class OrderInventoryTransactionEntity extends AbstractBaseEntity {
   @Column({ type: 'float', nullable: false, default: 0 })
   volume: number;
 
-  @Column({ type: String, nullable: true })
+  @Column({ type: String, length: 255, nullable: true })
   licensePlate: string | null;
 
-  @Column({ type: String, nullable: true })
+  @Column({ type: String, length: 255, nullable: true })
   driverName: string | null;
 
-  @Column({ type: String, nullable: true })
+  @Column({ type: String, length: 2000, nullable: true })
   destination: string | null;
 
   @Column({ type: Number, nullable: true })
@@ -113,4 +115,27 @@ export class OrderInventoryTransactionEntity extends AbstractBaseEntity {
 
   @Column({ type: 'text', nullable: true })
   discrepancyReason: string | null;
+
+  @BeforeInsert()
+  @BeforeUpdate()
+  sanitizeVarcharLengths() {
+    if (this.type && this.type.length > 50) {
+      this.type = this.type.slice(0, 50);
+    }
+    if (this.licensePlate && this.licensePlate.length > 255) {
+      this.licensePlate = this.licensePlate.slice(0, 255);
+    }
+    if (this.driverName && this.driverName.length > 255) {
+      this.driverName = this.driverName.slice(0, 255);
+    }
+    if (this.destination && this.destination.length > 2000) {
+      this.destination = this.destination.slice(0, 2000);
+    }
+    if (this.invoiceCode && this.invoiceCode.length > 50) {
+      this.invoiceCode = this.invoiceCode.slice(0, 50);
+    }
+    if (this.tripCode && this.tripCode.length > 50) {
+      this.tripCode = this.tripCode.slice(0, 50);
+    }
+  }
 }
