@@ -67,7 +67,7 @@ export class OrderInventoryTransactionEntity extends AbstractBaseEntity {
   @Column({ type: String, length: 255, nullable: true })
   driverName: string | null;
 
-  @Column({ type: String, length: 2000, nullable: true })
+  @Column({ type: 'text', nullable: true })
   destination: string | null;
 
   @Column({ type: Number, nullable: true })
@@ -127,9 +127,6 @@ export class OrderInventoryTransactionEntity extends AbstractBaseEntity {
     }
     if (this.driverName && this.driverName.length > 255) {
       this.driverName = this.driverName.slice(0, 255);
-    }
-    if (this.destination && this.destination.length > 2000) {
-      this.destination = this.destination.slice(0, 2000);
     }
     if (this.invoiceCode && this.invoiceCode.length > 50) {
       this.invoiceCode = this.invoiceCode.slice(0, 50);

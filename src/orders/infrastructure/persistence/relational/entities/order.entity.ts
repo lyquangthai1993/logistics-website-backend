@@ -74,7 +74,7 @@ export class OrderEntity extends AbstractBaseEntity {
   @Column({ type: String, length: 500, nullable: true })
   province: string | null;
 
-  @Column({ type: String, length: 1000, nullable: true })
+  @Column({ type: 'text', nullable: true })
   accompanyingDocs: string | null;
 
   // ── Hub FK (Phase 1: nullable, backward-compat with VARCHAR originHub/destinationHub) ──
@@ -137,9 +137,6 @@ export class OrderEntity extends AbstractBaseEntity {
   sanitizeVarcharLengths() {
     if (this.province && this.province.length > 500) {
       this.province = this.province.slice(0, 500);
-    }
-    if (this.accompanyingDocs && this.accompanyingDocs.length > 1000) {
-      this.accompanyingDocs = this.accompanyingDocs.slice(0, 1000);
     }
     if (this.currentTripCode && this.currentTripCode.length > 50) {
       this.currentTripCode = this.currentTripCode.slice(0, 50);
