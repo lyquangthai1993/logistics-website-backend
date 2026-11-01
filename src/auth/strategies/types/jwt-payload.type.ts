@@ -4,6 +4,7 @@ import { User } from '../../../users/domain/user';
 export type JwtPayloadType = Pick<User, 'id' | 'role'> & {
   email?: string | null;
   sessionId: Session['id'];
+  impersonatedBy?: User['id'];
   iat: number;
   exp: number;
 };

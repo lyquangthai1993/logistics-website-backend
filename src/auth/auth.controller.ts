@@ -1,9 +1,11 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Request,
   Post,
   UseGuards,
@@ -14,7 +16,12 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
-import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOkResponse,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthEmailLoginDto } from './dto/auth-email-login.dto';
 import { AuthForgotPasswordDto } from './dto/auth-forgot-password.dto';
@@ -30,6 +37,9 @@ import { RefreshResponseDto } from './dto/refresh-response.dto';
 import type { RequestWithUser } from '../utils/types/request-with-user.type';
 import type { JwtPayloadType } from './strategies/types/jwt-payload.type';
 import type { JwtRefreshPayloadType } from './strategies/types/jwt-refresh-payload.type';
+import { Roles } from '../roles/roles.decorator';
+import { RoleEnum } from '../roles/roles.enum';
+import { RolesGuard } from '../roles/roles.guard';
 
 const REFRESH_COOKIE_OPTIONS = {
   httpOnly: true,
@@ -66,6 +76,58 @@ export class AuthController {
     @Res({ passthrough: true }) response: Response,
   ): Promise<LoginResponseDto> {
     const data = await this.service.validateLogin(loginDto);
+    response.cookie('refreshToken', data.refreshToken, REFRESH_COOKIE_OPTIONS);
+    return data;
+  }
+
+  @ApiBearerAuth()
+  @SerializeOptions({
+    groups: ['me', 'admin'],
+  })
+  @Roles(RoleEnum.SUPER_ADMIN)
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Post('login-as/:userId')
+  @ApiParam({
+    name: 'userId',
+    type: String,
+    required: true,
+  })
+  @ApiOkResponse({
+    type: LoginResponseDto,
+  })
+  @HttpCode(HttpStatus.OK)
+  public async loginAsByParam(
+    @Request() request: RequestWithUser<JwtPayloadType>,
+    @Param('userId') userId: string,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<LoginResponseDto> {
+    const data = await this.service.loginAs(request.user, userId);
+    response.cookie('refreshToken', data.refreshToken, REFRESH_COOKIE_OPTIONS);
+    return data;
+  }
+
+  @ApiBearerAuth()
+  @SerializeOptions({
+    groups: ['me', 'admin'],
+  })
+  @Roles(RoleEnum.SUPER_ADMIN)
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Post('login-as')
+  @ApiOkResponse({
+    type: LoginResponseDto,
+  })
+  @HttpCode(HttpStatus.OK)
+  public async loginAsByBody(
+    @Request() request: RequestWithUser<JwtPayloadType>,
+    @Body() body: { userId?: string | number },
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<LoginResponseDto> {
+    if (!body?.userId) {
+      throw new BadRequestException(
+        'Vui lòng cung cấp ID người dùng cần đóng vai.',
+      );
+    }
+    const data = await this.service.loginAs(request.user, body.userId);
     response.cookie('refreshToken', data.refreshToken, REFRESH_COOKIE_OPTIONS);
     return data;
   }
