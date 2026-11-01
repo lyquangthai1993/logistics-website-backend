@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   HttpStatus,
   Injectable,
   NotFoundException,
@@ -94,6 +95,74 @@ export class AuthService {
       token,
       tokenExpires,
       user,
+    };
+  }
+
+  async loginAs(
+    adminJwtPayload: JwtPayloadType,
+    targetUserId: User['id'],
+  ): Promise<LoginResponseDto> {
+    const adminRoleId =
+      typeof adminJwtPayload?.role === 'object'
+        ? Number(adminJwtPayload.role?.id)
+        : Number(adminJwtPayload?.role);
+
+    if (adminRoleId !== RoleEnum.SUPER_ADMIN) {
+      throw new ForbiddenException({
+        status: HttpStatus.FORBIDDEN,
+        message:
+          'Chỉ Super Admin mới có quyền đóng vai (Login as) tài khoản người dùng.',
+      });
+    }
+
+    const targetUser = await this.usersService.findById(targetUserId);
+
+    if (!targetUser) {
+      throw new NotFoundException({
+        status: HttpStatus.NOT_FOUND,
+        message: 'Không tìm thấy tài khoản người dùng cần đóng vai.',
+        error: 'userNotFound',
+      });
+    }
+
+    if (
+      targetUser.status?.id !== undefined &&
+      String(targetUser.status.id) === String(StatusEnum.inactive)
+    ) {
+      throw new UnprocessableEntityException({
+        status: HttpStatus.UNPROCESSABLE_ENTITY,
+        message:
+          'Không thể đóng vai vào tài khoản đang ở trạng thái ngừng hoạt động.',
+        errors: {
+          status: 'userInactive',
+        },
+      });
+    }
+
+    const hash = crypto
+      .createHash('sha256')
+      .update(randomStringGenerator())
+      .digest('hex');
+
+    const session = await this.sessionService.create({
+      user: targetUser,
+      hash,
+    });
+
+    const { token, refreshToken, tokenExpires } = await this.getTokensData({
+      id: targetUser.id,
+      role: targetUser.role,
+      email: targetUser.email,
+      sessionId: session.id,
+      hash,
+      impersonatedBy: adminJwtPayload.id,
+    });
+
+    return {
+      refreshToken,
+      token,
+      tokenExpires,
+      user: targetUser,
     };
   }
 
@@ -606,6 +675,7 @@ export class AuthService {
     email?: User['email'];
     sessionId: Session['id'];
     hash: Session['hash'];
+    impersonatedBy?: User['id'];
   }) {
     const tokenExpiresIn = this.configService.getOrThrow('auth.expires', {
       infer: true,
@@ -620,6 +690,9 @@ export class AuthService {
           role: data.role,
           email: data.email,
           sessionId: data.sessionId,
+          ...(data.impersonatedBy !== undefined
+            ? { impersonatedBy: data.impersonatedBy }
+            : {}),
         },
         {
           secret: this.configService.getOrThrow('auth.secret', { infer: true }),
