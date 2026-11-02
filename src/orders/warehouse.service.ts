@@ -5142,9 +5142,17 @@ export class WarehouseService {
           if (trip.tripCode && tripCodes.includes(trip.tripCode)) {
             const list = ordersByTripCode.get(trip.tripCode) || [];
             if (!list.some((o) => o.id === order.id)) {
+              const tripDestHubId =
+                trip.destinationHubId ?? order.destinationHubId ?? null;
+              const tripDestEntity =
+                (trip as any).destinationHub ||
+                order.destinationHubEntity ||
+                null;
               const tripEnrichedOrder = {
                 ...enrichedOrder,
                 tripId: trip.id,
+                destinationHubId: tripDestHubId,
+                destinationHubEntity: tripDestEntity,
                 quantityAllocated:
                   trip.quantityAllocated != null &&
                   Number(trip.quantityAllocated) > 0
@@ -5627,9 +5635,11 @@ export class WarehouseService {
     const completedStop = stops.find(
       (s) => s.status === TripStopStatus.COMPLETED,
     );
+    const pendingStop = stops.find((s) => s.status === TripStopStatus.PENDING);
     const viewerHubId =
-      resolvedUserHubId ??
       (hubIdParam ? Number(hubIdParam) : null) ??
+      resolvedUserHubId ??
+      (pendingStop ? Number(pendingStop.hubId) : null) ??
       (completedStop ? Number(completedStop.hubId) : null) ??
       (stops[0] ? Number(stops[0].hubId) : 2);
 
@@ -5754,7 +5764,8 @@ export class WarehouseService {
           if (deliveryMode === 'DIRECT_CUSTOMER') {
             isForCurrentHub = false;
           } else if (effectiveDestHubId) {
-            isForCurrentHub = effectiveDestHubId === viewerHubId;
+            isForCurrentHub =
+              Number(effectiveDestHubId) === Number(viewerHubId);
           } else if (o.destinationHub) {
             const destLower = o.destinationHub.trim().toLowerCase();
             // Support logistics abbreviations: ĐN = Đà Nẵng, HY = Hưng Yên, HCM = TP. Hồ Chí Minh
