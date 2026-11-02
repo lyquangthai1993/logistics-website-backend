@@ -114,7 +114,6 @@ const normalizeTripCode = (code?: string | null) => {
   return c && c !== '—' ? c : '';
 };
 
-
 @Injectable()
 export class WarehouseService {
   private readonly logger = new Logger(WarehouseService.name);
@@ -4988,7 +4987,8 @@ export class WarehouseService {
                WHERE os."tripCode" = ts."tripCode" AND os."stopType" = 'ORIGIN' AND os."deletedAt" IS NULL
                LIMIT 1) AS "originHubName",
               agg."firstTripId", agg."licensePlate", agg."driverName", agg."pickupDate",
-              agg."ordersCount", agg."ordersForHubCount", agg."totalWeight", agg."totalVolume", agg."totalQuantity"
+              agg."ordersCount", agg."ordersForHubCount", agg."totalWeight", agg."totalVolume", agg."totalQuantity",
+              agg."unloadQuantity", agg."stayQuantity"
        FROM (
          SELECT b."tripCode", b."status", b."hubId", b."isTransfer", b."createdAt"
          FROM base b
@@ -5005,12 +5005,24 @@ export class WarehouseService {
                 MAX(t."pickupDate") AS "pickupDate",
                 COUNT(DISTINCT t."orderId")::int AS "ordersCount",
                 COUNT(DISTINCT t."orderId") FILTER (
-                  WHERE o."destinationHubId" = ts."hubId" OR o."destinationHubId" IS NULL
-                     OR NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" = o."destinationHubId" AND ds."deletedAt" IS NULL)
+                  WHERE COALESCE(t."destinationHubId", o."destinationHubId") = ts."hubId"
+                     OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND ds."deletedAt" IS NULL))
                 )::int AS "ordersForHubCount",
                 COALESCE(SUM(t."weightAllocated"), 0) AS "totalWeight",
                 COALESCE(SUM(t."volumeAllocated"), 0) AS "totalVolume",
-                COALESCE(SUM(COALESCE(t."quantityAllocated", o."totalQuantity", 1)), 0) AS "totalQuantity"
+                COALESCE(SUM(COALESCE(t."quantityAllocated", o."totalQuantity", 1)), 0) AS "totalQuantity",
+                COALESCE(SUM(CASE
+                  WHEN COALESCE(t."destinationHubId", o."destinationHubId") = ts."hubId"
+                    OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND ds."deletedAt" IS NULL))
+                  THEN COALESCE(t."quantityAllocated", o."totalQuantity", 1)
+                  ELSE 0
+                END), 0) AS "unloadQuantity",
+                COALESCE(SUM(CASE
+                  WHEN COALESCE(t."destinationHubId", o."destinationHubId") = ts."hubId"
+                    OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND ds."deletedAt" IS NULL))
+                  THEN 0
+                  ELSE COALESCE(t."quantityAllocated", o."totalQuantity", 1)
+                END), 0) AS "stayQuantity"
          FROM "trip" t
          JOIN "order" o ON o.id = t."orderId" AND o."deletedAt" IS NULL
          WHERE t."tripCode" = ts."tripCode" AND t."deletedAt" IS NULL
@@ -5274,6 +5286,8 @@ export class WarehouseService {
         ordersCount: Number(r.ordersCount) || tripOrders.length,
         remainingOrdersCount: Number(r.ordersForHubCount) || 0,
         totalQuantity: Number(r.totalQuantity) || 0,
+        unloadQuantity: Number(r.unloadQuantity) || 0,
+        stayQuantity: Number(r.stayQuantity) || 0,
         totalWeight: Math.round(Number(r.totalWeight) * 100) / 100,
         totalVolume: Math.round(Number(r.totalVolume) * 1000) / 1000,
         goodsDescription: goodsDesc,
@@ -5818,6 +5832,8 @@ export class WarehouseService {
           destinationHub: resolvedDestHub,
           destinationHubId: effectiveDestHubId,
           destinationHubEntity: resolvedDestEntity,
+          destinationHubName:
+            resolvedDestEntity?.name || resolvedDestHub || null,
           pickupAddress: pickupAddress || resolvedOriginHub || '',
           deliveryAddress: deliveryAddress || resolvedDestHub || '',
           originalDeliveryAddress:
