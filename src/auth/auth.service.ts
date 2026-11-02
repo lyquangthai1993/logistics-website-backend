@@ -110,8 +110,7 @@ export class AuthService {
     if (adminRoleId !== RoleEnum.SUPER_ADMIN) {
       throw new ForbiddenException({
         status: HttpStatus.FORBIDDEN,
-        message:
-          'Chỉ Super Admin mới có quyền đóng vai (Login as) tài khoản người dùng.',
+        message: 'Chỉ Super Admin mới có quyền đóng vai tài khoản người dùng.',
       });
     }
 
