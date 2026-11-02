@@ -81,7 +81,7 @@ export class NotificationsGateway
       // Join room theo userId để emit dễ dàng
       void client.join(`user:${userId}`);
 
-      this.logger.log(`WS connected: userId=${userId} socketId=${client.id}`);
+      // this.logger.log(`WS connected: userId=${userId} socketId=${client.id}`);
     } catch {
       this.logger.warn(`WS [${client.id}]: invalid token → disconnect`);
       client.disconnect();
@@ -98,9 +98,9 @@ export class NotificationsGateway
           this.userSockets.delete(userId);
         }
       }
-      this.logger.log(
-        `WS disconnected: userId=${userId} socketId=${client.id}`,
-      );
+      // this.logger.log(
+      //   `WS disconnected: userId=${userId} socketId=${client.id}`,
+      // );
     }
   }
 
