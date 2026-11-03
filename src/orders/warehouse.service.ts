@@ -1237,6 +1237,32 @@ export class WarehouseService {
    * - Tài khoản thuộc Hub (Non-admin) bị cấm (ném ForbiddenException).
    * - Tài khoản SUPER_ADMIN được phép can thiệp đặc quyền.
    */
+  private async formatHubLogLabel(
+    hubRepo: Repository<HubEntity>,
+    hubId: number | null | undefined,
+    fallbackHubName?: string | null,
+  ): Promise<{ hubName: string | null; label: string }> {
+    let hubName =
+      fallbackHubName &&
+      fallbackHubName !== 'N/A Hub' &&
+      fallbackHubName !== 'Kho' &&
+      fallbackHubName !== 'Hub'
+        ? fallbackHubName.trim()
+        : null;
+    if (hubId && !hubName) {
+      const hubEntity = await hubRepo.findOne({
+        where: { id: Number(hubId) },
+      });
+      if (hubEntity?.name) {
+        hubName = hubEntity.name.trim();
+      }
+    }
+    const label = hubId
+      ? `${hubId}${hubName ? ` (${hubName})` : ''}`
+      : hubName || 'N/A';
+    return { hubName, label };
+  }
+
   async validateTripStopEditPermission(
     user: UserEntity,
     tripCode: string,
@@ -1548,6 +1574,13 @@ export class WarehouseService {
           }),
         );
 
+        const { hubName: resolvedInboundHubName, label: inboundHubLabel } =
+          await this.formatHubLogLabel(
+            hubRepo,
+            originHubId,
+            originHubName || savedOrder.originHub,
+          );
+
         await this.activityLogService.safeLogActivity(
           {
             orderId: savedOrder.id,
@@ -1556,7 +1589,11 @@ export class WarehouseService {
             actorUserId: Number(user?.id || 0),
             actorEmail: user?.email || undefined,
             hubId: Number(originHubId || savedOrder.currentHubId || 0),
-            hubName: originHubName || savedOrder.originHub || 'N/A Hub',
+            hubName:
+              resolvedInboundHubName ||
+              originHubName ||
+              savedOrder.originHub ||
+              'N/A Hub',
             tripCode: finalTripCode || null,
             quantity: finalQuantity,
             reason: `Tiếp nhận nhập kho ${finalQuantity} kiện${finalTripCode ? ` chuyến ${finalTripCode}` : ''}${plate ? ` (xe ${plate})` : ''}`,
@@ -1572,7 +1609,7 @@ export class WarehouseService {
         );
 
         this.logger.log(
-          `[INBOUND CREATED] Đơn ${savedOrder.orderCode} (${finalQuantity} kiện)${finalTripCode ? ` chuyến ${finalTripCode}` : ''}${plate ? ` xe ${plate}` : ''} tiếp nhận nhập kho thành công bởi ${user?.email || 'N/A'} tại Hub ${originHubId || 'N/A'}`,
+          `[INBOUND CREATED] Đơn ${savedOrder.orderCode} (${finalQuantity} kiện)${finalTripCode ? ` chuyến ${finalTripCode}` : ''}${plate ? ` xe ${plate}` : ''} tiếp nhận nhập kho thành công bởi ${user?.email || 'N/A'} tại Hub ${inboundHubLabel}`,
         );
       }
 
@@ -1971,6 +2008,8 @@ export class WarehouseService {
       }
 
       if (!allDraft) {
+        const { hubName: resolvedBatchHubName, label: batchHubLabel } =
+          await this.formatHubLogLabel(hubRepo, originHubId, originHubName);
         for (let idx = 0; idx < itemMetas.length; idx++) {
           const meta = itemMetas[idx];
           const savedOrder = savedOrdersMap.get(meta.orderCode);
@@ -1983,7 +2022,11 @@ export class WarehouseService {
                 actorUserId: Number(user?.id || 0),
                 actorEmail: user?.email || undefined,
                 hubId: Number(originHubId || savedOrder.currentHubId || 0),
-                hubName: originHubName || savedOrder.originHub || 'N/A Hub',
+                hubName:
+                  resolvedBatchHubName ||
+                  originHubName ||
+                  savedOrder.originHub ||
+                  'N/A Hub',
                 tripCode: sharedTripCode || null,
                 quantity: meta.qty,
                 reason: `Tiếp nhận nhập kho ${meta.qty} kiện chuyến ${sharedTripCode}${plate ? ` (xe ${plate})` : ''}`,
@@ -2008,7 +2051,7 @@ export class WarehouseService {
           .join(', ');
         const totalBatchQty = itemMetas.reduce((sum, m) => sum + m.qty, 0);
         this.logger.log(
-          `[INBOUND BATCH CREATED] Chuyến ${sharedTripCode}${plate ? ` (xe ${plate})` : ''} tiếp nhận nhập kho ${savedOrders.length} đơn (${totalBatchQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${originHubId || 'N/A'}: ${orderSummaryList}`,
+          `[INBOUND BATCH CREATED] Chuyến ${sharedTripCode}${plate ? ` (xe ${plate})` : ''} tiếp nhận nhập kho ${savedOrders.length} đơn (${totalBatchQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${batchHubLabel}: ${orderSummaryList}`,
         );
       }
     });
@@ -2371,7 +2414,7 @@ export class WarehouseService {
       relations: ['hub', 'role'],
     });
     let hubId = Number(body?.hubId) || userWithHub?.hubId || null;
-    const hubName = userWithHub?.hub?.name || 'Kho';
+    let hubName = userWithHub?.hub?.name || 'Kho';
     const isSuperAdmin =
       (userWithHub?.role?.id ?? user.role?.id) === RoleEnum.SUPER_ADMIN;
 
@@ -2409,6 +2452,18 @@ export class WarehouseService {
         if (existingTripRow?.originHubId) {
           hubId = existingTripRow.originHubId;
         }
+      }
+
+      const {
+        hubName: resolvedConfirmInboundHubName,
+        label: confirmInboundHubLabel,
+      } = await this.formatHubLogLabel(
+        hubRepo,
+        hubId,
+        userWithHub?.hubId === hubId ? userWithHub?.hub?.name : null,
+      );
+      if (resolvedConfirmInboundHubName) {
+        hubName = resolvedConfirmInboundHubName;
       }
 
       if (sharedTripCode) {
@@ -3126,7 +3181,7 @@ export class WarehouseService {
           0,
         );
         this.logger.log(
-          `[INBOUND CONFIRMED] ${sharedTripCode ? `Chuyến ${sharedTripCode} ` : ''}${inboundPlate ? `(xe ${inboundPlate}) ` : ''}nhập kho thành công ${savedOrders.length} đơn (${totalInboundQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${hubId || 'N/A'}: ${orderSummaryList}`,
+          `[INBOUND CONFIRMED] ${sharedTripCode ? `Chuyến ${sharedTripCode} ` : ''}${inboundPlate ? `(xe ${inboundPlate}) ` : ''}nhập kho thành công ${savedOrders.length} đơn (${totalInboundQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${confirmInboundHubLabel}: ${orderSummaryList}`,
         );
       }
 
@@ -3387,6 +3442,12 @@ export class WarehouseService {
       const isTransfer = dto.mode === OutboundMode.TRANSFER || hasTransferItem;
 
       const originHubId = actingOriginId;
+      const { hubName: resolvedOutboundHubName, label: outboundHubLabel } =
+        await this.formatHubLogLabel(
+          hubRepo,
+          originHubId,
+          orders[0]?.originHubId === originHubId ? orders[0]?.originHub : null,
+        );
       // Confirming a saved draft ("Chờ xử lý"): keep its SD code, drop the planned lines
       const draftCode = normalizeTripCode(dto.draftTripCode);
       if (draftCode) {
@@ -3657,7 +3718,7 @@ export class WarehouseService {
             hubId: Number(
               originHubId || ord.currentHubId || ord.originHubId || 0,
             ),
-            hubName: ord.originHub || 'N/A Hub',
+            hubName: resolvedOutboundHubName || ord.originHub || 'N/A Hub',
             tripCode: tripCode || null,
             quantity: thisExportQty,
             reason: `Xác nhận xuất kho ${thisExportQty} kiện chuyến ${tripCode}${dto.licensePlate ? ` (xe ${dto.licensePlate})` : ''}`,
@@ -3684,7 +3745,7 @@ export class WarehouseService {
         0,
       );
       this.logger.log(
-        `[OUTBOUND CONFIRMED] Chuyến ${tripCode}${dto.licensePlate ? ` (xe ${dto.licensePlate})` : ''} xuất kho thành công ${saved.length} đơn (${totalExportedQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${originHubId || 'N/A'}: ${orderSummaryList}`,
+        `[OUTBOUND CONFIRMED] Chuyến ${tripCode}${dto.licensePlate ? ` (xe ${dto.licensePlate})` : ''} xuất kho thành công ${saved.length} đơn (${totalExportedQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${outboundHubLabel}: ${orderSummaryList}`,
       );
 
       return {

@@ -7,6 +7,7 @@ import {
 } from './infrastructure/persistence/relational/entities/order-activity-log.entity';
 import { OrderEntity } from './infrastructure/persistence/relational/entities/order.entity';
 import { UserEntity } from '../users/infrastructure/persistence/relational/entities/user.entity';
+import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
 import {
   InventoryTransactionType,
   OrderInventoryTransactionEntity,
@@ -83,6 +84,29 @@ export class OrderActivityLogService {
       ? Number(dto.hubId)
       : Number(userRecord?.hubId) || 0;
 
+    let resolvedHubName =
+      dto.hubName &&
+      dto.hubName !== 'N/A Hub' &&
+      dto.hubName !== 'Kho' &&
+      dto.hubName !== 'Hub'
+        ? dto.hubName.trim()
+        : null;
+    if (!resolvedHubName && resolvedHubId > 0) {
+      try {
+        const hubRepo = manager
+          ? manager.getRepository(HubEntity)
+          : this.activityLogRepo.manager.getRepository(HubEntity);
+        const hubEntity = await hubRepo.findOne({
+          where: { id: resolvedHubId },
+        });
+        if (hubEntity?.name) {
+          resolvedHubName = hubEntity.name.trim();
+        }
+      } catch {
+        // Non-fatal fallback
+      }
+    }
+
     try {
       const repo = manager
         ? manager.getRepository(OrderActivityLogEntity)
@@ -96,7 +120,7 @@ export class OrderActivityLogService {
         actorEmail: truncateVarchar(dto.actorEmail, 500),
         actorRole: truncateVarchar(dto.actorRole ?? null, 255),
         hubId: resolvedHubId,
-        hubName: dto.hubName ?? null,
+        hubName: resolvedHubName ?? dto.hubName ?? null,
         tripCode: truncateVarchar(dto.tripCode ?? null, 255),
         oldValues: dto.oldValues ?? null,
         newValues: dto.newValues ?? null,
@@ -112,8 +136,11 @@ export class OrderActivityLogService {
           ? ` Qty=${dto.quantity}`
           : '';
       const tripStr = dto.tripCode ? ` Trip=${dto.tripCode}` : '';
+      const hubLabel = resolvedHubId
+        ? `${resolvedHubId}${resolvedHubName ? ` (${resolvedHubName})` : ''}`
+        : resolvedHubName || '0';
       this.logger.log(
-        `[AUDIT] Action=${dto.action} Code=${dto.orderCode}${qtyStr}${tripStr} User=${dto.actorEmail} Hub=${resolvedHubId} Reason=${dto.reason || 'N/A'}`,
+        `[AUDIT] Action=${dto.action} Code=${dto.orderCode}${qtyStr}${tripStr} User=${dto.actorEmail} Hub=${hubLabel} Reason=${dto.reason || 'N/A'}`,
       );
       return saved;
     } catch (err: any) {
