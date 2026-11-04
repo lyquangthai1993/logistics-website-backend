@@ -84,14 +84,8 @@ export class OrderActivityLogService {
       ? Number(dto.hubId)
       : Number(userRecord?.hubId) || 0;
 
-    let resolvedHubName =
-      dto.hubName &&
-      dto.hubName !== 'N/A Hub' &&
-      dto.hubName !== 'Kho' &&
-      dto.hubName !== 'Hub'
-        ? dto.hubName.trim()
-        : null;
-    if (!resolvedHubName && resolvedHubId > 0) {
+    let resolvedHubName: string | null = null;
+    if (resolvedHubId > 0) {
       try {
         const hubRepo = manager
           ? manager.getRepository(HubEntity)
@@ -105,6 +99,16 @@ export class OrderActivityLogService {
       } catch {
         // Non-fatal fallback
       }
+    }
+
+    if (
+      !resolvedHubName &&
+      dto.hubName &&
+      dto.hubName !== 'N/A Hub' &&
+      dto.hubName !== 'Kho' &&
+      dto.hubName !== 'Hub'
+    ) {
+      resolvedHubName = dto.hubName.trim();
     }
 
     try {
