@@ -1242,20 +1242,27 @@ export class WarehouseService {
     hubId: number | null | undefined,
     fallbackHubName?: string | null,
   ): Promise<{ hubName: string | null; label: string }> {
-    let hubName =
+    let hubName: string | null = null;
+    if (hubId) {
+      try {
+        const hubEntity = await hubRepo.findOne({
+          where: { id: Number(hubId) },
+        });
+        if (hubEntity?.name) {
+          hubName = hubEntity.name.trim();
+        }
+      } catch {
+        // Non-fatal fallback
+      }
+    }
+    if (
+      !hubName &&
       fallbackHubName &&
       fallbackHubName !== 'N/A Hub' &&
       fallbackHubName !== 'Kho' &&
       fallbackHubName !== 'Hub'
-        ? fallbackHubName.trim()
-        : null;
-    if (hubId && !hubName) {
-      const hubEntity = await hubRepo.findOne({
-        where: { id: Number(hubId) },
-      });
-      if (hubEntity?.name) {
-        hubName = hubEntity.name.trim();
-      }
+    ) {
+      hubName = fallbackHubName.trim();
     }
     const label = hubId
       ? `${hubId}${hubName ? ` (${hubName})` : ''}`
@@ -3443,11 +3450,7 @@ export class WarehouseService {
 
       const originHubId = actingOriginId;
       const { hubName: resolvedOutboundHubName, label: outboundHubLabel } =
-        await this.formatHubLogLabel(
-          hubRepo,
-          originHubId,
-          orders[0]?.originHubId === originHubId ? orders[0]?.originHub : null,
-        );
+        await this.formatHubLogLabel(hubRepo, originHubId);
       // Confirming a saved draft ("Chờ xử lý"): keep its SD code, drop the planned lines
       const draftCode = normalizeTripCode(dto.draftTripCode);
       if (draftCode) {
@@ -3718,7 +3721,7 @@ export class WarehouseService {
             hubId: Number(
               originHubId || ord.currentHubId || ord.originHubId || 0,
             ),
-            hubName: resolvedOutboundHubName || ord.originHub || 'N/A Hub',
+            hubName: resolvedOutboundHubName || 'N/A Hub',
             tripCode: tripCode || null,
             quantity: thisExportQty,
             reason: `Xác nhận xuất kho ${thisExportQty} kiện chuyến ${tripCode}${dto.licensePlate ? ` (xe ${dto.licensePlate})` : ''}`,
@@ -4061,7 +4064,20 @@ export class WarehouseService {
         const affectedOrders = await manager
           .getRepository(OrderEntity)
           .find({ where: { id: In(orderIds) } });
+        const effectiveCancelHubId = Number(
+          userHubId ||
+            affectedOrders[0]?.currentHubId ||
+            affectedOrders[0]?.originHubId ||
+            0,
+        );
+        const { hubName: cancelHubName } = await this.formatHubLogLabel(
+          manager.getRepository(HubEntity),
+          effectiveCancelHubId,
+        );
         for (const ord of affectedOrders) {
+          const ordHubId = Number(
+            userHubId || ord.currentHubId || ord.originHubId || 0,
+          );
           await this.activityLogService.safeLogActivity(
             {
               orderId: ord.id,
@@ -4069,10 +4085,10 @@ export class WarehouseService {
               action: OrderActivityAction.DRAFT_CANCELLED,
               actorUserId: Number(user?.id || 0),
               actorEmail: user?.email || undefined,
-              hubId: Number(
-                userHubId || ord.currentHubId || ord.originHubId || 0,
-              ),
-              hubName: ord.originHub || 'N/A Hub',
+              hubId: ordHubId,
+              hubName:
+                (ordHubId === effectiveCancelHubId ? cancelHubName : null) ||
+                'N/A Hub',
               tripCode,
               quantity: ord.remainingQuantity ?? 0,
               reason: `Hủy chuyến nháp xuất kho ${tripCode}`,
