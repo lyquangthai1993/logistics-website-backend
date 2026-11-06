@@ -138,26 +138,46 @@ export class WarehouseService {
 
   /**
    * Helper to resolve hubId from user entity or DB when missing on JWT payload.
+   * For SUPER_ADMIN (no fixed hubId), an explicit requestedHubId query filter is honored.
    */
   private async resolveUserHubId(
     user: UserEntity,
+    requestedHubId?: number | null,
   ): Promise<number | null | undefined> {
     if (user.hubId) return user.hubId;
-    if (!user.id) return undefined;
-    const dbUser = await this.userRepository.findOne({
-      where: { id: user.id },
-      select: ['id', 'hubId'],
-    });
-    return dbUser?.hubId ?? null;
+    if (user.id) {
+      const dbUser = await this.userRepository.findOne({
+        where: { id: user.id },
+        select: ['id', 'hubId'],
+      });
+      if (dbUser?.hubId) return dbUser.hubId;
+    }
+    if (
+      requestedHubId !== undefined &&
+      requestedHubId !== null &&
+      Number.isFinite(Number(requestedHubId)) &&
+      Number(requestedHubId) > 0
+    ) {
+      return Number(requestedHubId);
+    }
+    return null;
   }
 
-  /** Hub-scoped status context applies to Warehouse Managers assigned to a hub. */
+  /** Hub-scoped status context applies to Warehouse Managers or Super Admin filtering by hubId. */
   private async resolveHubContext(
     user: UserEntity,
+    requestedHubId?: number | null,
   ): Promise<{ userHubId: number | null; useHubContext: boolean }> {
-    const userHubId = (await this.resolveUserHubId(user)) ?? null;
+    const userHubId =
+      (await this.resolveUserHubId(user, requestedHubId)) ?? null;
+    const hasExplicitHubFilter =
+      requestedHubId !== undefined &&
+      requestedHubId !== null &&
+      Number.isFinite(Number(requestedHubId)) &&
+      Number(requestedHubId) > 0;
     const useHubContext =
-      user.role?.id === RoleEnum.WAREHOUSE_MANAGER && !!userHubId;
+      (user.role?.id === RoleEnum.WAREHOUSE_MANAGER || hasExplicitHubFilter) &&
+      !!userHubId;
     return { userHubId, useHubContext };
   }
 
@@ -328,6 +348,8 @@ export class WarehouseService {
       isExport?: string | boolean;
       /** Keyset / Cursor-based pagination: id của bản ghi cuối cùng đã xem (id < cursor) */
       cursor?: number;
+      /** Optional hubId filter for Super Admin */
+      hubId?: number;
     },
   ): Promise<WarehouseOrdersResult> {
     const isExport =
@@ -341,7 +363,10 @@ export class WarehouseService {
       : Math.max(1, Math.min(100, Number(query?.limit) || 20));
     const skip = isExport ? 0 : (page - 1) * limit;
 
-    const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const { userHubId, useHubContext } = await this.resolveHubContext(
+      user,
+      query?.hubId,
+    );
     const dateRange = this.sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
     const statusExpr = useHubContext
       ? this.ledgerService.hubStatusSql()
@@ -4200,6 +4225,7 @@ export class WarehouseService {
     query?: {
       fromDate?: string;
       toDate?: string;
+      hubId?: number;
     },
   ): Promise<{
     total: number;
@@ -4215,7 +4241,10 @@ export class WarehouseService {
     completedOutboundToday: number;
     completedOutbound: number;
   }> {
-    const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const { userHubId, useHubContext } = await this.resolveHubContext(
+      user,
+      query?.hubId,
+    );
     const dateRange = this.sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
     const cacheKey = `warehouse:kpi:${user.id || user.role?.id || 'all'}:${userHubId || 'all'}:${dateRange.fromDate || 'none'}:${dateRange.toDate || 'none'}`;
     const cached = await this.redisCacheService.get<any>(cacheKey);
@@ -4330,13 +4359,17 @@ export class WarehouseService {
       toDate?: string;
       page?: number;
       limit?: number;
+      hubId?: number;
     },
   ): Promise<{ data: any[]; meta: any }> {
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
     const skip = (page - 1) * limit;
 
-    const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const { userHubId, useHubContext } = await this.resolveHubContext(
+      user,
+      query?.hubId,
+    );
     const dateRange = this.sanitizeDateRangeGuard(query, {
       defaultPastDays: 90,
       maxSpanDays: 90,
@@ -4943,13 +4976,14 @@ export class WarehouseService {
       toDate?: string;
       page?: number;
       limit?: number;
+      hubId?: number;
     },
   ): Promise<{ data: any[]; meta: any }> {
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(50, Number(query?.limit) || 15));
     const skip = (page - 1) * limit;
 
-    const userHubId = (await this.resolveUserHubId(user)) ?? null;
+    const userHubId = (await this.resolveUserHubId(user, query?.hubId)) ?? null;
     const dateRange = this.sanitizeDateRangeGuard(query, {
       defaultPastDays: 90,
       maxSpanDays: 90,
