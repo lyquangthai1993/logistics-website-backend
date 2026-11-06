@@ -51,23 +51,108 @@ export class HubsService {
 
     const qb = this.hubRepository
       .createQueryBuilder('hub')
-      .leftJoinAndSelect('hub.vehicles', 'vehicle')
-      .orderBy('hub.createdAt', 'DESC');
+      .leftJoinAndSelect('hub.vehicles', 'vehicle');
 
-    if (typeof query.isActive === 'boolean') {
-      qb.andWhere('hub.isActive = :isActive', { isActive: query.isActive });
+    let resolvedIsActive = query.isActive;
+    if (typeof resolvedIsActive !== 'boolean' && query.status) {
+      const tokens = String(query.status)
+        .toLowerCase()
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const hasActive = tokens.includes('active') || tokens.includes('true');
+      const hasInactive =
+        tokens.includes('inactive') || tokens.includes('false');
+      if (hasActive && !hasInactive) resolvedIsActive = true;
+      else if (hasInactive && !hasActive) resolvedIsActive = false;
+    }
+
+    if (typeof resolvedIsActive === 'boolean') {
+      qb.andWhere('hub.isActive = :isActive', { isActive: resolvedIsActive });
     }
 
     if (query.level && Number(query.level) > 0) {
       qb.andWhere('hub.level = :level', { level: Number(query.level) });
     }
 
-    if (query.search && query.search.trim()) {
-      const search = `%${query.search.trim()}%`;
+    const rawSearch = query.search?.trim() || query.name?.trim();
+    if (rawSearch) {
+      const search = `%${rawSearch}%`;
       qb.andWhere(
         '(hub.code ILIKE :search OR hub.name ILIKE :search OR hub.city ILIKE :search OR hub.address ILIKE :search OR hub.managerName ILIKE :search)',
         { search },
       );
+    }
+
+    const sortFieldMap: Record<string, string> = {
+      id: 'hub.id',
+      code: 'hub.code',
+      orderCodePrefix: 'hub.orderCodePrefix',
+      name: 'hub.name',
+      city: 'hub.city',
+      level: 'hub.level',
+      address: 'hub.address',
+      manager: 'hub.managerName',
+      managerName: 'hub.managerName',
+      contactPhone: 'hub.contactPhone',
+      status: 'hub.isActive',
+      isActive: 'hub.isActive',
+      createdAt: 'hub.createdAt',
+      updatedAt: 'hub.updatedAt',
+    };
+
+    const appliedSorts: Array<{ column: string; order: 'ASC' | 'DESC' }> = [];
+    if (query.sort && query.sort.trim()) {
+      const rawSort = query.sort.trim();
+      try {
+        const parsed = JSON.parse(rawSort);
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            const col = item?.id ? sortFieldMap[String(item.id)] : undefined;
+            if (col) {
+              appliedSorts.push({
+                column: col,
+                order: item.desc ? 'DESC' : 'ASC',
+              });
+            }
+          }
+        }
+      } catch {
+        // Fallback for "field:ASC|DESC" or "-field" format
+        for (const part of rawSort.split(',')) {
+          const trimmed = part.trim();
+          if (!trimmed) continue;
+          if (trimmed.includes(':')) {
+            const [field, dir] = trimmed.split(':');
+            const col = sortFieldMap[field.trim()];
+            if (col) {
+              appliedSorts.push({
+                column: col,
+                order: dir?.trim().toUpperCase() === 'DESC' ? 'DESC' : 'ASC',
+              });
+            }
+          } else if (trimmed.startsWith('-')) {
+            const col = sortFieldMap[trimmed.slice(1).trim()];
+            if (col) appliedSorts.push({ column: col, order: 'DESC' });
+          } else {
+            const col = sortFieldMap[trimmed];
+            if (col) appliedSorts.push({ column: col, order: 'ASC' });
+          }
+        }
+      }
+    }
+
+    if (appliedSorts.length > 0) {
+      appliedSorts.forEach((s, idx) => {
+        if (idx === 0) {
+          qb.orderBy(s.column, s.order);
+        } else {
+          qb.addOrderBy(s.column, s.order);
+        }
+      });
+      qb.addOrderBy('hub.id', 'DESC');
+    } else {
+      qb.orderBy('hub.createdAt', 'DESC').addOrderBy('hub.id', 'DESC');
     }
 
     const [data, total] = await qb.skip(skip).take(limit).getManyAndCount();
