@@ -51,23 +51,132 @@ export class HubsService {
 
     const qb = this.hubRepository
       .createQueryBuilder('hub')
-      .leftJoinAndSelect('hub.vehicles', 'vehicle')
-      .orderBy('hub.createdAt', 'DESC');
+      .leftJoinAndSelect('hub.vehicles', 'vehicle');
 
-    if (typeof query.isActive === 'boolean') {
-      qb.andWhere('hub.isActive = :isActive', { isActive: query.isActive });
+    const statusTokens = query.status
+      ? String(query.status)
+          .toLowerCase()
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+    const hasActive =
+      statusTokens.includes('active') ||
+      statusTokens.includes('true') ||
+      query.isActive === true;
+    const hasInactive =
+      statusTokens.includes('inactive') ||
+      statusTokens.includes('false') ||
+      query.isActive === false;
+    const hasDeleted =
+      statusTokens.includes('deleted') || query.isDeleted === true;
+
+    if (hasDeleted) {
+      qb.withDeleted();
+      if (hasActive && hasInactive) {
+        // Show all: active + inactive + deleted
+      } else if (hasActive) {
+        qb.andWhere(
+          '(hub.deletedAt IS NOT NULL OR (hub.deletedAt IS NULL AND hub.isActive = true))',
+        );
+      } else if (hasInactive) {
+        qb.andWhere(
+          '(hub.deletedAt IS NOT NULL OR (hub.deletedAt IS NULL AND hub.isActive = false))',
+        );
+      } else {
+        qb.andWhere('hub.deletedAt IS NOT NULL');
+      }
+    } else {
+      if (hasActive && !hasInactive) {
+        qb.andWhere('hub.isActive = :isActive', { isActive: true });
+      } else if (hasInactive && !hasActive) {
+        qb.andWhere('hub.isActive = :isActive', { isActive: false });
+      }
     }
 
     if (query.level && Number(query.level) > 0) {
       qb.andWhere('hub.level = :level', { level: Number(query.level) });
     }
 
-    if (query.search && query.search.trim()) {
-      const search = `%${query.search.trim()}%`;
+    const rawSearch = query.search?.trim() || query.name?.trim();
+    if (rawSearch) {
+      const search = `%${rawSearch}%`;
       qb.andWhere(
         '(hub.code ILIKE :search OR hub.name ILIKE :search OR hub.city ILIKE :search OR hub.address ILIKE :search OR hub.managerName ILIKE :search)',
         { search },
       );
+    }
+
+    const sortFieldMap: Record<string, string> = {
+      id: 'hub.id',
+      code: 'hub.code',
+      orderCodePrefix: 'hub.orderCodePrefix',
+      name: 'hub.name',
+      city: 'hub.city',
+      level: 'hub.level',
+      address: 'hub.address',
+      manager: 'hub.managerName',
+      managerName: 'hub.managerName',
+      contactPhone: 'hub.contactPhone',
+      status: 'hub.isActive',
+      isActive: 'hub.isActive',
+      createdAt: 'hub.createdAt',
+      updatedAt: 'hub.updatedAt',
+    };
+
+    const appliedSorts: Array<{ column: string; order: 'ASC' | 'DESC' }> = [];
+    if (query.sort && query.sort.trim()) {
+      const rawSort = query.sort.trim();
+      try {
+        const parsed = JSON.parse(rawSort);
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            const col = item?.id ? sortFieldMap[String(item.id)] : undefined;
+            if (col) {
+              appliedSorts.push({
+                column: col,
+                order: item.desc ? 'DESC' : 'ASC',
+              });
+            }
+          }
+        }
+      } catch {
+        // Fallback for "field:ASC|DESC" or "-field" format
+        for (const part of rawSort.split(',')) {
+          const trimmed = part.trim();
+          if (!trimmed) continue;
+          if (trimmed.includes(':')) {
+            const [field, dir] = trimmed.split(':');
+            const col = sortFieldMap[field.trim()];
+            if (col) {
+              appliedSorts.push({
+                column: col,
+                order: dir?.trim().toUpperCase() === 'DESC' ? 'DESC' : 'ASC',
+              });
+            }
+          } else if (trimmed.startsWith('-')) {
+            const col = sortFieldMap[trimmed.slice(1).trim()];
+            if (col) appliedSorts.push({ column: col, order: 'DESC' });
+          } else {
+            const col = sortFieldMap[trimmed];
+            if (col) appliedSorts.push({ column: col, order: 'ASC' });
+          }
+        }
+      }
+    }
+
+    if (appliedSorts.length > 0) {
+      appliedSorts.forEach((s, idx) => {
+        if (idx === 0) {
+          qb.orderBy(s.column, s.order);
+        } else {
+          qb.addOrderBy(s.column, s.order);
+        }
+      });
+      qb.addOrderBy('hub.id', 'DESC');
+    } else {
+      qb.orderBy('hub.createdAt', 'DESC').addOrderBy('hub.id', 'DESC');
     }
 
     const [data, total] = await qb.skip(skip).take(limit).getManyAndCount();
@@ -94,10 +203,11 @@ export class HubsService {
     });
   }
 
-  async findOne(id: number): Promise<HubEntity> {
+  async findOne(id: number, withDeleted = false): Promise<HubEntity> {
     const hub = await this.hubRepository.findOne({
       where: { id },
       relations: ['vehicles'],
+      withDeleted,
     });
     if (!hub) {
       throw new NotFoundException(`Không tìm thấy Hub với ID ${id}`);
@@ -106,13 +216,14 @@ export class HubsService {
   }
 
   async update(id: number, updateHubDto: UpdateHubDto): Promise<HubEntity> {
-    const hub = await this.findOne(id);
+    const hub = await this.findOne(id, true);
 
     if (updateHubDto.code && updateHubDto.code !== hub.code) {
       const existing = await this.hubRepository.findOne({
         where: { code: updateHubDto.code },
+        withDeleted: true,
       });
-      if (existing) {
+      if (existing && existing.id !== hub.id) {
         throw new ConflictException(
           `Hub với mã "${updateHubDto.code}" đã tồn tại trong hệ thống`,
         );
@@ -120,12 +231,20 @@ export class HubsService {
     }
 
     Object.assign(hub, updateHubDto);
+    if (updateHubDto.isActive === true && hub.deletedAt) {
+      hub.deletedAt = null;
+    }
     return this.hubRepository.save(hub);
   }
 
   async toggleActive(id: number): Promise<HubEntity> {
-    const hub = await this.findOne(id);
-    hub.isActive = !hub.isActive;
+    const hub = await this.findOne(id, true);
+    if (hub.deletedAt) {
+      hub.deletedAt = null;
+      hub.isActive = true;
+    } else {
+      hub.isActive = !hub.isActive;
+    }
     return this.hubRepository.save(hub);
   }
 

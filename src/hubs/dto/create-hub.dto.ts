@@ -1,5 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class CreateHubDto {
   @ApiProperty({ example: 'HUB-HAN-01' })
@@ -44,6 +53,10 @@ export class CreateHubDto {
     default: 1,
     description: '1: Hub Cấp 1, 2: Hub Cấp 2 / Xe bo',
   })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2)
   @IsOptional()
   level?: number;
 

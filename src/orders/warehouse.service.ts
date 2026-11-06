@@ -138,26 +138,46 @@ export class WarehouseService {
 
   /**
    * Helper to resolve hubId from user entity or DB when missing on JWT payload.
+   * For SUPER_ADMIN (no fixed hubId), an explicit requestedHubId query filter is honored.
    */
   private async resolveUserHubId(
     user: UserEntity,
+    requestedHubId?: number | null,
   ): Promise<number | null | undefined> {
     if (user.hubId) return user.hubId;
-    if (!user.id) return undefined;
-    const dbUser = await this.userRepository.findOne({
-      where: { id: user.id },
-      select: ['id', 'hubId'],
-    });
-    return dbUser?.hubId ?? null;
+    if (user.id) {
+      const dbUser = await this.userRepository.findOne({
+        where: { id: user.id },
+        select: ['id', 'hubId'],
+      });
+      if (dbUser?.hubId) return dbUser.hubId;
+    }
+    if (
+      requestedHubId !== undefined &&
+      requestedHubId !== null &&
+      Number.isFinite(Number(requestedHubId)) &&
+      Number(requestedHubId) > 0
+    ) {
+      return Number(requestedHubId);
+    }
+    return null;
   }
 
-  /** Hub-scoped status context applies to Warehouse Managers assigned to a hub. */
+  /** Hub-scoped status context applies to Warehouse Managers or Super Admin filtering by hubId. */
   private async resolveHubContext(
     user: UserEntity,
+    requestedHubId?: number | null,
   ): Promise<{ userHubId: number | null; useHubContext: boolean }> {
-    const userHubId = (await this.resolveUserHubId(user)) ?? null;
+    const userHubId =
+      (await this.resolveUserHubId(user, requestedHubId)) ?? null;
+    const hasExplicitHubFilter =
+      requestedHubId !== undefined &&
+      requestedHubId !== null &&
+      Number.isFinite(Number(requestedHubId)) &&
+      Number(requestedHubId) > 0;
     const useHubContext =
-      user.role?.id === RoleEnum.WAREHOUSE_MANAGER && !!userHubId;
+      (user.role?.id === RoleEnum.WAREHOUSE_MANAGER || hasExplicitHubFilter) &&
+      !!userHubId;
     return { userHubId, useHubContext };
   }
 
@@ -328,6 +348,8 @@ export class WarehouseService {
       isExport?: string | boolean;
       /** Keyset / Cursor-based pagination: id của bản ghi cuối cùng đã xem (id < cursor) */
       cursor?: number;
+      /** Optional hubId filter for Super Admin */
+      hubId?: number;
     },
   ): Promise<WarehouseOrdersResult> {
     const isExport =
@@ -341,7 +363,10 @@ export class WarehouseService {
       : Math.max(1, Math.min(100, Number(query?.limit) || 20));
     const skip = isExport ? 0 : (page - 1) * limit;
 
-    const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const { userHubId, useHubContext } = await this.resolveHubContext(
+      user,
+      query?.hubId,
+    );
     const dateRange = this.sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
     const statusExpr = useHubContext
       ? this.ledgerService.hubStatusSql()
@@ -2014,9 +2039,10 @@ export class WarehouseService {
         );
       }
 
+      const { hubName: resolvedBatchHubName, label: batchHubLabel } =
+        await this.formatHubLogLabel(hubRepo, originHubId, originHubName);
+
       if (!allDraft) {
-        const { hubName: resolvedBatchHubName, label: batchHubLabel } =
-          await this.formatHubLogLabel(hubRepo, originHubId, originHubName);
         for (let idx = 0; idx < itemMetas.length; idx++) {
           const meta = itemMetas[idx];
           const savedOrder = savedOrdersMap.get(meta.orderCode);
@@ -2043,6 +2069,8 @@ export class WarehouseService {
                   outboundQuantity: savedOrder.outboundQuantity,
                   remainingQuantity: savedOrder.remainingQuantity,
                   status: savedOrder.status,
+                  licensePlate: plate || null,
+                  driverName: driver || null,
                 },
               },
               manager,
@@ -2060,6 +2088,43 @@ export class WarehouseService {
         this.logger.log(
           `[INBOUND BATCH CREATED] Chuyến ${sharedTripCode}${plate ? ` (xe ${plate})` : ''} tiếp nhận nhập kho ${savedOrders.length} đơn (${totalBatchQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${batchHubLabel}: ${orderSummaryList}`,
         );
+      } else {
+        for (let idx = 0; idx < itemMetas.length; idx++) {
+          const meta = itemMetas[idx];
+          const savedOrder = savedOrdersMap.get(meta.orderCode);
+          if (savedOrder) {
+            await this.activityLogService.safeLogActivity(
+              {
+                orderId: savedOrder.id,
+                orderCode: savedOrder.orderCode,
+                action: OrderActivityAction.TRIP_DRAFT_CREATED,
+                actorUserId: Number(user?.id || 0),
+                actorEmail: user?.email || undefined,
+                hubId: Number(originHubId || savedOrder.currentHubId || 0),
+                hubName:
+                  resolvedBatchHubName ||
+                  originHubName ||
+                  savedOrder.originHub ||
+                  'N/A Hub',
+                tripCode: sharedTripCode || null,
+                quantity: meta.qty,
+                reason: `Khởi tạo chuyến nhập nháp ${sharedTripCode}${plate ? ` (xe ${plate})` : ''} — ${meta.qty} kiện`,
+                newValues: {
+                  tripType: 'INBOUND',
+                  licensePlate: plate || null,
+                  driverName: driver || null,
+                  pickupDate: date || null,
+                  totalQuantity: meta.qty,
+                  totalWeight: meta.weight,
+                  totalVolume: meta.vol,
+                  goodsDescription: savedOrder.goodsDescription,
+                  status: 'DRAFT',
+                },
+              },
+              manager,
+            );
+          }
+        }
       }
     });
 
@@ -2482,6 +2547,44 @@ export class WarehouseService {
         );
       }
 
+      const prevTripLines = sharedTripCode
+        ? await tripRepo.find({ where: { tripCode: sharedTripCode } })
+        : [];
+      const prevTripByOrderId = new Map<
+        number,
+        {
+          licensePlate: string | null;
+          driverName: string | null;
+          pickupDate: string | null;
+          quantityAllocated: number | null;
+          weightAllocated: number | null;
+          volumeAllocated: number | null;
+        }
+      >();
+      for (const pt of prevTripLines) {
+        prevTripByOrderId.set(pt.orderId, {
+          licensePlate: pt.licensePlate || null,
+          driverName: pt.driverName || null,
+          pickupDate: pt.pickupDate ? String(pt.pickupDate) : null,
+          quantityAllocated:
+            pt.quantityAllocated != null ? Number(pt.quantityAllocated) : null,
+          weightAllocated:
+            pt.weightAllocated != null ? Number(pt.weightAllocated) : null,
+          volumeAllocated:
+            pt.volumeAllocated != null ? Number(pt.volumeAllocated) : null,
+        });
+      }
+      const prevOrderSnapshots = new Map<
+        number,
+        {
+          orderCode: string;
+          totalQuantity: number;
+          totalWeight: number;
+          totalVolume: number;
+          goodsDescription: string | null;
+        }
+      >();
+
       const savedOrders: OrderEntity[] = [];
       const processedTripCodes = new Set<string>();
       let newCreatedCount = 0;
@@ -2527,6 +2630,13 @@ export class WarehouseService {
         let order: OrderEntity;
 
         if (found) {
+          prevOrderSnapshots.set(found.id, {
+            orderCode: found.orderCode,
+            totalQuantity: Number(found.totalQuantity) || 0,
+            totalWeight: Number(found.totalWeight) || 0,
+            totalVolume: Number(found.totalVolume) || 0,
+            goodsDescription: found.goodsDescription || null,
+          });
           const isDirectInboundOrDraft =
             DRAFT_LIKE_STATUSES.includes(found.status) ||
             !found.originHubId ||
@@ -2558,7 +2668,7 @@ export class WarehouseService {
             ) {
               const nextQty = Number(row.totalQuantity);
               found.totalQuantity = nextQty;
-              if (isKeepStatus) {
+              if (isKeepStatus && !DRAFT_LIKE_STATUSES.includes(found.status)) {
                 found.inboundQuantity = nextQty;
                 found.remainingQuantity = Math.max(
                   0,
@@ -3157,13 +3267,18 @@ export class WarehouseService {
               hubName: hubName || ord.originHub || 'N/A Hub',
               tripCode: sharedTripCode || null,
               quantity: thisInboundQty,
-              reason: `Xác nhận nhập kho ${thisInboundQty} kiện${sharedTripCode ? ` chuyến ${sharedTripCode}` : ''}${inboundPlate ? ` (xe ${inboundPlate})` : ''}`,
+              reason: keepTripPending
+                ? `Nhập lẻ đơn hàng (${thisInboundQty} kiện) từ chuyến ${sharedTripCode || ''}${inboundPlate ? ` (xe ${inboundPlate})` : ''} — chuyến xe giữ trạng thái Chờ xử lý`
+                : `Xác nhận nhập kho ${thisInboundQty} kiện${sharedTripCode ? ` chuyến ${sharedTripCode}` : ''}${inboundPlate ? ` (xe ${inboundPlate})` : ''}`,
               newValues: {
                 totalQuantity: ord.totalQuantity,
                 inboundQuantity: ord.inboundQuantity,
                 outboundQuantity: ord.outboundQuantity,
                 remainingQuantity: ord.remainingQuantity,
                 status: ord.status,
+                licensePlate: inboundPlate || null,
+                driverName: inboundDriver || null,
+                keepTripPending: Boolean(keepTripPending),
               },
             },
             manager,
@@ -3190,6 +3305,80 @@ export class WarehouseService {
         this.logger.log(
           `[INBOUND CONFIRMED] ${sharedTripCode ? `Chuyến ${sharedTripCode} ` : ''}${inboundPlate ? `(xe ${inboundPlate}) ` : ''}nhập kho thành công ${savedOrders.length} đơn (${totalInboundQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${confirmInboundHubLabel}: ${orderSummaryList}`,
         );
+      } else {
+        const firstPrevTrip = prevTripLines[0] || null;
+        for (const ord of savedOrders) {
+          const prevTrip = prevTripByOrderId.get(ord.id) || firstPrevTrip;
+          const prevOrd = prevOrderSnapshots.get(ord.id);
+          const oldQty =
+            prevTrip?.quantityAllocated ?? prevOrd?.totalQuantity ?? null;
+          const newQty = Number(ord.totalQuantity) || 1;
+          const oldPlate = prevTrip?.licensePlate ?? null;
+          const newPlate = inboundPlate || prevTrip?.licensePlate || null;
+          const oldDriver = prevTrip?.driverName ?? null;
+          const newDriver = hasDriverField
+            ? inboundDriver || null
+            : inboundDriver || prevTrip?.driverName || null;
+
+          const changeParts: string[] = [];
+          if (oldPlate !== newPlate) {
+            changeParts.push(
+              `Biển số: ${oldPlate || 'Chưa gán'} → ${newPlate || 'Chưa gán'}`,
+            );
+          }
+          if ((oldDriver || '') !== (newDriver || '')) {
+            changeParts.push(
+              `Tài xế: ${oldDriver || 'Chưa gán'} → ${newDriver || 'Chưa gán'}`,
+            );
+          }
+          if (oldQty !== null && oldQty !== newQty) {
+            changeParts.push(
+              `Đơn ${ord.orderCode}: ${oldQty} kiện → ${newQty} kiện`,
+            );
+          } else if (!prevOrd) {
+            changeParts.push(`Thêm mới đơn ${ord.orderCode} (${newQty} kiện)`);
+          }
+
+          await this.activityLogService.safeLogActivity(
+            {
+              orderId: ord.id,
+              orderCode: ord.orderCode,
+              action: OrderActivityAction.TRIP_DRAFT_UPDATED,
+              actorUserId: Number(user?.id || 0),
+              actorEmail: user?.email || undefined,
+              hubId: Number(hubId || ord.currentHubId || ord.originHubId || 0),
+              hubName: hubName || ord.originHub || 'N/A Hub',
+              tripCode: sharedTripCode || null,
+              quantity: newQty,
+              reason:
+                changeParts.length > 0
+                  ? `Chỉnh sửa & Lưu nháp chuyến ${sharedTripCode || ''}: ${changeParts.join(' · ')}`
+                  : `Mở phiếu & Lưu nháp chuyến ${sharedTripCode || ''} (giữ nguyên ${newQty} kiện, chưa xác nhận nhập kho)`,
+              oldValues: {
+                licensePlate: oldPlate,
+                driverName: oldDriver,
+                pickupDate: prevTrip?.pickupDate ?? null,
+                totalQuantity: oldQty,
+                totalWeight:
+                  prevTrip?.weightAllocated ?? prevOrd?.totalWeight ?? null,
+                totalVolume:
+                  prevTrip?.volumeAllocated ?? prevOrd?.totalVolume ?? null,
+                goodsDescription: prevOrd?.goodsDescription ?? null,
+              },
+              newValues: {
+                licensePlate: newPlate,
+                driverName: newDriver,
+                pickupDate: inboundDate || null,
+                totalQuantity: newQty,
+                totalWeight: Number(ord.totalWeight) || 0,
+                totalVolume: Number(ord.totalVolume) || 0,
+                goodsDescription: ord.goodsDescription || null,
+                status: ord.status,
+              },
+            },
+            manager,
+          );
+        }
       }
 
       return {
@@ -4200,6 +4389,7 @@ export class WarehouseService {
     query?: {
       fromDate?: string;
       toDate?: string;
+      hubId?: number;
     },
   ): Promise<{
     total: number;
@@ -4215,7 +4405,10 @@ export class WarehouseService {
     completedOutboundToday: number;
     completedOutbound: number;
   }> {
-    const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const { userHubId, useHubContext } = await this.resolveHubContext(
+      user,
+      query?.hubId,
+    );
     const dateRange = this.sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
     const cacheKey = `warehouse:kpi:${user.id || user.role?.id || 'all'}:${userHubId || 'all'}:${dateRange.fromDate || 'none'}:${dateRange.toDate || 'none'}`;
     const cached = await this.redisCacheService.get<any>(cacheKey);
@@ -4330,13 +4523,17 @@ export class WarehouseService {
       toDate?: string;
       page?: number;
       limit?: number;
+      hubId?: number;
     },
   ): Promise<{ data: any[]; meta: any }> {
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
     const skip = (page - 1) * limit;
 
-    const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const { userHubId, useHubContext } = await this.resolveHubContext(
+      user,
+      query?.hubId,
+    );
     const dateRange = this.sanitizeDateRangeGuard(query, {
       defaultPastDays: 90,
       maxSpanDays: 90,
@@ -4387,16 +4584,24 @@ export class WarehouseService {
       );
     }
     if (dateRange.fromDate) {
-      const p = bind(new Date(`${dateRange.fromDate}T00:00:00`).toISOString());
-      txWhere.push(`tx."createdAt" >= ${p}`);
-      draftWhere.push(`t."createdAt" >= ${p}`);
+      const fromIso = new Date(
+        `${dateRange.fromDate}T00:00:00+07:00`,
+      ).toISOString();
+      const pIso = bind(fromIso);
+      const pDate = bind(dateRange.fromDate);
+      txWhere.push(`tx."createdAt" >= ${pIso}`);
+      draftWhere.push(
+        `(t."createdAt" >= ${pIso} OR t."pickupDate" >= ${pDate})`,
+      );
     }
     if (dateRange.toDate) {
-      const p = bind(
-        new Date(`${dateRange.toDate}T23:59:59.999`).toISOString(),
+      const toIso = new Date(`${dateRange.toDate}T23:59:59.999Z`).toISOString();
+      const pIso = bind(toIso);
+      const pDate = bind(dateRange.toDate);
+      txWhere.push(`tx."createdAt" <= ${pIso}`);
+      draftWhere.push(
+        `(t."createdAt" <= ${pIso} OR t."pickupDate" <= ${pDate})`,
       );
-      txWhere.push(`tx."createdAt" <= ${p}`);
-      draftWhere.push(`t."createdAt" <= ${p}`);
     }
 
     const txJoinOrder = hasSearch
@@ -4935,13 +5140,14 @@ export class WarehouseService {
       toDate?: string;
       page?: number;
       limit?: number;
+      hubId?: number;
     },
   ): Promise<{ data: any[]; meta: any }> {
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(50, Number(query?.limit) || 15));
     const skip = (page - 1) * limit;
 
-    const userHubId = (await this.resolveUserHubId(user)) ?? null;
+    const userHubId = (await this.resolveUserHubId(user, query?.hubId)) ?? null;
     const dateRange = this.sanitizeDateRangeGuard(query, {
       defaultPastDays: 90,
       maxSpanDays: 90,
@@ -4969,25 +5175,52 @@ export class WarehouseService {
     }
 
     if (dateRange.fromDate) {
-      const fromIso = new Date(`${dateRange.fromDate}T00:00:00`).toISOString();
-      where.push(`ts."createdAt" >= ${bind(fromIso)}`);
+      const fromIso = new Date(
+        `${dateRange.fromDate}T00:00:00+07:00`,
+      ).toISOString();
+      const pFromIso = bind(fromIso);
+      const pFromDate = bind(dateRange.fromDate);
+      where.push(
+        `(ts."createdAt" >= ${pFromIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND dt."deletedAt" IS NULL AND dt."pickupDate" >= ${pFromDate}))`,
+      );
     }
 
     if (dateRange.toDate) {
-      const toIso = new Date(`${dateRange.toDate}T23:59:59.999`).toISOString();
-      where.push(`ts."createdAt" <= ${bind(toIso)}`);
+      const toIso = new Date(`${dateRange.toDate}T23:59:59.999Z`).toISOString();
+      const pToIso = bind(toIso);
+      const pToDate = bind(dateRange.toDate);
+      where.push(
+        `(ts."createdAt" <= ${pToIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND dt."deletedAt" IS NULL AND dt."pickupDate" <= ${pToDate}))`,
+      );
     }
 
     const whereSql = where.join(' AND ');
 
-    const baseCte = `WITH filtered_stops AS (
+    const baseCte = `WITH raw_stops AS (
       SELECT ts."tripCode",
              ts."status",
              ts."stopType",
+             ts."stopSequence",
              ts."hubId",
              ts."createdAt"
       FROM "trip_stop" ts
       WHERE ${whereSql}
+    ),
+    filtered_stops AS (
+      SELECT DISTINCT ON (rs."tripCode")
+             rs."tripCode",
+             CASE
+               WHEN BOOL_OR(rs."status" = 'PENDING') OVER (PARTITION BY rs."tripCode") THEN 'PENDING'
+               ELSE 'COMPLETED'
+             END AS "status",
+             rs."stopType",
+             rs."hubId",
+             MAX(rs."createdAt") OVER (PARTITION BY rs."tripCode") AS "createdAt"
+      FROM raw_stops rs
+      ORDER BY rs."tripCode",
+               CASE WHEN rs."status" = 'PENDING' THEN 0 ELSE 1 END ASC,
+               rs."stopSequence" ASC,
+               rs."createdAt" DESC
     ),
     unique_trip_codes AS (
       SELECT DISTINCT "tripCode" FROM filtered_stops
@@ -5052,14 +5285,20 @@ export class WarehouseService {
 
     const pageSql = `${baseCte}
        SELECT ts."tripCode",
-              ts."status",
+              p."status",
               ts."stopType",
               ts."hubId",
               ts."processedAt",
               ts."processedByUserId",
-              ts."createdAt",
+              p."createdAt",
               p."isTransfer",
               h."name" AS "hubName",
+              (SELECT STRING_AGG(sh."name", ' → ' ORDER BY sts."stopSequence" ASC, sts.id ASC)
+               FROM "trip_stop" sts
+               JOIN "hub" sh ON sh.id = sts."hubId"
+               WHERE sts."tripCode" = ts."tripCode"
+                 AND sts."stopType" <> 'ORIGIN'
+                 AND sts."deletedAt" IS NULL) AS "routeStopsSummary",
               (SELECT oh."name" FROM "trip_stop" os JOIN "hub" oh ON oh.id = os."hubId"
                WHERE os."tripCode" = ts."tripCode" AND os."stopType" = 'ORIGIN' AND os."deletedAt" IS NULL
                LIMIT 1) AS "originHubName",
@@ -5354,7 +5593,7 @@ export class WarehouseService {
 
       return {
         id: r.firstTripId != null ? Number(r.firstTripId) : null,
-        groupKey: r.tripCode,
+        groupKey: r.hubId ? `${r.tripCode}_${r.hubId}` : r.tripCode,
         tripCode: r.tripCode,
         vehicleLicensePlate: r.licensePlate || 'CHƯA GÁN XE',
         licensePlate: r.licensePlate || 'CHƯA GÁN XE',
@@ -5367,6 +5606,7 @@ export class WarehouseService {
         hubId: Number(r.hubId),
         originHub: r.originHubName || '',
         destinationHub: r.hubName || '',
+        routeStopsSummary: r.routeStopsSummary || r.hubName || '',
         isTransfer: !!r.isTransfer,
         ordersCount: Number(r.ordersCount) || tripOrders.length,
         remainingOrdersCount: Number(r.ordersForHubCount) || 0,
@@ -7665,6 +7905,966 @@ export class WarehouseService {
         status: order.status,
       },
       transactions,
+    };
+  }
+
+  /**
+   * Retrieve complete chronological history & operational audit trail of a Trip (SD...),
+   * including draft creation, draft modifications (field & order diffs), inbound/outbound
+   * confirmations, rollbacks, and active confirmation blockers (e.g. unconfirmed draft orders).
+   */
+  async getTripHistory(user: UserEntity, tripCodeParam: string) {
+    const tripCode = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
+    if (!tripCode) {
+      throw new NotFoundException('Mã chuyến xe không hợp lệ');
+    }
+
+    const tripRepo = this.dataSource.getRepository(TripEntity);
+    const stopRepo = this.dataSource.getRepository(TripStopEntity);
+    const orderRepo = this.dataSource.getRepository(OrderEntity);
+    const txRepo = this.dataSource.getRepository(
+      OrderInventoryTransactionEntity,
+    );
+    const logRepo = this.dataSource.getRepository(
+      'OrderActivityLogEntity' as any,
+    );
+    const userRepo = this.dataSource.getRepository(UserEntity);
+    const hubRepo = this.dataSource.getRepository(HubEntity);
+
+    const allTrips = await tripRepo
+      .createQueryBuilder('t')
+      .withDeleted()
+      .where('t.tripCode = :tripCode', { tripCode })
+      .orderBy('t.createdAt', 'ASC')
+      .addOrderBy('t.id', 'ASC')
+      .getMany();
+
+    if (allTrips.length === 0) {
+      throw new NotFoundException(`Không tìm thấy chuyến xe ${tripCode}`);
+    }
+
+    const allStops = await stopRepo
+      .createQueryBuilder('s')
+      .withDeleted()
+      .where('s.tripCode = :tripCode', { tripCode })
+      .orderBy('s.stopSequence', 'ASC')
+      .getMany();
+
+    const orderIds = Array.from(
+      new Set(allTrips.map((t) => Number(t.orderId)).filter((id) => id > 0)),
+    );
+
+    const allOrders =
+      orderIds.length > 0
+        ? await orderRepo
+            .createQueryBuilder('o')
+            .withDeleted()
+            .where('o.id IN (:...orderIds)', { orderIds })
+            .getMany()
+        : [];
+    const ordersById = new Map<number, OrderEntity>(
+      allOrders.map((o) => [o.id, o]),
+    );
+
+    // Also load any other trips linked to these orders (to detect pending inbound trips blocking an outbound draft)
+    const siblingTrips =
+      orderIds.length > 0
+        ? await tripRepo
+            .createQueryBuilder('st')
+            .where('st.orderId IN (:...orderIds)', { orderIds })
+            .andWhere('st.deletedAt IS NULL')
+            .orderBy('st.id', 'ASC')
+            .getMany()
+        : [];
+
+    const allTxs = await txRepo
+      .createQueryBuilder('tx')
+      .withDeleted()
+      .where(
+        orderIds.length > 0
+          ? '(tx.tripCode = :tripCode OR tx.orderId IN (:...orderIds))'
+          : 'tx.tripCode = :tripCode',
+        { tripCode, orderIds },
+      )
+      .orderBy('tx.createdAt', 'ASC')
+      .addOrderBy('tx.id', 'ASC')
+      .getMany();
+
+    const rawLogs: any[] = await logRepo
+      .createQueryBuilder('l')
+      .where(
+        orderIds.length > 0
+          ? '(l.tripCode = :tripCode OR l.orderId IN (:...orderIds))'
+          : 'l.tripCode = :tripCode',
+        { tripCode, orderIds },
+      )
+      .orderBy('l.createdAt', 'ASC')
+      .addOrderBy('l.id', 'ASC')
+      .getMany();
+
+    const userIds = new Set<number>();
+    const hubIds = new Set<number>();
+
+    allTrips.forEach((t) => {
+      if (t.assignedByUserId) userIds.add(Number(t.assignedByUserId));
+      if (t.originHubId) hubIds.add(Number(t.originHubId));
+      if (t.destinationHubId) hubIds.add(Number(t.destinationHubId));
+    });
+    allStops.forEach((s) => {
+      if (s.processedByUserId) userIds.add(Number(s.processedByUserId));
+      if (s.hubId) hubIds.add(Number(s.hubId));
+    });
+    allOrders.forEach((o) => {
+      if (o.createdByUserId) userIds.add(Number(o.createdByUserId));
+      if (o.originHubId) hubIds.add(Number(o.originHubId));
+      if (o.destinationHubId) hubIds.add(Number(o.destinationHubId));
+    });
+    allTxs.forEach((tx) => {
+      if (tx.performedByUserId) userIds.add(Number(tx.performedByUserId));
+      if (tx.hubId) hubIds.add(Number(tx.hubId));
+    });
+    rawLogs.forEach((l) => {
+      if (l.actorUserId) userIds.add(Number(l.actorUserId));
+      if (l.hubId) hubIds.add(Number(l.hubId));
+    });
+
+    const usersList =
+      userIds.size > 0
+        ? await userRepo.find({ where: { id: In(Array.from(userIds)) } })
+        : [];
+    const usersById = new Map<
+      number,
+      { id: number; name: string; email: string }
+    >();
+    usersList.forEach((u) => {
+      const fullName = [u.firstName, u.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      usersById.set(u.id, {
+        id: u.id,
+        name:
+          fullName ||
+          u.username ||
+          (u.email ? u.email.split('@')[0] : `User #${u.id}`),
+        email: u.email || '',
+      });
+    });
+
+    const hubsList =
+      hubIds.size > 0
+        ? await hubRepo.find({ where: { id: In(Array.from(hubIds)) } })
+        : [];
+    const hubsById = new Map<number, string>(
+      hubsList.map((h) => [h.id, h.name]),
+    );
+
+    const activeTrips = allTrips.filter((t) => !t.deletedAt);
+    const representativeTrips = activeTrips.length > 0 ? activeTrips : allTrips;
+
+    const isInboundTrip =
+      representativeTrips.some((t) => t.type === 'INBOUND') &&
+      !representativeTrips.some(
+        (t) => t.type === 'OUTBOUND' || t.type === 'TRANSFER',
+      );
+    const isTransferTrip = representativeTrips.some(
+      (t) => t.type === 'TRANSFER' || t.destinationHubId != null,
+    );
+    const tripType: 'INBOUND' | 'OUTBOUND' | 'TRANSFER' = isInboundTrip
+      ? 'INBOUND'
+      : isTransferTrip
+        ? 'TRANSFER'
+        : 'OUTBOUND';
+    const tripTypeLabel =
+      tripType === 'INBOUND'
+        ? 'Chuyến nhập kho'
+        : tripType === 'TRANSFER'
+          ? 'Chuyến xuất luân chuyển Hub'
+          : 'Chuyến xuất giao khách';
+
+    const tripTxs = allTxs.filter(
+      (tx) => tx.tripCode === tripCode && !tx.deletedAt,
+    );
+    const isCompleted =
+      activeTrips.some(
+        (t) => t.status === 'COMPLETED' || t.status === 'IN_TRANSIT',
+      ) ||
+      tripTxs.length > 0 ||
+      allStops.some((s) => !s.deletedAt && s.status === 'COMPLETED');
+    const isCancelled = activeTrips.length === 0;
+    const status: 'PENDING' | 'COMPLETED' | 'CANCELLED' = isCancelled
+      ? 'CANCELLED'
+      : isCompleted
+        ? 'COMPLETED'
+        : 'PENDING';
+    const statusLabel =
+      status === 'COMPLETED'
+        ? 'Đã xác nhận hoàn tất'
+        : status === 'CANCELLED'
+          ? 'Đã hủy nháp'
+          : 'Nháp chờ xử lý';
+
+    const latestTripRow = representativeTrips[representativeTrips.length - 1];
+    const firstTripRow = allTrips[0];
+    const primaryHubId =
+      latestTripRow?.originHubId ??
+      allStops[0]?.hubId ??
+      allOrders[0]?.originHubId ??
+      1;
+    const primaryHubName =
+      hubsById.get(Number(primaryHubId)) || 'Andromeda Hub - HCM';
+
+    const creatorId =
+      firstTripRow?.assignedByUserId ?? allOrders[0]?.createdByUserId ?? null;
+    const creator = creatorId ? usersById.get(Number(creatorId)) || null : null;
+
+    const operatorId =
+      tripTxs[tripTxs.length - 1]?.performedByUserId ??
+      allStops.find((s) => s.processedByUserId)?.processedByUserId ??
+      latestTripRow?.assignedByUserId ??
+      null;
+    const operator = operatorId
+      ? usersById.get(Number(operatorId)) || null
+      : null;
+
+    // Build current orders list & blockers (for pending outbound trips)
+    const blockers: Array<{
+      orderId: number;
+      orderCode: string;
+      goodsDescription: string;
+      quantityAllocated: number;
+      orderStatus: string;
+      pendingInboundTripCode: string | null;
+      pendingInboundPlate: string | null;
+      reason: string;
+    }> = [];
+
+    const currentOrders = representativeTrips.map((tr) => {
+      const ord = ordersById.get(tr.orderId);
+      const orderStatus = ord?.status || 'DRAFT';
+      const pendingInTrips = siblingTrips.filter(
+        (st) =>
+          st.orderId === tr.orderId &&
+          st.tripCode !== tripCode &&
+          st.type === 'INBOUND' &&
+          (st.status === 'PENDING' || st.status === 'WAITING'),
+      );
+      const confirmedInTx = allTxs.find(
+        (tx) =>
+          tx.orderId === tr.orderId &&
+          tx.type === InventoryTransactionType.INBOUND &&
+          !tx.deletedAt,
+      );
+      const inTrip =
+        pendingInTrips[0] ||
+        siblingTrips.find(
+          (st) => st.orderId === tr.orderId && st.type === 'INBOUND',
+        );
+
+      const isOrderBlockingOutbound =
+        tripType !== 'INBOUND' &&
+        status === 'PENDING' &&
+        (DRAFT_LIKE_STATUSES.includes(orderStatus) ||
+          pendingInTrips.length > 0);
+
+      if (isOrderBlockingOutbound && ord) {
+        const pCode = pendingInTrips[0]?.tripCode || inTrip?.tripCode || null;
+        const pPlate =
+          pendingInTrips[0]?.licensePlate || inTrip?.licensePlate || null;
+        blockers.push({
+          orderId: ord.id,
+          orderCode: ord.orderCode,
+          goodsDescription: ord.goodsDescription || 'Hàng hóa',
+          quantityAllocated: Number(tr.quantityAllocated) || 1,
+          orderStatus,
+          pendingInboundTripCode: pCode,
+          pendingInboundPlate: pPlate,
+          reason: pCode
+            ? `Đơn ${ord.orderCode} (${tr.quantityAllocated || 1} kiện) vẫn đang ở trạng thái Đơn nháp thuộc chuyến nhập ${pCode}${pPlate ? ` (Xe ${pPlate})` : ''} — chưa bấm Xác nhận nhập kho.`
+            : `Đơn ${ord.orderCode} (${tr.quantityAllocated || 1} kiện) vẫn đang ở trạng thái Đơn nháp — chưa xác nhận nhập kho.`,
+        });
+      }
+
+      return {
+        orderId: tr.orderId,
+        orderCode: ord?.orderCode || `#${tr.orderId}`,
+        goodsDescription: ord?.goodsDescription || 'Hàng hóa',
+        quantityAllocated: Number(tr.quantityAllocated) || 1,
+        weightAllocated: Number(tr.weightAllocated) || 0,
+        volumeAllocated: Number(tr.volumeAllocated) || 0,
+        orderStatus,
+        inboundTripCode: confirmedInTx?.tripCode || inTrip?.tripCode || null,
+        inboundLicensePlate:
+          confirmedInTx?.licensePlate || inTrip?.licensePlate || null,
+        inboundConfirmedAt: confirmedInTx?.createdAt || null,
+        isBlocker: isOrderBlockingOutbound,
+      };
+    });
+
+    // Build chronological timeline
+    const timeline: Array<{
+      id: string;
+      stepNumber?: number;
+      action: string;
+      actionLabel: string;
+      badgeColor: 'slate' | 'blue' | 'amber' | 'emerald' | 'purple' | 'rose';
+      createdAt: string | Date;
+      actorName: string;
+      actorEmail: string;
+      hubName: string;
+      summary: string;
+      note?: string | null;
+      changes: Array<{
+        label: string;
+        oldValue?: string | null;
+        newValue: string;
+      }>;
+    }> = [];
+
+    if (tripType === 'INBOUND') {
+      // 1. Parse initial creation from allTrips
+      const firstCreatedAt = allTrips[0].createdAt;
+      const firstCreatedMs = new Date(firstCreatedAt).getTime();
+      const firstConfirmedTx = tripTxs.find(
+        (tx) => tx.type === InventoryTransactionType.INBOUND,
+      );
+      const confirmedImmediately =
+        firstConfirmedTx &&
+        Math.abs(
+          new Date(firstConfirmedTx.createdAt).getTime() - firstCreatedMs,
+        ) <= 5000;
+
+      // Extract original plate & per-order quantities from trip.notes: "[NHẬP KHO] Xe <plate> tiếp nhận <qty> kiện tại <hub>"
+      let initialPlate: string | null = null;
+      const initialOrderQtyMap = new Map<number, number>();
+      for (const tr of allTrips) {
+        const m = tr.notes?.match(
+          /\[NHẬP KHO\]\s*Xe\s+(.+?)\s+tiếp nhận\s+(\d+)\s+kiện/i,
+        );
+        if (m) {
+          if (!initialPlate) initialPlate = m[1].trim();
+          initialOrderQtyMap.set(
+            tr.orderId,
+            Number(m[2]) || tr.quantityAllocated || 1,
+          );
+        } else {
+          initialOrderQtyMap.set(tr.orderId, Number(tr.quantityAllocated) || 1);
+        }
+      }
+      if (!initialPlate) {
+        initialPlate = firstTripRow.licensePlate || 'CHƯA CÓ TT';
+      }
+
+      const initChanges = allTrips.map((tr) => {
+        const ord = ordersById.get(tr.orderId);
+        const initQty =
+          initialOrderQtyMap.get(tr.orderId) ?? tr.quantityAllocated ?? 1;
+        return {
+          label: `Đơn ${ord?.orderCode || tr.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+          oldValue: null,
+          newValue: `${initQty} kiện`,
+        };
+      });
+
+      if (!confirmedImmediately) {
+        timeline.push({
+          id: `init-${tripCode}`,
+          action: 'TRIP_DRAFT_CREATED',
+          actionLabel: 'Tạo mới chuyến nhập nháp',
+          badgeColor: 'slate',
+          createdAt: firstCreatedAt,
+          actorName: creator?.name || 'Hệ thống',
+          actorEmail: creator?.email || '',
+          hubName: primaryHubName,
+          summary: `Khởi tạo phiếu nhập nháp ${tripCode} · Biển số: ${initialPlate}${firstTripRow.driverName && initialPlate === firstTripRow.licensePlate ? ` · Tài xế: ${firstTripRow.driverName}` : ''}`,
+          note: 'Thao tác: Bấm "Lưu nháp" (Chưa xác nhận nhập kho)',
+          changes: [
+            {
+              label: 'Biển số xe ban đầu',
+              oldValue: null,
+              newValue: initialPlate,
+            },
+            ...initChanges,
+          ],
+        });
+      }
+
+      // 2. Check explicit TRIP_DRAFT_UPDATED logs in order_activity_log
+      const draftUpdateLogs = rawLogs.filter(
+        (l) => l.tripCode === tripCode && l.action === 'TRIP_DRAFT_UPDATED',
+      );
+
+      if (draftUpdateLogs.length > 0) {
+        // Group by 2.5s window
+        const logBatches: any[][] = [];
+        for (const l of draftUpdateLogs) {
+          const lMs = new Date(l.createdAt).getTime();
+          const last = logBatches[logBatches.length - 1];
+          if (
+            last &&
+            Math.abs(lMs - new Date(last[0].createdAt).getTime()) <= 2500
+          ) {
+            last.push(l);
+          } else {
+            logBatches.push([l]);
+          }
+        }
+
+        for (const batch of logBatches) {
+          const firstLog = batch[0];
+          const actor = usersById.get(Number(firstLog.actorUserId));
+          const batchChanges: Array<{
+            label: string;
+            oldValue?: string | null;
+            newValue: string;
+          }> = [];
+          const firstOld = firstLog.oldValues || {};
+          const firstNew = firstLog.newValues || {};
+          if (
+            firstOld.licensePlate !== undefined &&
+            firstOld.licensePlate !== firstNew.licensePlate
+          ) {
+            batchChanges.push({
+              label: 'Biển số xe',
+              oldValue: firstOld.licensePlate || 'Chưa gán',
+              newValue: firstNew.licensePlate || 'Chưa gán',
+            });
+          }
+          if (
+            firstOld.driverName !== undefined &&
+            (firstOld.driverName || '') !== (firstNew.driverName || '')
+          ) {
+            batchChanges.push({
+              label: 'Tài xế',
+              oldValue: firstOld.driverName || 'Chưa gán',
+              newValue: firstNew.driverName || 'Chưa gán',
+            });
+          }
+          for (const l of batch) {
+            const ov = l.oldValues || {};
+            const nv = l.newValues || {};
+            if (
+              ov.totalQuantity !== undefined &&
+              ov.totalQuantity !== nv.totalQuantity
+            ) {
+              batchChanges.push({
+                label: `Đơn ${l.orderCode}${nv.goodsDescription ? ` (${nv.goodsDescription})` : ''}`,
+                oldValue: `${ov.totalQuantity} kiện`,
+                newValue: `${nv.totalQuantity} kiện (${nv.totalWeight ?? 0} kg · ${nv.totalVolume ?? 0} m³)`,
+              });
+            }
+          }
+
+          timeline.push({
+            id: `draft-upd-${firstLog.id}`,
+            action: 'TRIP_DRAFT_UPDATED',
+            actionLabel: 'Chỉnh sửa & Lưu nháp',
+            badgeColor: 'amber',
+            createdAt: firstLog.createdAt,
+            actorName:
+              actor?.name ||
+              (firstLog.actorEmail
+                ? firstLog.actorEmail.split('@')[0]
+                : 'Thủ kho'),
+            actorEmail: actor?.email || firstLog.actorEmail || '',
+            hubName: firstLog.hubName || primaryHubName,
+            summary:
+              batchChanges.length > 0
+                ? `Mở lại phiếu nháp ${tripCode} chỉnh sửa thông tin và bấm "Lưu nháp"`
+                : `Mở lại phiếu nháp ${tripCode} và bấm "Lưu nháp" (giữ nguyên thông tin xe ${firstNew.licensePlate || latestTripRow?.licensePlate || ''}, tài xế ${firstNew.driverName || latestTripRow?.driverName || '—'})`,
+            note: 'Thao tác: Bấm "Lưu nháp" (Chưa bấm Xác nhận nhập kho)',
+            changes: batchChanges,
+          });
+        }
+      } else {
+        // Reconstruct draft edits from timestamps & notes diff (for historical trips like SD1043, SD1055)
+        const candidateTimes: number[] = [];
+        allTrips.forEach((tr) => {
+          const uMs = new Date(tr.updatedAt).getTime();
+          if (uMs > firstCreatedMs + 3000) candidateTimes.push(uMs);
+        });
+        allStops.forEach((s) => {
+          const uMs = new Date(s.updatedAt).getTime();
+          if (s.status === 'PENDING' && uMs > firstCreatedMs + 3000) {
+            candidateTimes.push(uMs);
+          }
+        });
+        allOrders.forEach((o) => {
+          const uMs = new Date(o.updatedAt).getTime();
+          if (
+            DRAFT_LIKE_STATUSES.includes(o.status) &&
+            uMs > firstCreatedMs + 3000
+          ) {
+            candidateTimes.push(uMs);
+          }
+        });
+
+        const confirmedMs = firstConfirmedTx
+          ? new Date(firstConfirmedTx.createdAt).getTime()
+          : null;
+        const draftEditTimes = candidateTimes.filter(
+          (ms) => !confirmedMs || ms < confirmedMs - 3000,
+        );
+
+        if (draftEditTimes.length > 0) {
+          const latestDraftEditMs = Math.max(...draftEditTimes);
+          const diffChanges: Array<{
+            label: string;
+            oldValue?: string | null;
+            newValue: string;
+          }> = [];
+
+          const currentPlate = latestTripRow?.licensePlate || 'CHƯA CÓ TT';
+          const currentDriver = latestTripRow?.driverName || null;
+
+          if (
+            initialPlate &&
+            currentPlate &&
+            initialPlate.toUpperCase() !== currentPlate.toUpperCase()
+          ) {
+            diffChanges.push({
+              label: 'Biển số xe',
+              oldValue: initialPlate,
+              newValue: currentPlate,
+            });
+            if (currentDriver) {
+              diffChanges.push({
+                label: 'Tài xế',
+                oldValue: 'Chưa gán',
+                newValue: currentDriver,
+              });
+            }
+          }
+
+          for (const tr of allTrips) {
+            const ord = ordersById.get(tr.orderId);
+            const initQty = initialOrderQtyMap.get(tr.orderId);
+            const curQty = Number(tr.quantityAllocated) || 1;
+            if (tr.deletedAt) {
+              diffChanges.push({
+                label: `Đơn ${ord?.orderCode || tr.orderId}`,
+                oldValue: `${initQty ?? curQty} kiện`,
+                newValue: 'Đã xóa khỏi chuyến nháp',
+              });
+            } else if (initQty !== undefined && initQty !== curQty) {
+              diffChanges.push({
+                label: `Đơn ${ord?.orderCode || tr.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+                oldValue: `${initQty} kiện`,
+                newValue: `${curQty} kiện (${tr.weightAllocated ?? 0} kg · ${tr.volumeAllocated ?? 0} m³)`,
+              });
+            }
+          }
+
+          timeline.push({
+            id: `reconstructed-edit-${tripCode}`,
+            action: 'TRIP_DRAFT_UPDATED',
+            actionLabel:
+              diffChanges.length > 0
+                ? 'Chỉnh sửa & Lưu nháp'
+                : 'Mở phiếu & Lưu nháp lại',
+            badgeColor: 'amber',
+            createdAt: new Date(latestDraftEditMs).toISOString(),
+            actorName: operator?.name || creator?.name || 'Thủ kho',
+            actorEmail: operator?.email || creator?.email || '',
+            hubName: primaryHubName,
+            summary:
+              diffChanges.length > 0
+                ? `Mở lại phiếu nháp ${tripCode} để cập nhật thông tin xe / số lượng kiện`
+                : `Mở lại phiếu nháp ${tripCode} (giữ nguyên biển số ${currentPlate}${currentDriver ? `, tài xế ${currentDriver}` : ''}, tổng ${activeTrips.reduce((s, x) => s + (Number(x.quantityAllocated) || 0), 0)} kiện)`,
+            note: 'Thao tác: Bấm "Lưu nháp" (Chưa bấm Xác nhận nhập kho)',
+            changes: diffChanges,
+          });
+        }
+      }
+
+      // 3. Inbound Confirmations (from active INBOUND inventory transactions)
+      const inTxs = tripTxs.filter(
+        (tx) => tx.type === InventoryTransactionType.INBOUND,
+      );
+      if (inTxs.length > 0) {
+        const txBatches: OrderInventoryTransactionEntity[][] = [];
+        for (const tx of inTxs) {
+          const txMs = new Date(tx.createdAt).getTime();
+          const last = txBatches[txBatches.length - 1];
+          if (
+            last &&
+            Math.abs(txMs - new Date(last[0].createdAt).getTime()) <= 3000
+          ) {
+            last.push(tx);
+          } else {
+            txBatches.push([tx]);
+          }
+        }
+
+        for (const batch of txBatches) {
+          const firstTx = batch[0];
+          const txActor = firstTx.performedByUserId
+            ? usersById.get(Number(firstTx.performedByUserId))
+            : operator || creator;
+          const totalInQty = batch.reduce(
+            (s, x) => s + (Number(x.quantity) || 0),
+            0,
+          );
+          const isPartialReceive =
+            batch.length < activeTrips.length && status === 'PENDING';
+
+          timeline.push({
+            id: `inbound-confirm-${firstTx.id}`,
+            action: 'INBOUND_CONFIRMED',
+            actionLabel: isPartialReceive
+              ? 'Nhập kho đơn lẻ trên xe'
+              : 'Xác nhận nhập kho hoàn tất',
+            badgeColor: 'emerald',
+            createdAt: firstTx.createdAt,
+            actorName: txActor?.name || 'Thủ kho',
+            actorEmail: txActor?.email || '',
+            hubName:
+              (firstTx.hubId && hubsById.get(Number(firstTx.hubId))) ||
+              primaryHubName,
+            summary: `Xác nhận nhập kho ${batch.length} đơn (${totalInQty} kiện) từ chuyến ${tripCode}${firstTx.licensePlate ? ` (Xe ${firstTx.licensePlate})` : ''}${firstTx.invoiceCode ? ` · Mã phiếu: ${firstTx.invoiceCode}` : ''}`,
+            note: null,
+            changes: batch.map((tx) => {
+              const ord = ordersById.get(tx.orderId);
+              return {
+                label: `Đơn ${ord?.orderCode || tx.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+                oldValue: null,
+                newValue: `Nhập kho ${tx.quantity} kiện (${tx.weight ?? 0} kg · ${tx.volume ?? 0} m³)`,
+              };
+            }),
+          });
+        }
+      }
+    } else {
+      // OUTBOUND / TRANSFER TRIP TIMELINE
+      // Reconstruct all draft save batches from allTrips (withDeleted: true)
+      const draftTripRows = allTrips.filter(
+        (t) =>
+          t.status === 'PENDING' ||
+          (t.notes && t.notes.startsWith('[NHÁP XUẤT KHO')),
+      );
+      const batches: Array<{
+        timeMs: number;
+        createdAt: Date | string;
+        userId: number | null;
+        licensePlate: string | null;
+        driverName: string | null;
+        pickupDate: string | null;
+        items: TripEntity[];
+      }> = [];
+
+      for (const tr of draftTripRows) {
+        const tMs = new Date(tr.createdAt).getTime();
+        const last = batches[batches.length - 1];
+        if (last && Math.abs(tMs - last.timeMs) <= 2500) {
+          last.items.push(tr);
+        } else {
+          batches.push({
+            timeMs: tMs,
+            createdAt: tr.createdAt,
+            userId: tr.assignedByUserId ? Number(tr.assignedByUserId) : null,
+            licensePlate: tr.licensePlate || null,
+            driverName: tr.driverName || null,
+            pickupDate: tr.pickupDate ? String(tr.pickupDate) : null,
+            items: [tr],
+          });
+        }
+      }
+
+      for (let idx = 0; idx < batches.length; idx++) {
+        const b = batches[idx];
+        const bActor = b.userId ? usersById.get(b.userId) : creator;
+        const totalBatchQty = b.items.reduce(
+          (s, i) => s + (Number(i.quantityAllocated) || 0),
+          0,
+        );
+
+        if (idx === 0) {
+          timeline.push({
+            id: `out-batch-0`,
+            action: 'TRIP_DRAFT_CREATED',
+            actionLabel: 'Tạo mới chuyến xuất nháp',
+            badgeColor: 'slate',
+            createdAt: b.createdAt,
+            actorName: bActor?.name || 'Thủ kho',
+            actorEmail: bActor?.email || '',
+            hubName: primaryHubName,
+            summary: `Khởi tạo phiếu xuất nháp ${tripCode} · Xe ${b.licensePlate || 'Chưa gán'}${b.driverName ? ` · Tài xế: ${b.driverName}` : ''} (${b.items.length} đơn · ${totalBatchQty} kiện)`,
+            note: 'Thao tác: Bấm "Lưu nháp"',
+            changes: b.items.map((item) => {
+              const ord = ordersById.get(item.orderId);
+              return {
+                label: `Đơn ${ord?.orderCode || item.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+                oldValue: null,
+                newValue: `Dự kiến xuất ${item.quantityAllocated || 1} kiện (${item.weightAllocated ?? 0} kg · ${item.volumeAllocated ?? 0} m³)`,
+              };
+            }),
+          });
+        } else {
+          const prev = batches[idx - 1];
+          const prevMap = new Map<number, TripEntity>(
+            prev.items.map((i) => [i.orderId, i]),
+          );
+          const currMap = new Map<number, TripEntity>(
+            b.items.map((i) => [i.orderId, i]),
+          );
+          const batchChanges: Array<{
+            label: string;
+            oldValue?: string | null;
+            newValue: string;
+          }> = [];
+
+          if ((prev.licensePlate || '') !== (b.licensePlate || '')) {
+            batchChanges.push({
+              label: 'Biển số xe',
+              oldValue: prev.licensePlate || 'Chưa gán',
+              newValue: b.licensePlate || 'Chưa gán',
+            });
+          }
+          if ((prev.driverName || '') !== (b.driverName || '')) {
+            batchChanges.push({
+              label: 'Tài xế',
+              oldValue: prev.driverName || 'Chưa gán',
+              newValue: b.driverName || 'Chưa gán',
+            });
+          }
+
+          for (const item of b.items) {
+            const ord = ordersById.get(item.orderId);
+            const prevItem = prevMap.get(item.orderId);
+            if (!prevItem) {
+              batchChanges.push({
+                label: `Thêm đơn ${ord?.orderCode || item.orderId}`,
+                oldValue: null,
+                newValue: `${item.quantityAllocated || 1} kiện (${item.weightAllocated ?? 0} kg · ${item.volumeAllocated ?? 0} m³)`,
+              });
+            } else if (
+              Number(prevItem.quantityAllocated) !==
+              Number(item.quantityAllocated)
+            ) {
+              batchChanges.push({
+                label: `Đơn ${ord?.orderCode || item.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+                oldValue: `${prevItem.quantityAllocated} kiện`,
+                newValue: `${item.quantityAllocated} kiện (${item.weightAllocated ?? 0} kg · ${item.volumeAllocated ?? 0} m³)`,
+              });
+            }
+          }
+
+          for (const prevItem of prev.items) {
+            if (!currMap.has(prevItem.orderId)) {
+              const ord = ordersById.get(prevItem.orderId);
+              batchChanges.push({
+                label: `Gỡ đơn ${ord?.orderCode || prevItem.orderId}`,
+                oldValue: `${prevItem.quantityAllocated} kiện`,
+                newValue: 'Đã gỡ khỏi chuyến xuất nháp',
+              });
+            }
+          }
+
+          timeline.push({
+            id: `out-batch-${idx}`,
+            action: 'TRIP_DRAFT_UPDATED',
+            actionLabel:
+              batchChanges.length > 0
+                ? 'Chỉnh sửa & Lưu nháp'
+                : 'Mở phiếu & Lưu nháp lại',
+            badgeColor: 'amber',
+            createdAt: b.createdAt,
+            actorName: bActor?.name || 'Thủ kho',
+            actorEmail: bActor?.email || '',
+            hubName: primaryHubName,
+            summary:
+              batchChanges.length > 0
+                ? `Cập nhật phiếu xuất nháp ${tripCode} (${b.items.length} đơn · ${totalBatchQty} kiện)`
+                : `Mở phiếu xuất nháp ${tripCode} và bấm "Lưu nháp" (giữ nguyên ${b.items.length} đơn · ${totalBatchQty} kiện)`,
+            note: 'Thao tác: Bấm "Lưu nháp" (Chưa xác nhận xuất kho)',
+            changes: batchChanges,
+          });
+        }
+      }
+
+      // Also include milestones when draft inbound orders inside this outbound trip were confirmed inbound!
+      const firstBatchMs = batches[0]?.timeMs ?? 0;
+      const relatedInTxs = allTxs.filter(
+        (tx) =>
+          tx.type === InventoryTransactionType.INBOUND &&
+          !tx.deletedAt &&
+          orderIds.includes(tx.orderId) &&
+          new Date(tx.createdAt).getTime() > firstBatchMs,
+      );
+
+      if (relatedInTxs.length > 0) {
+        const inGroups = new Map<string, OrderInventoryTransactionEntity[]>();
+        for (const tx of relatedInTxs) {
+          const key = tx.tripCode || String(tx.id);
+          const list = inGroups.get(key) || [];
+          list.push(tx);
+          inGroups.set(key, list);
+        }
+
+        for (const [inTripCode, txList] of inGroups.entries()) {
+          const firstTx = txList[0];
+          const inActor = firstTx.performedByUserId
+            ? usersById.get(Number(firstTx.performedByUserId))
+            : null;
+          timeline.push({
+            id: `rel-in-${inTripCode}-${firstTx.id}`,
+            action: 'RELATED_INBOUND_CONFIRMED',
+            actionLabel: 'Đã xác nhận nhập kho đơn trong chuyến',
+            badgeColor: 'blue',
+            createdAt: firstTx.createdAt,
+            actorName: inActor?.name || 'Thủ kho',
+            actorEmail: inActor?.email || '',
+            hubName:
+              (firstTx.hubId && hubsById.get(Number(firstTx.hubId))) ||
+              primaryHubName,
+            summary: `Xác nhận nhập kho ${txList.length} đơn thuộc chuyến nhập ${inTripCode}${firstTx.licensePlate ? ` (Xe ${firstTx.licensePlate})` : ''} — sẵn sàng tồn kho để xuất`,
+            note: null,
+            changes: txList.map((tx) => {
+              const ord = ordersById.get(tx.orderId);
+              return {
+                label: `Đơn ${ord?.orderCode || tx.orderId}`,
+                oldValue: 'Đơn nháp (Chờ nhập)',
+                newValue: `Đã nhập kho ${tx.quantity} kiện (Lưu kho)`,
+              };
+            }),
+          });
+        }
+      }
+
+      // Outbound Confirmations
+      const outTxs = tripTxs.filter(
+        (tx) =>
+          tx.type === InventoryTransactionType.OUTBOUND ||
+          tx.type === InventoryTransactionType.TRANSFER,
+      );
+      if (outTxs.length > 0) {
+        const firstOut = outTxs[0];
+        const outActor = firstOut.performedByUserId
+          ? usersById.get(Number(firstOut.performedByUserId))
+          : operator || creator;
+        const totalOutQty = outTxs.reduce(
+          (s, x) => s + (Number(x.quantity) || 0),
+          0,
+        );
+        timeline.push({
+          id: `outbound-confirm-${firstOut.id}`,
+          action: 'OUTBOUND_CONFIRMED',
+          actionLabel: 'Xác nhận xuất kho hoàn tất',
+          badgeColor: 'purple',
+          createdAt: firstOut.createdAt,
+          actorName: outActor?.name || 'Thủ kho',
+          actorEmail: outActor?.email || '',
+          hubName:
+            (firstOut.hubId && hubsById.get(Number(firstOut.hubId))) ||
+            primaryHubName,
+          summary: `Xác nhận xuất kho ${outTxs.length} đơn (${totalOutQty} kiện) trên chuyến ${tripCode}${firstOut.licensePlate ? ` (Xe ${firstOut.licensePlate})` : ''}${firstOut.invoiceCode ? ` · Mã phiếu: ${firstOut.invoiceCode}` : ''}`,
+          note: null,
+          changes: outTxs.map((tx) => {
+            const ord = ordersById.get(tx.orderId);
+            return {
+              label: `Đơn ${ord?.orderCode || tx.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+              oldValue: null,
+              newValue: `Xuất kho ${tx.quantity} kiện${tx.destination ? ` → ${tx.destination}` : ''}`,
+            };
+          }),
+        });
+      }
+    }
+
+    // Append Rollback or Cancel events from order_activity_log
+    const specialLogs = rawLogs.filter(
+      (l) =>
+        l.tripCode === tripCode &&
+        (l.action === 'TRIP_ROLLBACK' || l.action === 'DRAFT_CANCELLED'),
+    );
+    const specialBatches: any[][] = [];
+    for (const l of specialLogs) {
+      const lMs = new Date(l.createdAt).getTime();
+      const last = specialBatches[specialBatches.length - 1];
+      if (
+        last &&
+        last[0].action === l.action &&
+        Math.abs(lMs - new Date(last[0].createdAt).getTime()) <= 2500
+      ) {
+        last.push(l);
+      } else {
+        specialBatches.push([l]);
+      }
+    }
+
+    for (const batch of specialBatches) {
+      const first = batch[0];
+      const sActor = usersById.get(Number(first.actorUserId));
+      timeline.push({
+        id: `special-${first.id}`,
+        action: first.action,
+        actionLabel:
+          first.action === 'TRIP_ROLLBACK'
+            ? 'Mở lại chuyến xe (Hoàn tác)'
+            : 'Hủy chuyến nháp',
+        badgeColor: 'rose',
+        createdAt: first.createdAt,
+        actorName:
+          sActor?.name ||
+          (first.actorEmail ? first.actorEmail.split('@')[0] : 'Quản trị viên'),
+        actorEmail: sActor?.email || first.actorEmail || '',
+        hubName: first.hubName || primaryHubName,
+        summary:
+          first.reason ||
+          (first.action === 'TRIP_ROLLBACK'
+            ? `Mở lại chuyến xe ${tripCode} về trạng thái Chờ xử lý`
+            : `Hủy chuyến nháp ${tripCode}`),
+        note: null,
+        changes: [],
+      });
+    }
+
+    // Sort timeline oldest -> newest to assign Lần 1..N, then return newest first (or with stepNumber)
+    timeline.sort(
+      (a, b) =>
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+    timeline.forEach((item, idx) => {
+      item.stepNumber = idx + 1;
+    });
+    const timelineNewestFirst = [...timeline].reverse();
+
+    return {
+      tripCode,
+      summary: {
+        tripCode,
+        tripType,
+        tripTypeLabel,
+        status,
+        statusLabel,
+        licensePlate: latestTripRow?.licensePlate || 'CHƯA CÓ TT',
+        driverName: latestTripRow?.driverName || null,
+        pickupDate: latestTripRow?.pickupDate
+          ? String(latestTripRow.pickupDate)
+          : null,
+        hubId: primaryHubId,
+        hubName: primaryHubName,
+        totalOrders: currentOrders.length,
+        totalQuantity: currentOrders.reduce(
+          (s, o) => s + (Number(o.quantityAllocated) || 0),
+          0,
+        ),
+        totalWeight: currentOrders.reduce(
+          (s, o) => s + (Number(o.weightAllocated) || 0),
+          0,
+        ),
+        totalVolume: currentOrders.reduce(
+          (s, o) => s + (Number(o.volumeAllocated) || 0),
+          0,
+        ),
+        createdAt: firstTripRow?.createdAt,
+        updatedAt: latestTripRow?.updatedAt,
+        creator,
+        operator,
+      },
+      blockers,
+      orders: currentOrders,
+      timeline: timelineNewestFirst,
     };
   }
 }
