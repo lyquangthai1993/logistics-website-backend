@@ -35,8 +35,20 @@ export class QueryHubDto {
   @ApiPropertyOptional({ description: 'Lọc theo trạng thái hoạt động' })
   @IsOptional()
   @Transform(({ value }) => {
-    if (value === 'true' || value === true) return true;
-    if (value === 'false' || value === false) return false;
+    if (
+      value === 'true' ||
+      value === true ||
+      value === 'active' ||
+      value === 'ACTIVE'
+    )
+      return true;
+    if (
+      value === 'false' ||
+      value === false ||
+      value === 'inactive' ||
+      value === 'INACTIVE'
+    )
+      return false;
     return undefined;
   })
   @IsBoolean()
