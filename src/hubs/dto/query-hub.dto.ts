@@ -32,7 +32,45 @@ export class QueryHubDto {
   @IsString()
   search?: string;
 
+  @ApiPropertyOptional({
+    description: 'Alias tìm kiếm theo tên/mã chi nhánh (từ bộ lọc cột name)',
+  })
+  @IsOptional()
+  @IsString()
+  name?: string;
+
   @ApiPropertyOptional({ description: 'Lọc theo trạng thái hoạt động' })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (
+      value === 'true' ||
+      value === true ||
+      value === 'active' ||
+      value === 'ACTIVE'
+    )
+      return true;
+    if (
+      value === 'false' ||
+      value === false ||
+      value === 'inactive' ||
+      value === 'INACTIVE'
+    )
+      return false;
+    return undefined;
+  })
+  @IsBoolean()
+  isActive?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Alias lọc theo trạng thái (active / inactive / deleted)',
+  })
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @ApiPropertyOptional({
+    description: 'Lọc các kho đã xóa mềm (deletedAt IS NOT NULL)',
+  })
   @IsOptional()
   @Transform(({ value }) => {
     if (value === 'true' || value === true) return true;
@@ -40,7 +78,7 @@ export class QueryHubDto {
     return undefined;
   })
   @IsBoolean()
-  isActive?: boolean;
+  isDeleted?: boolean;
 
   @ApiPropertyOptional({
     description: 'Lọc theo phân cấp (1: Hub Cấp 1, 2: Hub Cấp 2 / Xe bo)',
@@ -52,4 +90,13 @@ export class QueryHubDto {
   @Max(2)
   @IsOptional()
   level?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Sắp xếp theo cột (JSON array [{"id":"status","desc":true}] hoặc field:ASC|DESC)',
+    example: '[{"id":"status","desc":true}]',
+  })
+  @IsOptional()
+  @IsString()
+  sort?: string;
 }
