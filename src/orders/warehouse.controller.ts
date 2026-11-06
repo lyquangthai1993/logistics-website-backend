@@ -75,6 +75,12 @@ export class WarehouseController {
     description:
       'Chế độ trích xuất toàn bộ dữ liệu đơn hàng lưu kho (bỏ qua giới hạn phân trang 100)',
   })
+  @ApiQuery({
+    name: 'hubId',
+    required: false,
+    type: Number,
+    description: 'Lọc theo Kho/Hub cụ thể (dành cho Super Admin)',
+  })
   async getOrders(
     @Request() req: any,
     @Query('search') search?: string,
@@ -87,6 +93,7 @@ export class WarehouseController {
     @Query('ids') ids?: string,
     @Query('groupBy') groupBy?: string,
     @Query('isExport') isExport?: string | boolean,
+    @Query('hubId') hubId?: string | number,
   ) {
     return this.warehouseService.getOrders(req.user, {
       search,
@@ -99,6 +106,7 @@ export class WarehouseController {
       ids,
       groupBy,
       isExport,
+      hubId: hubId ? Number(hubId) : undefined,
     });
   }
 
@@ -108,12 +116,23 @@ export class WarehouseController {
     summary:
       'Lấy chỉ số KPI tổng quan kho (Chờ nhập, Lưu kho, Chờ xuất, Đã xuất)',
   })
+  @ApiQuery({
+    name: 'hubId',
+    required: false,
+    type: Number,
+    description: 'Lọc theo Kho/Hub cụ thể (dành cho Super Admin)',
+  })
   async getKpi(
     @Request() req: any,
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
+    @Query('hubId') hubId?: string | number,
   ) {
-    return this.warehouseService.getKpiStats(req.user, { fromDate, toDate });
+    return this.warehouseService.getKpiStats(req.user, {
+      fromDate,
+      toDate,
+      hubId: hubId ? Number(hubId) : undefined,
+    });
   }
 
   @Get('outbound-trips')
@@ -132,6 +151,12 @@ export class WarehouseController {
     required: false,
     enum: ['ALL', 'CUSTOMER', 'TRANSFER'],
   })
+  @ApiQuery({
+    name: 'hubId',
+    required: false,
+    type: Number,
+    description: 'Lọc theo Kho/Hub cụ thể (dành cho Super Admin)',
+  })
   async getOutboundTrips(
     @Request() req: any,
     @Query('search') search?: string,
@@ -141,6 +166,7 @@ export class WarehouseController {
     @Query('toDate') toDate?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('hubId') hubId?: string | number,
   ) {
     return this.warehouseService.getOutboundTrips(req.user, {
       search,
@@ -150,6 +176,7 @@ export class WarehouseController {
       toDate,
       page,
       limit,
+      hubId: hubId ? Number(hubId) : undefined,
     });
   }
 
@@ -163,6 +190,12 @@ export class WarehouseController {
   @ApiQuery({ name: 'type', required: false, enum: ['CUSTOMER', 'TRANSFER'] })
   @ApiQuery({ name: 'fromDate', required: false, type: String })
   @ApiQuery({ name: 'toDate', required: false, type: String })
+  @ApiQuery({
+    name: 'hubId',
+    required: false,
+    type: Number,
+    description: 'Lọc theo Kho/Hub cụ thể (dành cho Super Admin)',
+  })
   async getInboundTrips(
     @Request() req: any,
     @Query('search') search?: string,
@@ -172,6 +205,7 @@ export class WarehouseController {
     @Query('toDate') toDate?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('hubId') hubId?: string | number,
   ) {
     return this.warehouseService.getInboundTrips(req.user, {
       search,
@@ -181,6 +215,7 @@ export class WarehouseController {
       toDate,
       page,
       limit,
+      hubId: hubId ? Number(hubId) : undefined,
     });
   }
 
