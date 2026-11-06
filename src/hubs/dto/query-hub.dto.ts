@@ -62,11 +62,23 @@ export class QueryHubDto {
   isActive?: boolean;
 
   @ApiPropertyOptional({
-    description: 'Alias lọc theo trạng thái (active / inactive)',
+    description: 'Alias lọc theo trạng thái (active / inactive / deleted)',
   })
   @IsOptional()
   @IsString()
   status?: string;
+
+  @ApiPropertyOptional({
+    description: 'Lọc các kho đã xóa mềm (deletedAt IS NOT NULL)',
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true' || value === true) return true;
+    if (value === 'false' || value === false) return false;
+    return undefined;
+  })
+  @IsBoolean()
+  isDeleted?: boolean;
 
   @ApiPropertyOptional({
     description: 'Lọc theo phân cấp (1: Hub Cấp 1, 2: Hub Cấp 2 / Xe bo)',

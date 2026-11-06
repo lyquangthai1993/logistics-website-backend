@@ -53,22 +53,46 @@ export class HubsService {
       .createQueryBuilder('hub')
       .leftJoinAndSelect('hub.vehicles', 'vehicle');
 
-    let resolvedIsActive = query.isActive;
-    if (typeof resolvedIsActive !== 'boolean' && query.status) {
-      const tokens = String(query.status)
-        .toLowerCase()
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const hasActive = tokens.includes('active') || tokens.includes('true');
-      const hasInactive =
-        tokens.includes('inactive') || tokens.includes('false');
-      if (hasActive && !hasInactive) resolvedIsActive = true;
-      else if (hasInactive && !hasActive) resolvedIsActive = false;
-    }
+    const statusTokens = query.status
+      ? String(query.status)
+          .toLowerCase()
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
 
-    if (typeof resolvedIsActive === 'boolean') {
-      qb.andWhere('hub.isActive = :isActive', { isActive: resolvedIsActive });
+    const hasActive =
+      statusTokens.includes('active') ||
+      statusTokens.includes('true') ||
+      query.isActive === true;
+    const hasInactive =
+      statusTokens.includes('inactive') ||
+      statusTokens.includes('false') ||
+      query.isActive === false;
+    const hasDeleted =
+      statusTokens.includes('deleted') || query.isDeleted === true;
+
+    if (hasDeleted) {
+      qb.withDeleted();
+      if (hasActive && hasInactive) {
+        // Show all: active + inactive + deleted
+      } else if (hasActive) {
+        qb.andWhere(
+          '(hub.deletedAt IS NOT NULL OR (hub.deletedAt IS NULL AND hub.isActive = true))',
+        );
+      } else if (hasInactive) {
+        qb.andWhere(
+          '(hub.deletedAt IS NOT NULL OR (hub.deletedAt IS NULL AND hub.isActive = false))',
+        );
+      } else {
+        qb.andWhere('hub.deletedAt IS NOT NULL');
+      }
+    } else {
+      if (hasActive && !hasInactive) {
+        qb.andWhere('hub.isActive = :isActive', { isActive: true });
+      } else if (hasInactive && !hasActive) {
+        qb.andWhere('hub.isActive = :isActive', { isActive: false });
+      }
     }
 
     if (query.level && Number(query.level) > 0) {
@@ -179,10 +203,11 @@ export class HubsService {
     });
   }
 
-  async findOne(id: number): Promise<HubEntity> {
+  async findOne(id: number, withDeleted = false): Promise<HubEntity> {
     const hub = await this.hubRepository.findOne({
       where: { id },
       relations: ['vehicles'],
+      withDeleted,
     });
     if (!hub) {
       throw new NotFoundException(`Không tìm thấy Hub với ID ${id}`);
@@ -191,13 +216,14 @@ export class HubsService {
   }
 
   async update(id: number, updateHubDto: UpdateHubDto): Promise<HubEntity> {
-    const hub = await this.findOne(id);
+    const hub = await this.findOne(id, true);
 
     if (updateHubDto.code && updateHubDto.code !== hub.code) {
       const existing = await this.hubRepository.findOne({
         where: { code: updateHubDto.code },
+        withDeleted: true,
       });
-      if (existing) {
+      if (existing && existing.id !== hub.id) {
         throw new ConflictException(
           `Hub với mã "${updateHubDto.code}" đã tồn tại trong hệ thống`,
         );
@@ -205,12 +231,20 @@ export class HubsService {
     }
 
     Object.assign(hub, updateHubDto);
+    if (updateHubDto.isActive === true && hub.deletedAt) {
+      hub.deletedAt = null;
+    }
     return this.hubRepository.save(hub);
   }
 
   async toggleActive(id: number): Promise<HubEntity> {
-    const hub = await this.findOne(id);
-    hub.isActive = !hub.isActive;
+    const hub = await this.findOne(id, true);
+    if (hub.deletedAt) {
+      hub.deletedAt = null;
+      hub.isActive = true;
+    } else {
+      hub.isActive = !hub.isActive;
+    }
     return this.hubRepository.save(hub);
   }
 
