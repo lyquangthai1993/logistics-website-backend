@@ -209,6 +209,25 @@ export class WarehouseController {
     );
   }
 
+  @Get('trips/:tripCode/history')
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.WAREHOUSE_MANAGER,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+  )
+  @ApiOperation({
+    summary:
+      'Xem lịch sử khởi tạo, chỉnh sửa nháp, xác nhận nhập/xuất và cảnh báo đơn chặn của chuyến xe (SD...)',
+  })
+  @ApiParam({ name: 'tripCode', type: String, example: 'SD1043' })
+  async getTripHistory(
+    @Request() req: any,
+    @Param('tripCode') tripCode: string,
+  ) {
+    return this.warehouseService.getTripHistory(req.user, tripCode);
+  }
+
   @Post('trips/:tripCode/append-order')
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.CREATED)
