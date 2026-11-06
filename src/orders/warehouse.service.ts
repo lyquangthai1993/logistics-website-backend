@@ -4387,16 +4387,24 @@ export class WarehouseService {
       );
     }
     if (dateRange.fromDate) {
-      const p = bind(new Date(`${dateRange.fromDate}T00:00:00`).toISOString());
-      txWhere.push(`tx."createdAt" >= ${p}`);
-      draftWhere.push(`t."createdAt" >= ${p}`);
+      const fromIso = new Date(
+        `${dateRange.fromDate}T00:00:00+07:00`,
+      ).toISOString();
+      const pIso = bind(fromIso);
+      const pDate = bind(dateRange.fromDate);
+      txWhere.push(`tx."createdAt" >= ${pIso}`);
+      draftWhere.push(
+        `(t."createdAt" >= ${pIso} OR t."pickupDate" >= ${pDate})`,
+      );
     }
     if (dateRange.toDate) {
-      const p = bind(
-        new Date(`${dateRange.toDate}T23:59:59.999`).toISOString(),
+      const toIso = new Date(`${dateRange.toDate}T23:59:59.999Z`).toISOString();
+      const pIso = bind(toIso);
+      const pDate = bind(dateRange.toDate);
+      txWhere.push(`tx."createdAt" <= ${pIso}`);
+      draftWhere.push(
+        `(t."createdAt" <= ${pIso} OR t."pickupDate" <= ${pDate})`,
       );
-      txWhere.push(`tx."createdAt" <= ${p}`);
-      draftWhere.push(`t."createdAt" <= ${p}`);
     }
 
     const txJoinOrder = hasSearch
@@ -4969,25 +4977,52 @@ export class WarehouseService {
     }
 
     if (dateRange.fromDate) {
-      const fromIso = new Date(`${dateRange.fromDate}T00:00:00`).toISOString();
-      where.push(`ts."createdAt" >= ${bind(fromIso)}`);
+      const fromIso = new Date(
+        `${dateRange.fromDate}T00:00:00+07:00`,
+      ).toISOString();
+      const pFromIso = bind(fromIso);
+      const pFromDate = bind(dateRange.fromDate);
+      where.push(
+        `(ts."createdAt" >= ${pFromIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND dt."deletedAt" IS NULL AND dt."pickupDate" >= ${pFromDate}))`,
+      );
     }
 
     if (dateRange.toDate) {
-      const toIso = new Date(`${dateRange.toDate}T23:59:59.999`).toISOString();
-      where.push(`ts."createdAt" <= ${bind(toIso)}`);
+      const toIso = new Date(`${dateRange.toDate}T23:59:59.999Z`).toISOString();
+      const pToIso = bind(toIso);
+      const pToDate = bind(dateRange.toDate);
+      where.push(
+        `(ts."createdAt" <= ${pToIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND dt."deletedAt" IS NULL AND dt."pickupDate" <= ${pToDate}))`,
+      );
     }
 
     const whereSql = where.join(' AND ');
 
-    const baseCte = `WITH filtered_stops AS (
+    const baseCte = `WITH raw_stops AS (
       SELECT ts."tripCode",
              ts."status",
              ts."stopType",
+             ts."stopSequence",
              ts."hubId",
              ts."createdAt"
       FROM "trip_stop" ts
       WHERE ${whereSql}
+    ),
+    filtered_stops AS (
+      SELECT DISTINCT ON (rs."tripCode")
+             rs."tripCode",
+             CASE
+               WHEN BOOL_OR(rs."status" = 'PENDING') OVER (PARTITION BY rs."tripCode") THEN 'PENDING'
+               ELSE 'COMPLETED'
+             END AS "status",
+             rs."stopType",
+             rs."hubId",
+             MAX(rs."createdAt") OVER (PARTITION BY rs."tripCode") AS "createdAt"
+      FROM raw_stops rs
+      ORDER BY rs."tripCode",
+               CASE WHEN rs."status" = 'PENDING' THEN 0 ELSE 1 END ASC,
+               rs."stopSequence" ASC,
+               rs."createdAt" DESC
     ),
     unique_trip_codes AS (
       SELECT DISTINCT "tripCode" FROM filtered_stops
@@ -5052,14 +5087,20 @@ export class WarehouseService {
 
     const pageSql = `${baseCte}
        SELECT ts."tripCode",
-              ts."status",
+              p."status",
               ts."stopType",
               ts."hubId",
               ts."processedAt",
               ts."processedByUserId",
-              ts."createdAt",
+              p."createdAt",
               p."isTransfer",
               h."name" AS "hubName",
+              (SELECT STRING_AGG(sh."name", ' → ' ORDER BY sts."stopSequence" ASC, sts.id ASC)
+               FROM "trip_stop" sts
+               JOIN "hub" sh ON sh.id = sts."hubId"
+               WHERE sts."tripCode" = ts."tripCode"
+                 AND sts."stopType" <> 'ORIGIN'
+                 AND sts."deletedAt" IS NULL) AS "routeStopsSummary",
               (SELECT oh."name" FROM "trip_stop" os JOIN "hub" oh ON oh.id = os."hubId"
                WHERE os."tripCode" = ts."tripCode" AND os."stopType" = 'ORIGIN' AND os."deletedAt" IS NULL
                LIMIT 1) AS "originHubName",
@@ -5354,7 +5395,7 @@ export class WarehouseService {
 
       return {
         id: r.firstTripId != null ? Number(r.firstTripId) : null,
-        groupKey: r.tripCode,
+        groupKey: r.hubId ? `${r.tripCode}_${r.hubId}` : r.tripCode,
         tripCode: r.tripCode,
         vehicleLicensePlate: r.licensePlate || 'CHƯA GÁN XE',
         licensePlate: r.licensePlate || 'CHƯA GÁN XE',
@@ -5367,6 +5408,7 @@ export class WarehouseService {
         hubId: Number(r.hubId),
         originHub: r.originHubName || '',
         destinationHub: r.hubName || '',
+        routeStopsSummary: r.routeStopsSummary || r.hubName || '',
         isTransfer: !!r.isTransfer,
         ordersCount: Number(r.ordersCount) || tripOrders.length,
         remainingOrdersCount: Number(r.ordersForHubCount) || 0,
