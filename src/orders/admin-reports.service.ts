@@ -407,24 +407,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.ensureTableExists();
       await this.getOrCreateDefaultCronConfig();
-      const latestClosedDate = this.getLatestClosedReportDate();
-      const existingCount = await this.reportRepository.count({
-        where: { reportDate: latestClosedDate },
-      });
-      const existingLogs = await this.cronLogRepository.count();
-      if (existingCount === 0 || existingLogs === 0) {
-        this.logger.log(
-          `[CRON INIT] Khởi tạo chốt báo cáo vận hành cho ngày ${latestClosedDate}...`,
-        );
-        await this.executeAndLogCronRun({
-          fromDate: latestClosedDate,
-          toDate: latestClosedDate,
-          triggeredBy: 'STARTUP_INIT',
-          notifySuperAdmins: false,
-        });
-        this.lastCronProcessedDate = latestClosedDate;
-        this.lastCronRunAt = new Date();
-      }
     } catch (err) {
       this.logger.warn(
         `[CRON INIT] Lỗi khởi tạo cron báo cáo: ${(err as Error)?.message}`,
@@ -928,78 +910,8 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const overallQueryStart =
       trailingStartMonthDate < fromDate ? trailingStartMonthDate : fromDate;
     const latestClosedReportDate = this.getLatestClosedReportDate(now);
-    const currentOpenReportDate = this.addDays(latestClosedReportDate, 1);
 
-    // Ensure snapshot table is populated and up-to-date for the queried window
-    const backfillEnd =
-      toDate <= currentOpenReportDate ? toDate : currentOpenReportDate;
-    if (overallQueryStart <= backfillEnd) {
-      const existingStats: Array<{
-        distinctDates: number;
-        minCalculatedAt: Date | null;
-      }> = await this.dataSource.query(
-        `
-        SELECT
-          COUNT(DISTINCT "reportDate")::int AS "distinctDates",
-          MIN("calculatedAt") AS "minCalculatedAt"
-        FROM "daily_hub_operational_report"
-        WHERE "reportDate" >= $1 AND "reportDate" <= $2
-        `,
-        [overallQueryStart, backfillEnd],
-      );
-      const expectedDays = this.enumerateDates(overallQueryStart, backfillEnd);
-      const distinctDates = Number(existingStats?.[0]?.distinctDates) || 0;
-      const minCalculatedAt = existingStats?.[0]?.minCalculatedAt
-        ? new Date(existingStats[0].minCalculatedAt)
-        : null;
-
-      let hasStaleHistoricalTx = false;
-      if (minCalculatedAt) {
-        const wStart = this.getReportWindow(overallQueryStart).windowStart;
-        const wEnd = this.getReportWindow(backfillEnd).windowEnd;
-        const txCheck: Array<{ latestChange: Date | null }> =
-          await this.dataSource.query(
-            `
-            SELECT MAX(GREATEST(tx."updatedAt", COALESCE(tx."deletedAt", tx."createdAt"))) AS "latestChange"
-            FROM "order_inventory_transaction" tx
-            WHERE tx."createdAt" >= $1 AND tx."createdAt" < $2
-            `,
-            [wStart.toISOString(), wEnd.toISOString()],
-          );
-        const latestChange = txCheck?.[0]?.latestChange
-          ? new Date(txCheck[0].latestChange)
-          : null;
-        if (
-          latestChange &&
-          latestChange.getTime() > minCalculatedAt.getTime()
-        ) {
-          hasStaleHistoricalTx = true;
-        }
-      }
-
-      if (distinctDates < expectedDays.length || hasStaleHistoricalTx) {
-        await this.aggregateAndSaveDateRange(
-          overallQueryStart,
-          backfillEnd,
-          hasStaleHistoricalTx ? 'AUTO_SYNC' : 'BACKFILL',
-          false,
-        );
-      } else {
-        // Always refresh the latest closed & current open operational date so recent confirmations are live
-        const refreshStart =
-          latestClosedReportDate >= overallQueryStart
-            ? latestClosedReportDate
-            : overallQueryStart;
-        if (refreshStart <= backfillEnd) {
-          await this.aggregateAndSaveDateRange(
-            refreshStart,
-            backfillEnd,
-            'AUTO_SYNC',
-            false,
-          );
-        }
-      }
-    }
+    // Read strictly from daily_hub_operational_report (populated by Cronjob runs)
 
     const allHubs = await this.hubRepository.find({
       where: { isActive: true },
@@ -1440,6 +1352,12 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       WHERE tx."deletedAt" IS NULL
         AND tx."createdAt" >= $1
         AND tx."createdAt" < $2
+        AND EXISTS (
+          SELECT 1
+          FROM "daily_hub_operational_report" r_snap
+          WHERE r_snap."deletedAt" IS NULL
+            AND r_snap."reportDate" = TO_CHAR(tx."createdAt" + INTERVAL '13 hours', 'YYYY-MM-DD')
+        )
         ${tripTypeSql}
         ${tripHubSql}
       GROUP BY
@@ -1600,8 +1518,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         Boolean(params.notifySuperAdmins),
       );
 
-      // Query aggregated summary across [fromDate, toDate] for the log record
-      const summaryRows: Array<{
+      // Split into per-day summaries so multi-day runs create an individual execution log per day
+      const perDayRows: Array<{
+        reportDate: string;
+        hubCount: number;
         totalInboundCbm: number;
         totalInboundWeightKg: number;
         totalInboundTrips: number;
@@ -1611,6 +1531,8 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       }> = await this.dataSource.query(
         `
         SELECT
+          r."reportDate" AS "reportDate",
+          COUNT(r.id)::int AS "hubCount",
           COALESCE(SUM(r."inboundVolumeCbm"), 0)::float AS "totalInboundCbm",
           COALESCE(SUM(r."inboundWeightKg"), 0)::float AS "totalInboundWeightKg",
           COALESCE(SUM(r."inboundTripCount"), 0)::int AS "totalInboundTrips",
@@ -1621,23 +1543,55 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         WHERE r."deletedAt" IS NULL
           AND r."reportDate" >= $1
           AND r."reportDate" <= $2
+        GROUP BY r."reportDate"
+        ORDER BY r."reportDate" ASC
         `,
         [fromDate, toDate],
       );
 
-      const sRow = summaryRows?.[0];
+      const perDayMap = new Map<string, (typeof perDayRows)[number]>();
+      for (const r of perDayRows) {
+        perDayMap.set(r.reportDate, r);
+      }
+
       const totalInboundCbm =
-        Math.round((Number(sRow?.totalInboundCbm) || 0) * 10) / 10;
+        Math.round(
+          perDayRows.reduce((s, r) => s + (Number(r.totalInboundCbm) || 0), 0) *
+            10,
+        ) / 10;
       const totalInboundTons =
-        Math.round(((Number(sRow?.totalInboundWeightKg) || 0) / 1000) * 100) /
-        100;
-      const totalInboundTrips = Number(sRow?.totalInboundTrips) || 0;
+        Math.round(
+          (perDayRows.reduce(
+            (s, r) => s + (Number(r.totalInboundWeightKg) || 0),
+            0,
+          ) /
+            1000) *
+            100,
+        ) / 100;
+      const totalInboundTrips = perDayRows.reduce(
+        (s, r) => s + (Number(r.totalInboundTrips) || 0),
+        0,
+      );
       const totalOutboundCbm =
-        Math.round((Number(sRow?.totalOutboundCbm) || 0) * 10) / 10;
+        Math.round(
+          perDayRows.reduce(
+            (s, r) => s + (Number(r.totalOutboundCbm) || 0),
+            0,
+          ) * 10,
+        ) / 10;
       const totalOutboundTons =
-        Math.round(((Number(sRow?.totalOutboundWeightKg) || 0) / 1000) * 100) /
-        100;
-      const totalOutboundTrips = Number(sRow?.totalOutboundTrips) || 0;
+        Math.round(
+          (perDayRows.reduce(
+            (s, r) => s + (Number(r.totalOutboundWeightKg) || 0),
+            0,
+          ) /
+            1000) *
+            100,
+        ) / 100;
+      const totalOutboundTrips = perDayRows.reduce(
+        (s, r) => s + (Number(r.totalOutboundTrips) || 0),
+        0,
+      );
 
       const finishedAt = new Date();
       const durationMs = Math.max(
@@ -1645,36 +1599,62 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         finishedAt.getTime() - startedAt.getTime(),
       );
 
-      const logEntity = await this.cronLogRepository.save(
-        this.cronLogRepository.create({
+      const individualDays = this.enumerateDates(fromDate, toDate);
+      const perDayDuration = Math.max(
+        1,
+        Math.round(durationMs / Math.max(1, individualDays.length)),
+      );
+      const resolvedActorEmail =
+        actorEmail ||
+        (params.triggeredBy === 'CRON_SCHEDULED'
+          ? 'SYSTEM_CRON'
+          : params.triggeredBy === 'STARTUP_INIT'
+            ? 'SYSTEM_INIT'
+            : 'SUPER_ADMIN');
+
+      const logEntitiesToSave = individualDays.map((dayStr) => {
+        const dRow = perDayMap.get(dayStr);
+        const dayWin = this.getReportWindow(dayStr);
+        const dInCbm =
+          Math.round((Number(dRow?.totalInboundCbm) || 0) * 10) / 10;
+        const dInTons =
+          Math.round(((Number(dRow?.totalInboundWeightKg) || 0) / 1000) * 100) /
+          100;
+        const dInTrips = Number(dRow?.totalInboundTrips) || 0;
+        const dOutCbm =
+          Math.round((Number(dRow?.totalOutboundCbm) || 0) * 10) / 10;
+        const dOutTons =
+          Math.round(
+            ((Number(dRow?.totalOutboundWeightKg) || 0) / 1000) * 100,
+          ) / 100;
+        const dOutTrips = Number(dRow?.totalOutboundTrips) || 0;
+
+        return this.cronLogRepository.create({
           jobKey: config.jobKey,
-          targetDate: fromDate,
-          targetEndDate: toDate,
-          windowLabel,
+          targetDate: dayStr,
+          targetEndDate: dayStr,
+          windowLabel: dayWin.windowLabel,
           triggeredBy: params.triggeredBy,
           actorUserId,
-          actorEmail:
-            actorEmail ||
-            (params.triggeredBy === 'CRON_SCHEDULED'
-              ? 'SYSTEM_CRON'
-              : params.triggeredBy === 'STARTUP_INIT'
-                ? 'SYSTEM_INIT'
-                : 'SUPER_ADMIN'),
+          actorEmail: resolvedActorEmail,
           status: 'SUCCESS',
-          processedDays: aggResult.processedDays,
-          upsertedHubRows: aggResult.upsertedRows,
-          totalInboundCbm,
-          totalInboundTons,
-          totalInboundTrips,
-          totalOutboundCbm,
-          totalOutboundTons,
-          totalOutboundTrips,
-          durationMs,
+          processedDays: 1,
+          upsertedHubRows: Number(dRow?.hubCount) || 0,
+          totalInboundCbm: dInCbm,
+          totalInboundTons: dInTons,
+          totalInboundTrips: dInTrips,
+          totalOutboundCbm: dOutCbm,
+          totalOutboundTons: dOutTons,
+          totalOutboundTrips: dOutTrips,
+          durationMs: perDayDuration,
           errorMessage: null,
           startedAt,
           finishedAt,
-        }),
-      );
+        });
+      });
+
+      const savedLogs = await this.cronLogRepository.save(logEntitiesToSave);
+      const logEntity = savedLogs[savedLogs.length - 1];
 
       config.lastRunAt = finishedAt;
       config.lastRunStatus = 'SUCCESS';
@@ -1798,45 +1778,15 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const latestClosedReportDate = this.getLatestClosedReportDate(now);
     const currentOpenReportDate = this.addDays(latestClosedReportDate, 1);
 
-    // Ensure at least one initial execution log exists so history is populated
-    const logCount = await this.cronLogRepository.count();
-    if (logCount === 0) {
-      await this.executeAndLogCronRun({
-        fromDate: latestClosedReportDate,
-        toDate: latestClosedReportDate,
-        triggeredBy: 'STARTUP_INIT',
-        notifySuperAdmins: false,
-      });
-    }
-
     const daysLimit = Math.max(7, Math.min(90, Number(query?.daysLimit) || 30));
     const snapshotStartDate = this.addDays(
       currentOpenReportDate,
       -(daysLimit - 1),
     );
-
-    // Backfill any missing dates in [snapshotStartDate, currentOpenReportDate]
-    const existingDatesRow: Array<{ cnt: number }> =
-      await this.dataSource.query(
-        `
-        SELECT COUNT(DISTINCT "reportDate")::int AS "cnt"
-        FROM "daily_hub_operational_report"
-        WHERE "reportDate" >= $1 AND "reportDate" <= $2
-        `,
-        [snapshotStartDate, currentOpenReportDate],
-      );
     const expectedDays = this.enumerateDates(
       snapshotStartDate,
       currentOpenReportDate,
     );
-    if ((Number(existingDatesRow?.[0]?.cnt) || 0) < expectedDays.length) {
-      await this.aggregateAndSaveDateRange(
-        snapshotStartDate,
-        currentOpenReportDate,
-        'BACKFILL',
-        false,
-      );
-    }
 
     const logs = await this.cronLogRepository.find({
       order: { startedAt: 'DESC', id: 'DESC' },

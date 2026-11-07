@@ -92,7 +92,9 @@ export class AdminReportsController {
         : fromDate;
 
     const start = fromDate <= toDate ? fromDate : toDate;
-    const end = fromDate <= toDate ? toDate : fromDate;
+    const maxEnd = this.adminReportsService.addDays(start, 366);
+    const rawEnd = fromDate <= toDate ? toDate : fromDate;
+    const end = rawEnd > maxEnd ? maxEnd : rawEnd;
 
     return this.adminReportsService.executeAndLogCronRun({
       fromDate: start,
@@ -166,7 +168,7 @@ export class AdminReportsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Thực thi chạy lại Report cho 1 ngày cụ thể (hoặc khoảng ngày) theo khung 18:00 D-1 -> 18:00 D',
+      'Thực thi chạy lại Report cho 1 ngày cụ thể hoặc khoảng ngày (từ ngày -> đến ngày) theo khung 18:00 D-1 -> 18:00 D',
   })
   async rerunCronReportForDate(
     @Request() req: any,
@@ -180,17 +182,19 @@ export class AdminReportsController {
     },
   ) {
     const latestClosed = this.adminReportsService.getLatestClosedReportDate();
-    const rawStart = body?.reportDate || body?.fromDate || latestClosed;
+    const rawStart = body?.fromDate || body?.reportDate || latestClosed;
     const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(rawStart.trim())
       ? rawStart.trim()
       : latestClosed;
-    const rawEnd = body?.toDate || fromDate;
+    const rawEnd = body?.toDate || body?.reportDate || fromDate;
     const toDate = /^\d{4}-\d{2}-\d{2}$/.test(rawEnd.trim())
       ? rawEnd.trim()
       : fromDate;
 
     const start = fromDate <= toDate ? fromDate : toDate;
-    const end = fromDate <= toDate ? toDate : fromDate;
+    const maxEnd = this.adminReportsService.addDays(start, 366);
+    const orderedEnd = fromDate <= toDate ? toDate : fromDate;
+    const end = orderedEnd > maxEnd ? maxEnd : orderedEnd;
 
     return this.adminReportsService.executeAndLogCronRun({
       jobKey: body?.jobKey,
