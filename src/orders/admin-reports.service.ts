@@ -2348,16 +2348,32 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       reportDate: string;
       inboundTrips: number;
       outboundTrips: number;
+      inboundOrders: number;
+      outboundOrders: number;
       inboundCbm: number;
       outboundCbm: number;
+      inboundWeightKg: number;
+      outboundWeightKg: number;
+      inboundPackages: number;
+      outboundPackages: number;
+      inboundTripCodes: string[] | null;
+      outboundTripCodes: string[] | null;
     }> = await this.dataSource.query(
       `
       WITH tx_strip AS (
         SELECT
           TO_CHAR(tx."createdAt" + INTERVAL '13 hours', 'YYYY-MM-DD') AS "reportDate",
           tx."type" AS "txType",
+          o.id AS "orderId",
+          COALESCE(NULLIF(tx."tripCode", ''), NULLIF(tx."invoiceCode", ''), 'TX-' || tx.id::text) AS "cleanTripCode",
           COALESCE(NULLIF(tx."tripCode", ''), NULLIF(tx."invoiceCode", ''), 'TX-' || tx.id::text)
             || '::' || COALESCE(tx."hubId", o."originHubId", o."currentHubId", 0)::text AS "tripHubKey",
+          COALESCE(tx."quantity", 0)::int AS "qty",
+          CASE
+            WHEN COALESCE(tx."weight", 0) > 0 THEN tx."weight"::float
+            WHEN COALESCE(o."totalQuantity", 0) > 0 THEN (COALESCE(o."totalWeight", 0)::float * COALESCE(tx."quantity", 0)::float / o."totalQuantity"::float)
+            ELSE 0::float
+          END AS "effWeightKg",
           CASE
             WHEN COALESCE(tx."volume", 0) > 0 THEN tx."volume"::float
             WHEN COALESCE(o."totalQuantity", 0) > 0 THEN (COALESCE(o."totalVolume", 0)::float * COALESCE(tx."quantity", 0)::float / o."totalQuantity"::float)
@@ -2375,8 +2391,16 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         "reportDate",
         COUNT(DISTINCT "tripHubKey") FILTER (WHERE "txType" = 'INBOUND')::int AS "inboundTrips",
         COUNT(DISTINCT "tripHubKey") FILTER (WHERE "txType" IN ('OUTBOUND', 'TRANSFER'))::int AS "outboundTrips",
+        COUNT(DISTINCT "orderId") FILTER (WHERE "txType" = 'INBOUND')::int AS "inboundOrders",
+        COUNT(DISTINCT "orderId") FILTER (WHERE "txType" IN ('OUTBOUND', 'TRANSFER'))::int AS "outboundOrders",
         COALESCE(SUM("effVolume") FILTER (WHERE "txType" = 'INBOUND'), 0)::float AS "inboundCbm",
-        COALESCE(SUM("effVolume") FILTER (WHERE "txType" IN ('OUTBOUND', 'TRANSFER')), 0)::float AS "outboundCbm"
+        COALESCE(SUM("effVolume") FILTER (WHERE "txType" IN ('OUTBOUND', 'TRANSFER')), 0)::float AS "outboundCbm",
+        COALESCE(SUM("effWeightKg") FILTER (WHERE "txType" = 'INBOUND'), 0)::float AS "inboundWeightKg",
+        COALESCE(SUM("effWeightKg") FILTER (WHERE "txType" IN ('OUTBOUND', 'TRANSFER')), 0)::float AS "outboundWeightKg",
+        COALESCE(SUM("qty") FILTER (WHERE "txType" = 'INBOUND'), 0)::int AS "inboundPackages",
+        COALESCE(SUM("qty") FILTER (WHERE "txType" IN ('OUTBOUND', 'TRANSFER')), 0)::int AS "outboundPackages",
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT "cleanTripCode") FILTER (WHERE "txType" = 'INBOUND'), NULL) AS "inboundTripCodes",
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT "cleanTripCode") FILTER (WHERE "txType" IN ('OUTBOUND', 'TRANSFER')), NULL) AS "outboundTripCodes"
       FROM tx_strip
       GROUP BY "reportDate"
       `,
@@ -2393,8 +2417,18 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       const [, mS, dS] = d.split('-');
       const inTrips = Number(sr?.inboundTrips) || 0;
       const outTrips = Number(sr?.outboundTrips) || 0;
+      const inOrders = Number(sr?.inboundOrders) || 0;
+      const outOrders = Number(sr?.outboundOrders) || 0;
       const inCbm = Math.round((Number(sr?.inboundCbm) || 0) * 10) / 10;
       const outCbm = Math.round((Number(sr?.outboundCbm) || 0) * 10) / 10;
+      const inWeightKg =
+        Math.round((Number(sr?.inboundWeightKg) || 0) * 100) / 100;
+      const outWeightKg =
+        Math.round((Number(sr?.outboundWeightKg) || 0) * 100) / 100;
+      const inTons = Math.round((inWeightKg / 1000) * 100) / 100;
+      const outTons = Math.round((outWeightKg / 1000) * 100) / 100;
+      const inPkgs = Number(sr?.inboundPackages) || 0;
+      const outPkgs = Number(sr?.outboundPackages) || 0;
       return {
         reportDate: d,
         dayLabel: `${dS}/${mS}`,
@@ -2403,9 +2437,27 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         inboundTrips: inTrips,
         outboundTrips: outTrips,
         totalTrips: inTrips + outTrips,
+        inboundOrders: inOrders,
+        outboundOrders: outOrders,
+        totalOrders: inOrders + outOrders,
         inboundCbm: inCbm,
         outboundCbm: outCbm,
         totalCbm: Math.round((inCbm + outCbm) * 10) / 10,
+        inboundWeightKg: inWeightKg,
+        outboundWeightKg: outWeightKg,
+        totalWeightKg: Math.round((inWeightKg + outWeightKg) * 100) / 100,
+        inboundTons: inTons,
+        outboundTons: outTons,
+        totalTons: Math.round(((inWeightKg + outWeightKg) / 1000) * 100) / 100,
+        inboundPackages: inPkgs,
+        outboundPackages: outPkgs,
+        totalPackages: inPkgs + outPkgs,
+        inboundTripCodes: Array.isArray(sr?.inboundTripCodes)
+          ? sr.inboundTripCodes
+          : [],
+        outboundTripCodes: Array.isArray(sr?.outboundTripCodes)
+          ? sr.outboundTripCodes
+          : [],
       };
     });
 
@@ -2534,10 +2586,14 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       },
       daySummary: {
         ...daySummary,
+        inboundTripCodes: inboundTripList.map((t) => t.tripCode),
+        outboundTripCodes: outboundTripList.map((t) => t.tripCode),
         pendingTripsCount: pendingTrips.length,
       },
       hubSummary,
       trips: filteredTrips,
+      inboundTripsList: inboundTripList,
+      outboundTripsList: outboundTripList,
       pendingTrips,
       recentDaysStrip,
     };
