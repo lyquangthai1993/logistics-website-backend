@@ -1,3 +1,4 @@
+process.env.TZ = 'UTC';
 import 'dotenv/config';
 import { types } from 'pg';
 import helmet from 'helmet';

@@ -144,7 +144,7 @@ export class WarehouseController {
   @ApiQuery({
     name: 'status',
     required: false,
-    enum: ['ALL', 'PENDING', 'COMPLETED'],
+    enum: ['ALL', 'PENDING', 'COMPLETED', 'DELETED'],
   })
   @ApiQuery({
     name: 'type',
@@ -184,9 +184,13 @@ export class WarehouseController {
   @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
   @ApiOperation({
     summary:
-      'Danh sách chuyến xe dừng tại kho hiện tại với trạng thái theo kho (Chờ xử lý / Đã xử lý) và phân loại nguồn',
+      'Danh sách chuyến xe dừng tại kho hiện tại với trạng thái theo kho (Chờ xử lý / Đã xử lý / Đã xóa) và phân loại nguồn',
   })
-  @ApiQuery({ name: 'status', required: false, enum: ['PENDING', 'COMPLETED'] })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['ALL', 'PENDING', 'COMPLETED', 'DELETED'],
+  })
   @ApiQuery({ name: 'type', required: false, enum: ['CUSTOMER', 'TRANSFER'] })
   @ApiQuery({ name: 'fromDate', required: false, type: String })
   @ApiQuery({ name: 'toDate', required: false, type: String })
