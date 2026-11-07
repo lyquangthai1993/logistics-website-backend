@@ -14,10 +14,15 @@ import { TripEntity } from '../trips/infrastructure/persistence/relational/entit
 import { TripStopEntity } from '../trips/infrastructure/persistence/relational/entities/trip-stop.entity';
 import { OrderInventoryTransactionEntity } from './infrastructure/persistence/relational/entities/order-inventory-transaction.entity';
 import { OrderActivityLogEntity } from './infrastructure/persistence/relational/entities/order-activity-log.entity';
+import { DailyHubOperationalReportEntity } from './infrastructure/persistence/relational/entities/daily-hub-operational-report.entity';
+import { CronJobConfigEntity } from './infrastructure/persistence/relational/entities/cron-job-config.entity';
+import { CronJobExecutionLogEntity } from './infrastructure/persistence/relational/entities/cron-job-execution-log.entity';
 import { OrderActivityLogService } from './order-activity-log.service';
 import { WarehouseController } from './warehouse.controller';
 import { WarehouseService } from './warehouse.service';
 import { OperationalLedgerService } from './operational-ledger.service';
+import { AdminReportsController } from './admin-reports.controller';
+import { AdminReportsService } from './admin-reports.service';
 
 @Module({
   imports: [
@@ -30,17 +35,21 @@ import { OperationalLedgerService } from './operational-ledger.service';
       TripStopEntity,
       OrderInventoryTransactionEntity,
       OrderActivityLogEntity,
+      DailyHubOperationalReportEntity,
+      CronJobConfigEntity,
+      CronJobExecutionLogEntity,
     ]),
     NotificationsModule,
     MailModule,
   ],
-  controllers: [OrdersController, WarehouseController],
+  controllers: [OrdersController, WarehouseController, AdminReportsController],
   providers: [
     OrdersService,
     OrderCodeService,
     WarehouseService,
     OperationalLedgerService,
     OrderActivityLogService,
+    AdminReportsService,
   ],
   exports: [
     OrdersService,
@@ -48,6 +57,7 @@ import { OperationalLedgerService } from './operational-ledger.service';
     WarehouseService,
     OperationalLedgerService,
     OrderActivityLogService,
+    AdminReportsService,
     TypeOrmModule,
   ],
 })

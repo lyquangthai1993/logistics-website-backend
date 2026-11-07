@@ -123,7 +123,7 @@ export class OperationalLedgerService {
     const isCompleted = input.status === TripStopStatus.COMPLETED;
     await this.em(manager).query(
       `INSERT INTO "trip_stop" ("tripCode", "hubId", "stopSequence", "stopType", "status", "processedAt", "processedByUserId", "createdAt", "updatedAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+       VALUES ($1, $2, $3, $4, $5, CASE WHEN $6::boolean THEN NOW() ELSE NULL END, $7, NOW(), NOW())
        ON CONFLICT ("tripCode", "hubId") DO UPDATE SET
          "status" = CASE WHEN "trip_stop"."status" = 'COMPLETED' THEN 'COMPLETED' ELSE EXCLUDED."status" END,
          "processedAt" = COALESCE("trip_stop"."processedAt", EXCLUDED."processedAt"),
@@ -136,7 +136,7 @@ export class OperationalLedgerService {
         input.stopSequence ?? 1,
         input.stopType ?? TripStopType.TRANSIT,
         input.status,
-        isCompleted ? new Date() : null,
+        isCompleted,
         isCompleted ? (input.userId ?? null) : null,
       ],
     );
@@ -187,6 +187,41 @@ export class OperationalLedgerService {
   }
 
   /**
+   * Ledger inbound vs exported weight & volume for an order at a hub.
+   */
+  async getHubWeightVolumeLedger(
+    orderId: number,
+    hubId: number | null | undefined,
+    manager?: EntityManager,
+  ): Promise<{
+    inboundWeight: number;
+    inboundVolume: number;
+    exportedWeight: number;
+    exportedVolume: number;
+  }> {
+    const em = this.em(manager);
+    const rows = await em.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN "type" = 'INBOUND' THEN COALESCE("weight", 0) ELSE 0 END), 0)::float AS "inboundWeight",
+         COALESCE(SUM(CASE WHEN "type" = 'INBOUND' THEN COALESCE("volume", 0) ELSE 0 END), 0)::float AS "inboundVolume",
+         COALESCE(SUM(CASE WHEN "type" IN ('OUTBOUND', 'TRANSFER') THEN COALESCE("weight", 0) ELSE 0 END), 0)::float AS "exportedWeight",
+         COALESCE(SUM(CASE WHEN "type" IN ('OUTBOUND', 'TRANSFER') THEN COALESCE("volume", 0) ELSE 0 END), 0)::float AS "exportedVolume"
+       FROM "order_inventory_transaction"
+       WHERE "orderId" = $1
+         AND "deletedAt" IS NULL
+         ${hubId ? 'AND ("hubId" = $2 OR "hubId" IS NULL)' : ''}`,
+      hubId ? [orderId, hubId] : [orderId],
+    );
+    const round3 = (n: number) => Math.round(n * 1000) / 1000;
+    return {
+      inboundWeight: round3(Number(rows?.[0]?.inboundWeight) || 0),
+      inboundVolume: round3(Number(rows?.[0]?.inboundVolume) || 0),
+      exportedWeight: round3(Number(rows?.[0]?.exportedWeight) || 0),
+      exportedVolume: round3(Number(rows?.[0]?.exportedVolume) || 0),
+    };
+  }
+
+  /**
    * Total packages of an order allocated to PENDING outbound/transfer trips from a hub,
    * optionally excluding a specific draft trip code (e.g. when resuming/updating that draft).
    */
@@ -195,11 +230,24 @@ export class OperationalLedgerService {
     hubId: number | null | undefined,
     excludeTripCode?: string,
     manager?: EntityManager,
-  ): Promise<{ pendingQty: number; tripCodes: string[] }> {
-    if (!hubId) return { pendingQty: 0, tripCodes: [] };
+  ): Promise<{
+    pendingQty: number;
+    pendingWeight: number;
+    pendingVolume: number;
+    tripCodes: string[];
+  }> {
+    if (!hubId)
+      return {
+        pendingQty: 0,
+        pendingWeight: 0,
+        pendingVolume: 0,
+        tripCodes: [],
+      };
     const em = this.em(manager);
     const rows = await em.query(
       `SELECT COALESCE(SUM(COALESCE("quantityAllocated", 0)), 0)::int AS "pendingQty",
+              COALESCE(SUM(COALESCE("weightAllocated", 0)), 0)::float AS "pendingWeight",
+              COALESCE(SUM(COALESCE("volumeAllocated", 0)), 0)::float AS "pendingVolume",
               array_agg(DISTINCT "tripCode") FILTER (WHERE "tripCode" IS NOT NULL AND COALESCE("quantityAllocated", 0) > 0) AS "tripCodes"
        FROM "trip"
        WHERE "orderId" = $1
@@ -212,8 +260,12 @@ export class OperationalLedgerService {
       [orderId, hubId, excludeTripCode || null],
     );
     const pendingQty = Number(rows?.[0]?.pendingQty) || 0;
+    const pendingWeight =
+      Math.round((Number(rows?.[0]?.pendingWeight) || 0) * 1000) / 1000;
+    const pendingVolume =
+      Math.round((Number(rows?.[0]?.pendingVolume) || 0) * 1000) / 1000;
     const tripCodes: string[] = rows?.[0]?.tripCodes || [];
-    return { pendingQty, tripCodes };
+    return { pendingQty, pendingWeight, pendingVolume, tripCodes };
   }
 
   /**
@@ -257,13 +309,33 @@ export class OperationalLedgerService {
     hubId: number | null | undefined,
     excludeTripCode?: string,
     manager?: EntityManager,
-  ): Promise<Map<number, { pendingQty: number; tripCodes: string[] }>> {
-    const map = new Map<number, { pendingQty: number; tripCodes: string[] }>();
+  ): Promise<
+    Map<
+      number,
+      {
+        pendingQty: number;
+        pendingWeight: number;
+        pendingVolume: number;
+        tripCodes: string[];
+      }
+    >
+  > {
+    const map = new Map<
+      number,
+      {
+        pendingQty: number;
+        pendingWeight: number;
+        pendingVolume: number;
+        tripCodes: string[];
+      }
+    >();
     if (!hubId || orderIds.length === 0) return map;
     const em = this.em(manager);
     const rows = await em.query(
       `SELECT "orderId",
               COALESCE(SUM(COALESCE("quantityAllocated", 0)), 0)::int AS "pendingQty",
+              COALESCE(SUM(COALESCE("weightAllocated", 0)), 0)::float AS "pendingWeight",
+              COALESCE(SUM(COALESCE("volumeAllocated", 0)), 0)::float AS "pendingVolume",
               array_agg(DISTINCT "tripCode") FILTER (WHERE "tripCode" IS NOT NULL AND COALESCE("quantityAllocated", 0) > 0) AS "tripCodes"
        FROM "trip"
        WHERE "orderId" = ANY($1)
@@ -279,6 +351,8 @@ export class OperationalLedgerService {
     for (const r of rows) {
       map.set(Number(r.orderId), {
         pendingQty: Number(r.pendingQty) || 0,
+        pendingWeight: Math.round((Number(r.pendingWeight) || 0) * 1000) / 1000,
+        pendingVolume: Math.round((Number(r.pendingVolume) || 0) * 1000) / 1000,
         tripCodes: r.tripCodes || [],
       });
     }

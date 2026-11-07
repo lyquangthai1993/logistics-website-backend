@@ -206,6 +206,8 @@ export class WarehouseService {
         hubStatus: string;
         hubStock: number;
         pendingOutboundQuantity: number;
+        pendingOutboundWeight: number;
+        pendingOutboundVolume: number;
         pendingOutboundTripCodes: string[];
         effectiveHubStock: number;
       }
@@ -217,6 +219,8 @@ export class WarehouseService {
         hubStatus: string;
         hubStock: number;
         pendingOutboundQuantity: number;
+        pendingOutboundWeight: number;
+        pendingOutboundVolume: number;
         pendingOutboundTripCodes: string[];
         effectiveHubStock: number;
         pendingInboundQuantity: number;
@@ -242,6 +246,8 @@ export class WarehouseService {
       const hubStock = Number(r.hubStock) || 0;
       const pendingAlloc = pendingAllocMap.get(id);
       const pendingOutboundQuantity = pendingAlloc?.pendingQty ?? 0;
+      const pendingOutboundWeight = pendingAlloc?.pendingWeight ?? 0;
+      const pendingOutboundVolume = pendingAlloc?.pendingVolume ?? 0;
       const pendingOutboundTripCodes = pendingAlloc?.tripCodes ?? [];
       const effectiveHubStock = Math.max(0, hubStock - pendingOutboundQuantity);
       const pendingInbound = pendingInboundMap.get(id);
@@ -252,6 +258,8 @@ export class WarehouseService {
         hubStatus: r.hubStatus,
         hubStock,
         pendingOutboundQuantity,
+        pendingOutboundWeight,
+        pendingOutboundVolume,
         pendingOutboundTripCodes,
         effectiveHubStock,
         pendingInboundQuantity,
@@ -668,7 +676,9 @@ export class WarehouseService {
             new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
         );
       const inboundDate =
-        inboundTxs.length > 0 ? inboundTxs[0].createdAt : item.createdAt;
+        inboundTxs.length > 0
+          ? inboundTxs[inboundTxs.length - 1].createdAt
+          : item.updatedAt || item.createdAt;
 
       let inboundTripCode: string | null = null;
       let inboundLicensePlate: string | null = null;
@@ -832,8 +842,77 @@ export class WarehouseService {
         item.province ||
         '';
 
+      const round3Metric = (n: number) => Math.round(n * 1000) / 1000;
+      const activeHubTxs = hubTxs.filter((t) => !t.deletedAt);
+      const sumInboundWeight = activeHubTxs
+        .filter((t) => t.type === InventoryTransactionType.INBOUND)
+        .reduce((s, t) => s + (Number(t.weight) || 0), 0);
+      const sumInboundVolume = activeHubTxs
+        .filter((t) => t.type === InventoryTransactionType.INBOUND)
+        .reduce((s, t) => s + (Number(t.volume) || 0), 0);
+      const baseTotalWeight = round3Metric(
+        Math.max(Number(item.totalWeight) || 0, sumInboundWeight),
+      );
+      const baseTotalVolume = round3Metric(
+        Math.max(Number(item.totalVolume) || 0, sumInboundVolume),
+      );
+      const exportedWeight = round3Metric(
+        activeHubTxs
+          .filter(
+            (t) =>
+              t.type === InventoryTransactionType.OUTBOUND ||
+              t.type === InventoryTransactionType.TRANSFER,
+          )
+          .reduce((s, t) => s + (Number(t.weight) || 0), 0),
+      );
+      const exportedVolume = round3Metric(
+        activeHubTxs
+          .filter(
+            (t) =>
+              t.type === InventoryTransactionType.OUTBOUND ||
+              t.type === InventoryTransactionType.TRANSFER,
+          )
+          .reduce((s, t) => s + (Number(t.volume) || 0), 0),
+      );
+      const pendingOutWeight = round3Metric(
+        (view as any)?.pendingOutboundWeight ?? 0,
+      );
+      const pendingOutVolume = round3Metric(
+        (view as any)?.pendingOutboundVolume ?? 0,
+      );
+      const availQtyForMetrics =
+        view &&
+        view.effectiveHubStock !== null &&
+        view.effectiveHubStock !== undefined
+          ? Number(view.effectiveHubStock)
+          : effectiveStock !== null && effectiveStock !== undefined
+            ? Number(effectiveStock)
+            : Number(item.totalQuantity) || 0;
+      const remainingWeight =
+        availQtyForMetrics <= 0
+          ? 0
+          : Math.max(
+              0,
+              round3Metric(baseTotalWeight - exportedWeight - pendingOutWeight),
+            );
+      const remainingVolume =
+        availQtyForMetrics <= 0
+          ? 0
+          : Math.max(
+              0,
+              round3Metric(baseTotalVolume - exportedVolume - pendingOutVolume),
+            );
+
       return {
         ...item,
+        totalWeight: baseTotalWeight,
+        totalVolume: baseTotalVolume,
+        exportedWeight,
+        exportedVolume,
+        pendingOutboundWeight: pendingOutWeight,
+        pendingOutboundVolume: pendingOutVolume,
+        remainingWeight,
+        remainingVolume,
         pickupAddress: pickupAddr || item.originHubEntity?.name || '',
         deliveryAddress:
           deliveryAddr ||
@@ -1092,9 +1171,11 @@ export class WarehouseService {
     const validInboundDates = normalizedItems
       .map((it) => it.inboundDate)
       .filter(Boolean)
-      .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
     const groupInboundDate =
-      validInboundDates.length > 0 ? validInboundDates[0] : first.createdAt;
+      validInboundDates.length > 0
+        ? validInboundDates[0]
+        : first.updatedAt || first.createdAt;
 
     const groupInboundTripDisplay =
       normalizedItems.find((it) => it.inboundTripDisplay)?.inboundTripDisplay ||
@@ -1195,6 +1276,39 @@ export class WarehouseService {
       ? 0
       : (normalizedHubStock ?? Math.max(0, normalizedTotalQty - totalOutbound));
 
+    const groupTotalWeight = round3(sum((it) => it.totalWeight));
+    const groupTotalVolume = round3(sum((it) => it.totalVolume));
+    const groupExportedWeight = round3(sum((it) => it.exportedWeight || 0));
+    const groupExportedVolume = round3(sum((it) => it.exportedVolume || 0));
+    const groupPendingOutWeight = round3(
+      sum((it) => it.pendingOutboundWeight || 0),
+    );
+    const groupPendingOutVolume = round3(
+      sum((it) => it.pendingOutboundVolume || 0),
+    );
+    const groupAvailStock =
+      effectiveHubStock !== null && effectiveHubStock !== undefined
+        ? effectiveHubStock
+        : effectiveRemaining;
+    const groupRemainingWeight =
+      groupAvailStock <= 0
+        ? 0
+        : Math.max(
+            0,
+            round3(
+              groupTotalWeight - groupExportedWeight - groupPendingOutWeight,
+            ),
+          );
+    const groupRemainingVolume =
+      groupAvailStock <= 0
+        ? 0
+        : Math.max(
+            0,
+            round3(
+              groupTotalVolume - groupExportedVolume - groupPendingOutVolume,
+            ),
+          );
+
     return {
       ...first,
       id: primaryRow.id,
@@ -1204,8 +1318,14 @@ export class WarehouseService {
       inboundQuantity: effectiveInbound,
       outboundQuantity: totalOutbound,
       remainingQuantity: effectiveRemaining,
-      totalWeight: round3(sum((it) => it.totalWeight)),
-      totalVolume: round3(sum((it) => it.totalVolume)),
+      totalWeight: groupTotalWeight,
+      totalVolume: groupTotalVolume,
+      exportedWeight: groupExportedWeight,
+      exportedVolume: groupExportedVolume,
+      pendingOutboundWeight: groupPendingOutWeight,
+      pendingOutboundVolume: groupPendingOutVolume,
+      remainingWeight: groupRemainingWeight,
+      remainingVolume: groupRemainingVolume,
       hubStock: normalizedHubStock,
       pendingOutboundQuantity: totalPendingOutbound,
       pendingOutboundTripCodes,
@@ -2881,19 +3001,27 @@ export class WarehouseService {
             actualWeight =
               row.actualWeight !== undefined
                 ? Number(row.actualWeight) || 0
-                : this.proportional(
-                    found.totalWeight,
-                    actualQty,
-                    found.totalQuantity,
-                  );
+                : inTransit === null &&
+                    row.totalWeight !== undefined &&
+                    Number(row.totalWeight) >= 0
+                  ? Number(row.totalWeight) || 0
+                  : this.proportional(
+                      found.totalWeight,
+                      actualQty,
+                      found.totalQuantity,
+                    );
             actualVolume =
               row.actualVolume !== undefined
                 ? Number(row.actualVolume) || 0
-                : this.proportional(
-                    found.totalVolume,
-                    actualQty,
-                    found.totalQuantity,
-                  );
+                : inTransit === null &&
+                    row.totalVolume !== undefined &&
+                    Number(row.totalVolume) >= 0
+                  ? Number(row.totalVolume) || 0
+                  : this.proportional(
+                      found.totalVolume,
+                      actualQty,
+                      found.totalQuantity,
+                    );
 
             found.inboundQuantity =
               (Number(found.inboundQuantity) || 0) + actualQty;
@@ -3654,8 +3782,9 @@ export class WarehouseService {
         originHubId,
         manager,
       );
-      const dispatchDate =
-        dto.dispatchDate || new Date().toISOString().split('T')[0];
+      const dispatchDate = new Date().toLocaleDateString('sv-SE', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+      });
 
       let createdTrip: TripEntity | undefined;
       const itemExportQtyMap = new Map<number, number>();
@@ -3770,21 +3899,57 @@ export class WarehouseService {
           order.currentHubId = null;
         }
 
+        const wvLedger = await this.ledgerService.getHubWeightVolumeLedger(
+          order.id,
+          actingHubId,
+          manager,
+        );
+        const baseOrderWeight = Math.max(
+          Number(order.totalWeight) || 0,
+          wvLedger.inboundWeight,
+        );
+        const baseOrderVolume = Math.max(
+          Number(order.totalVolume) || 0,
+          wvLedger.inboundVolume,
+        );
+        const remWeightBefore = Math.max(
+          0,
+          Math.round(
+            (baseOrderWeight -
+              wvLedger.exportedWeight -
+              pendingAlloc.pendingWeight) *
+              1000,
+          ) / 1000,
+        );
+        const remVolumeBefore = Math.max(
+          0,
+          Math.round(
+            (baseOrderVolume -
+              wvLedger.exportedVolume -
+              pendingAlloc.pendingVolume) *
+              1000,
+          ) / 1000,
+        );
+
         const weight = Number(
           item?.weightToExport ??
-            this.proportional(
-              order.totalWeight,
-              qtyToExport,
-              order.totalQuantity,
-            ),
+            (qtyToExport === effectiveAvailable
+              ? remWeightBefore
+              : this.proportional(
+                  remWeightBefore,
+                  qtyToExport,
+                  effectiveAvailable || order.totalQuantity,
+                )),
         );
         const volume = Number(
           item?.volumeToExport ??
-            this.proportional(
-              order.totalVolume,
-              qtyToExport,
-              order.totalQuantity,
-            ),
+            (qtyToExport === effectiveAvailable
+              ? remVolumeBefore
+              : this.proportional(
+                  remVolumeBefore,
+                  qtyToExport,
+                  effectiveAvailable || order.totalQuantity,
+                )),
         );
 
         const tripNotes = isTransferLine
@@ -4052,8 +4217,9 @@ export class WarehouseService {
       const actingOriginId =
         userHubId ?? orders[0].currentHubId ?? orders[0].originHubId ?? null;
       const isTransferMode = dto.mode === OutboundMode.TRANSFER;
-      const dispatchDate =
-        dto.dispatchDate || new Date().toISOString().split('T')[0];
+      const dispatchDate = new Date().toLocaleDateString('sv-SE', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+      });
 
       for (const order of orders) {
         const item = this.mergeOutboundItemsForOrder(dto.items, order);
@@ -4153,6 +4319,38 @@ export class WarehouseService {
           ? ` | ĐC: ${customDraftAddr}`
           : '';
 
+        const draftWvLedger = await this.ledgerService.getHubWeightVolumeLedger(
+          order.id,
+          actingHubId,
+          manager,
+        );
+        const draftBaseWeight = Math.max(
+          Number(order.totalWeight) || 0,
+          draftWvLedger.inboundWeight,
+        );
+        const draftBaseVolume = Math.max(
+          Number(order.totalVolume) || 0,
+          draftWvLedger.inboundVolume,
+        );
+        const draftRemWeightBefore = Math.max(
+          0,
+          Math.round(
+            (draftBaseWeight -
+              draftWvLedger.exportedWeight -
+              pendingAlloc.pendingWeight) *
+              1000,
+          ) / 1000,
+        );
+        const draftRemVolumeBefore = Math.max(
+          0,
+          Math.round(
+            (draftBaseVolume -
+              draftWvLedger.exportedVolume -
+              pendingAlloc.pendingVolume) *
+              1000,
+          ) / 1000,
+        );
+
         await tripRepo.save(
           tripRepo.create({
             orderId: order.id,
@@ -4167,11 +4365,23 @@ export class WarehouseService {
             quantityAllocated: qty,
             weightAllocated: Number(
               item?.weightToExport ??
-                this.proportional(order.totalWeight, qty, order.totalQuantity),
+                (qty === effectiveAvailable
+                  ? draftRemWeightBefore
+                  : this.proportional(
+                      draftRemWeightBefore,
+                      qty,
+                      effectiveAvailable || order.totalQuantity,
+                    )),
             ),
             volumeAllocated: Number(
               item?.volumeToExport ??
-                this.proportional(order.totalVolume, qty, order.totalQuantity),
+                (qty === effectiveAvailable
+                  ? draftRemVolumeBefore
+                  : this.proportional(
+                      draftRemVolumeBefore,
+                      qty,
+                      effectiveAvailable || order.totalQuantity,
+                    )),
             ),
             assignedByUserId: user.id,
             notes: isTransferLine
@@ -4544,6 +4754,18 @@ export class WarehouseService {
       return `$${params.length}`;
     };
 
+    const roleId = Number(
+      user?.role?.id || (typeof user?.role === 'number' ? user.role : 0),
+    );
+    const roleName = String(
+      (user?.role as any)?.name || user?.role || '',
+    ).toUpperCase();
+    const isSuperAdmin =
+      roleId === RoleEnum.SUPER_ADMIN ||
+      roleName === 'SUPER_ADMIN' ||
+      roleName === 'SUPER ADMIN' ||
+      roleName === 'ADMIN';
+
     const hasSearch = Boolean(query?.search && query.search.trim());
     const dispatchTypes = `('${InventoryTransactionType.OUTBOUND}', '${InventoryTransactionType.TRANSFER}')`;
     const txWhere: string[] = [
@@ -4569,10 +4791,21 @@ export class WarehouseService {
       draftWhere.push(`o."deletedAt" IS NULL`);
     }
 
+    const deletedWhere: string[] = [
+      `t."deletedAt" IS NOT NULL`,
+      `t."type" IN ('OUTBOUND', 'TRANSFER')`,
+      `t."quantityAllocated" IS NOT NULL`,
+      `t."tripCode" IS NOT NULL`,
+      `t."tripCode" <> ''`,
+      `NOT EXISTS (SELECT 1 FROM "trip" act WHERE act."tripCode" = t."tripCode" AND act."deletedAt" IS NULL)`,
+      `NOT EXISTS (SELECT 1 FROM "order_inventory_transaction" dtx WHERE dtx."tripCode" = t."tripCode" AND dtx."type" IN ${dispatchTypes} AND dtx."deletedAt" IS NULL)`,
+    ];
+
     if (useHubContext && userHubId) {
       const p = bind(userHubId);
       txWhere.push(`tx."hubId" = ${p}`);
       draftWhere.push(`t."originHubId" = ${p}`);
+      deletedWhere.push(`t."originHubId" = ${p}`);
     }
     if (hasSearch) {
       const p = bind(`%${query.search!.trim()}%`);
@@ -4580,6 +4813,9 @@ export class WarehouseService {
         `(tx."tripCode" ILIKE ${p} OR tx."licensePlate" ILIKE ${p} OR tx."driverName" ILIKE ${p} OR o."orderCode" ILIKE ${p} OR o."goodsDescription" ILIKE ${p} OR EXISTS (SELECT 1 FROM "trip" st WHERE st."tripCode" = tx."tripCode" AND st."deletedAt" IS NULL AND (st."licensePlate" ILIKE ${p} OR st."driverName" ILIKE ${p})))`,
       );
       draftWhere.push(
+        `(t."tripCode" ILIKE ${p} OR t."licensePlate" ILIKE ${p} OR t."driverName" ILIKE ${p} OR o."orderCode" ILIKE ${p} OR o."goodsDescription" ILIKE ${p})`,
+      );
+      deletedWhere.push(
         `(t."tripCode" ILIKE ${p} OR t."licensePlate" ILIKE ${p} OR t."driverName" ILIKE ${p} OR o."orderCode" ILIKE ${p} OR o."goodsDescription" ILIKE ${p})`,
       );
     }
@@ -4591,16 +4827,24 @@ export class WarehouseService {
       const pDate = bind(dateRange.fromDate);
       txWhere.push(`tx."createdAt" >= ${pIso}`);
       draftWhere.push(
-        `(t."createdAt" >= ${pIso} OR t."pickupDate" >= ${pDate})`,
+        `(COALESCE(t."updatedAt", t."createdAt") >= ${pIso} OR t."pickupDate" >= ${pDate})`,
+      );
+      deletedWhere.push(
+        `(COALESCE(t."deletedAt", t."updatedAt", t."createdAt") >= ${pIso} OR t."pickupDate" >= ${pDate})`,
       );
     }
     if (dateRange.toDate) {
-      const toIso = new Date(`${dateRange.toDate}T23:59:59.999Z`).toISOString();
+      const toIso = new Date(
+        `${dateRange.toDate}T23:59:59.999+07:00`,
+      ).toISOString();
       const pIso = bind(toIso);
       const pDate = bind(dateRange.toDate);
       txWhere.push(`tx."createdAt" <= ${pIso}`);
       draftWhere.push(
-        `(t."createdAt" <= ${pIso} OR t."pickupDate" <= ${pDate})`,
+        `(COALESCE(t."updatedAt", t."createdAt") <= ${pIso} OR t."pickupDate" <= ${pDate})`,
+      );
+      deletedWhere.push(
+        `(COALESCE(t."deletedAt", t."updatedAt", t."createdAt") <= ${pIso} OR t."pickupDate" <= ${pDate})`,
       );
     }
 
@@ -4609,6 +4853,14 @@ export class WarehouseService {
       : '';
     const draftJoinOrder = hasSearch
       ? `JOIN "order" o ON o.id = t."orderId"`
+      : '';
+
+    const deletedUnionSql = isSuperAdmin
+      ? `UNION ALL
+        SELECT t."tripCode", (t."type" = 'TRANSFER'), COALESCE(t."deletedAt", t."updatedAt", t."createdAt"), 'DELETED'
+        FROM "trip" t
+        ${draftJoinOrder}
+        WHERE ${deletedWhere.join(' AND ')}`
       : '';
 
     const groupedCte = `WITH base AS MATERIALIZED (
@@ -4620,10 +4872,11 @@ export class WarehouseService {
         ${txJoinOrder}
         WHERE ${txWhere.join(' AND ')}
         UNION ALL
-        SELECT t."tripCode", (t."type" = 'TRANSFER'), t."createdAt", 'PENDING'
+        SELECT t."tripCode", (t."type" = 'TRANSFER'), COALESCE(t."updatedAt", t."createdAt"), 'PENDING'
         FROM "trip" t
         ${draftJoinOrder}
         WHERE ${draftWhere.join(' AND ')}
+        ${deletedUnionSql}
       ), g AS (
         SELECT "tripCode",
                BOOL_OR("isTransfer") AS "isTransfer",
@@ -4635,9 +4888,11 @@ export class WarehouseService {
 
     const statusUpper = query?.status?.toUpperCase();
     const statusCond =
-      statusUpper === 'PENDING' || statusUpper === 'COMPLETED'
-        ? `g."status" = '${statusUpper}'`
-        : 'TRUE';
+      statusUpper === 'DELETED' && isSuperAdmin
+        ? `g."status" = 'DELETED'`
+        : statusUpper === 'PENDING' || statusUpper === 'COMPLETED'
+          ? `g."status" = '${statusUpper}'`
+          : `g."status" <> 'DELETED'`;
     const typeUpper = query?.type?.toUpperCase();
     const typeCond =
       typeUpper === 'CUSTOMER'
@@ -4647,9 +4902,10 @@ export class WarehouseService {
           : 'TRUE';
 
     const countSql = `${groupedCte}
-       SELECT COUNT(*) FILTER (WHERE ${typeCond})::int AS "allCount",
+       SELECT COUNT(*) FILTER (WHERE g."status" <> 'DELETED' AND ${typeCond})::int AS "allCount",
               COUNT(*) FILTER (WHERE g."status" = 'PENDING' AND ${typeCond})::int AS "pendingCount",
               COUNT(*) FILTER (WHERE g."status" = 'COMPLETED' AND ${typeCond})::int AS "completedCount",
+              COUNT(*) FILTER (WHERE g."status" = 'DELETED' AND ${typeCond})::int AS "deletedCount",
               COUNT(*) FILTER (WHERE ${statusCond})::int AS "typeAllCount",
               COUNT(*) FILTER (WHERE NOT g."isTransfer" AND ${statusCond})::int AS "customerCount",
               COUNT(*) FILTER (WHERE g."isTransfer" AND ${statusCond})::int AS "transferCount",
@@ -4671,7 +4927,7 @@ export class WarehouseService {
           tripCode: string;
           isTransfer: boolean;
           dispatchedAt: string;
-          status: 'PENDING' | 'COMPLETED';
+          status: 'PENDING' | 'COMPLETED' | 'DELETED';
         }>
       >(pageSql, params),
     ]);
@@ -4687,6 +4943,7 @@ export class WarehouseService {
       allCount: Number(c.allCount) || 0,
       pendingCount: Number(c.pendingCount) || 0,
       completedCount: Number(c.completedCount) || 0,
+      deletedCount: Number(c.deletedCount) || 0,
       typeAllCount: Number(c.typeAllCount) || 0,
       customerCount: Number(c.customerCount) || 0,
       transferCount: Number(c.transferCount) || 0,
@@ -4702,8 +4959,9 @@ export class WarehouseService {
       .filter((r) => r.status === 'COMPLETED')
       .map((r) => r.tripCode);
     const pendingCodes = pageRows
-      .filter((r) => r.status === 'PENDING')
+      .filter((r) => r.status === 'PENDING' || r.status === 'DELETED')
       .map((r) => r.tripCode);
+    const hasDeletedRows = pageRows.some((r) => r.status === 'DELETED');
 
     // Wave 1: Fetch dispatch invoices and planned draft lines in parallel
     const [dispatchTxs, draftLines] = await Promise.all([
@@ -4730,16 +4988,22 @@ export class WarehouseService {
           })()
         : Promise.resolve([]),
       pendingCodes.length > 0
-        ? this.tripRepository
-            .createQueryBuilder('t')
-            .leftJoinAndSelect('t.originHub', 'draftOriginHub')
-            .leftJoinAndSelect('t.destinationHub', 'draftDestinationHub')
-            .where('t.deletedAt IS NULL')
-            .andWhere('t.tripCode IN (:...pendingCodes)', { pendingCodes })
-            .andWhere(`t.status = 'PENDING'`)
-            .andWhere('t.quantityAllocated IS NOT NULL')
-            .orderBy('t.id', 'ASC')
-            .getMany()
+        ? (() => {
+            const tQb = this.tripRepository
+              .createQueryBuilder('t')
+              .leftJoinAndSelect('t.originHub', 'draftOriginHub')
+              .leftJoinAndSelect('t.destinationHub', 'draftDestinationHub');
+            if (hasDeletedRows) {
+              tQb.withDeleted();
+            } else {
+              tQb.where('t.deletedAt IS NULL');
+            }
+            return tQb
+              .andWhere('t.tripCode IN (:...pendingCodes)', { pendingCodes })
+              .andWhere('t.quantityAllocated IS NOT NULL')
+              .orderBy('t.id', 'ASC')
+              .getMany();
+          })()
         : Promise.resolve([]),
     ]);
 
@@ -4754,24 +5018,38 @@ export class WarehouseService {
     if (orderIds.length > 0) {
       // Wave 2: Fetch orders, trips, txs and compute hub view simultaneously
       const [orders, trips, txs, hubView] = await Promise.all([
-        this.orderRepository
-          .createQueryBuilder('order')
-          .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
-          .leftJoinAndSelect(
-            'order.destinationHubEntity',
-            'destinationHubEntity',
-          )
-          .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
-          .where('order.deletedAt IS NULL')
-          .andWhere('order.id IN (:...orderIds)', { orderIds })
-          .getMany(),
-        this.tripRepository
-          .createQueryBuilder('t')
-          .leftJoinAndSelect('t.originHub', 'tripOriginHub')
-          .leftJoinAndSelect('t.destinationHub', 'tripDestinationHub')
-          .where('t.deletedAt IS NULL')
-          .andWhere('t.orderId IN (:...orderIds)', { orderIds })
-          .getMany(),
+        (() => {
+          const oQb = this.orderRepository
+            .createQueryBuilder('order')
+            .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+            .leftJoinAndSelect(
+              'order.destinationHubEntity',
+              'destinationHubEntity',
+            )
+            .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity');
+          if (hasDeletedRows) {
+            oQb.withDeleted();
+          } else {
+            oQb.where('order.deletedAt IS NULL');
+          }
+          return oQb
+            .andWhere('order.id IN (:...orderIds)', { orderIds })
+            .getMany();
+        })(),
+        (() => {
+          const trQb = this.tripRepository
+            .createQueryBuilder('t')
+            .leftJoinAndSelect('t.originHub', 'tripOriginHub')
+            .leftJoinAndSelect('t.destinationHub', 'tripDestinationHub');
+          if (hasDeletedRows) {
+            trQb.withDeleted();
+          } else {
+            trQb.where('t.deletedAt IS NULL');
+          }
+          return trQb
+            .andWhere('t.orderId IN (:...orderIds)', { orderIds })
+            .getMany();
+        })(),
         this.transactionRepository
           .createQueryBuilder('tx')
           .leftJoinAndSelect('tx.hub', 'inventoryTransactionHub')
@@ -4815,16 +5093,44 @@ export class WarehouseService {
     );
 
     const pageTripCodes = pageRows.map((r) => r.tripCode);
-    const tripStops: Array<{
-      tripCode: string;
-      processedByUserId: number | null;
-    }> =
+    const [tripStops, tripAuditRows] = await Promise.all([
       pageTripCodes.length > 0
-        ? await this.dataSource.query(
+        ? this.dataSource.query<
+            Array<{
+              tripCode: string;
+              processedByUserId: number | null;
+            }>
+          >(
             `SELECT "tripCode", "processedByUserId" FROM "trip_stop" WHERE "tripCode" = ANY($1) AND "deletedAt" IS NULL AND "processedByUserId" IS NOT NULL`,
             [pageTripCodes],
           )
-        : [];
+        : Promise.resolve([]),
+      pageTripCodes.length > 0
+        ? this.dataSource.query<
+            Array<{
+              tripCode: string;
+              firstCreatedAt: Date | string | null;
+              lastUpdatedAt: Date | string | null;
+              lastDeletedAt: Date | string | null;
+              firstAssignedByUserId: number | null;
+              lastAssignedByUserId: number | null;
+            }>
+          >(
+            `SELECT "tripCode",
+                    MIN("createdAt") AS "firstCreatedAt",
+                    MAX(COALESCE("updatedAt", "createdAt")) AS "lastUpdatedAt",
+                    MAX("deletedAt") AS "lastDeletedAt",
+                    (ARRAY_AGG("assignedByUserId" ORDER BY id ASC) FILTER (WHERE "assignedByUserId" IS NOT NULL))[1] AS "firstAssignedByUserId",
+                    (ARRAY_AGG("assignedByUserId" ORDER BY id DESC) FILTER (WHERE "assignedByUserId" IS NOT NULL))[1] AS "lastAssignedByUserId"
+             FROM "trip"
+             WHERE "tripCode" = ANY($1)
+               AND "type" IN ('OUTBOUND', 'TRANSFER')
+             GROUP BY "tripCode"`,
+            [pageTripCodes],
+          )
+        : Promise.resolve([]),
+    ]);
+    const tripAuditMap = new Map(tripAuditRows.map((r) => [r.tripCode, r]));
 
     const orderCreatorRows: Array<{
       id: number;
@@ -4848,6 +5154,12 @@ export class WarehouseService {
           ...orderEntities.map((o) => o.createdByUserId),
           ...orderCreatorRows.map((r) => r.createdByUserId),
           ...tripStops.map((ts) => ts.processedByUserId),
+          ...tripAuditRows.map((r) =>
+            r.firstAssignedByUserId ? Number(r.firstAssignedByUserId) : null,
+          ),
+          ...tripAuditRows.map((r) =>
+            r.lastAssignedByUserId ? Number(r.lastAssignedByUserId) : null,
+          ),
         ].filter((id): id is number => typeof id === 'number' && id > 0),
       ),
     );
@@ -4895,7 +5207,8 @@ export class WarehouseService {
     };
 
     const data = pageRows.map((row) => {
-      const isDraft = row.status === 'PENDING';
+      const isDraft = row.status === 'PENDING' || row.status === 'DELETED';
+      const isDeletedTrip = row.status === 'DELETED';
       const sourceLines: Array<{
         orderId: number;
         quantity: number;
@@ -5063,6 +5376,13 @@ export class WarehouseService {
         (o.trips ?? []).some((t: any) => t?.tripCode === row.tripCode),
       );
 
+      const audit = tripAuditMap.get(row.tripCode);
+      const firstTripAssignerId = audit?.firstAssignedByUserId
+        ? Number(audit.firstAssignedByUserId)
+        : null;
+      const lastTripAssignerId = audit?.lastAssignedByUserId
+        ? Number(audit.lastAssignedByUserId)
+        : null;
       const draftAssignerId =
         matchedDrafts.find((t) => t.assignedByUserId)?.assignedByUserId ?? null;
       const draftOrderCreatorId =
@@ -5080,27 +5400,76 @@ export class WarehouseService {
         matchedStops.find((ts) => ts.processedByUserId)?.processedByUserId ??
         null;
 
-      const creatorUserId = draftAssignerId || orderCreatorId || null;
+      const creatorUserId =
+        firstTripAssignerId ||
+        draftAssignerId ||
+        txPerformerId ||
+        stopProcessorId ||
+        orderCreatorId ||
+        null;
       const operatorUserId = isDraft
-        ? creatorUserId || txPerformerId || stopProcessorId
-        : txPerformerId || stopProcessorId || creatorUserId;
+        ? lastTripAssignerId ||
+          draftAssignerId ||
+          creatorUserId ||
+          txPerformerId ||
+          stopProcessorId
+        : txPerformerId ||
+          stopProcessorId ||
+          lastTripAssignerId ||
+          creatorUserId;
 
       const creator = formatUserInfo(creatorUserId);
       const operator = formatUserInfo(operatorUserId);
       const creatorName = creator?.name || null;
       const operatorName = operator?.name || creatorName || null;
 
+      const createdAt =
+        audit?.firstCreatedAt ||
+        firstDraft?.createdAt ||
+        firstTx?.createdAt ||
+        row.dispatchedAt ||
+        null;
+      const updatedAt =
+        row.status === 'COMPLETED'
+          ? row.dispatchedAt || audit?.lastUpdatedAt || createdAt
+          : audit?.lastUpdatedAt || row.dispatchedAt || createdAt;
+      const confirmedAt =
+        row.status === 'COMPLETED'
+          ? row.dispatchedAt || firstTx?.createdAt || null
+          : null;
+      const deletedAt =
+        row.status === 'DELETED'
+          ? audit?.lastDeletedAt || row.dispatchedAt || null
+          : null;
+
+      const rawDispatchDate =
+        row.status === 'COMPLETED'
+          ? confirmedAt || row.dispatchedAt || tripRecord?.pickupDate
+          : row.status === 'DELETED'
+            ? deletedAt || updatedAt || tripRecord?.pickupDate
+            : updatedAt || row.dispatchedAt || tripRecord?.pickupDate;
+      const formattedDispatchDate = rawDispatchDate
+        ? new Date(rawDispatchDate).toLocaleDateString('sv-SE', {
+            timeZone: 'Asia/Ho_Chi_Minh',
+          })
+        : tripRecord?.pickupDate || row.dispatchedAt;
+
       return {
         tripCode: row.tripCode,
         type: row.isTransfer ? 'TRANSFER' : 'CUSTOMER',
         isTransfer: !!row.isTransfer,
-        isDraft,
-        /** Status of this trip at the dispatching hub: PENDING = Chờ xử lý (nháp), COMPLETED = Đã xử lý. */
+        isDraft: row.status === 'PENDING',
+        isDeleted: isDeletedTrip,
+        /** Status of this trip at the dispatching hub: PENDING = Chờ xử lý (nháp), COMPLETED = Đã xử lý, DELETED = Đã xóa. */
         status: row.status,
         licensePlate: tripRecord?.licensePlate || firstTx?.licensePlate || '',
         driverName: tripRecord?.driverName || firstTx?.driverName || '',
-        dispatchDate: tripRecord?.pickupDate || row.dispatchedAt,
+        dispatchDate: formattedDispatchDate,
         dispatchedAt: row.dispatchedAt,
+        createdAt,
+        updatedAt,
+        confirmedAt,
+        deletedAt,
         invoiceCode: firstTx?.invoiceCode || null,
         destinationHubId: firstDraft?.destinationHubId ?? null,
         dispatchHubId: firstTx?.hubId ?? firstDraft?.originHubId ?? null,
@@ -5148,6 +5517,12 @@ export class WarehouseService {
     const skip = (page - 1) * limit;
 
     const userHubId = (await this.resolveUserHubId(user, query?.hubId)) ?? null;
+    const roleId = Number(
+      user?.role?.id ?? (typeof user?.role === 'number' ? user.role : 0),
+    );
+    const isSuperAdmin = roleId === RoleEnum.SUPER_ADMIN;
+    const statusUpper = query?.status?.toUpperCase();
+
     const dateRange = this.sanitizeDateRangeGuard(query, {
       defaultPastDays: 90,
       maxSpanDays: 90,
@@ -5159,7 +5534,9 @@ export class WarehouseService {
     };
 
     const where: string[] = [
-      `ts."deletedAt" IS NULL`,
+      isSuperAdmin
+        ? `(ts."deletedAt" IS NULL OR NOT EXISTS (SELECT 1 FROM "trip_stop" act_ts WHERE act_ts."tripCode" = ts."tripCode" AND act_ts."hubId" = ts."hubId" AND act_ts."deletedAt" IS NULL))`
+        : `ts."deletedAt" IS NULL`,
       `ts."stopType" <> 'ORIGIN'`,
     ];
 
@@ -5170,7 +5547,7 @@ export class WarehouseService {
     if (query?.search && query.search.trim()) {
       const p = bind(`%${query.search.trim()}%`);
       where.push(
-        `(ts."tripCode" ILIKE ${p} OR EXISTS (SELECT 1 FROM "trip" st WHERE st."tripCode" = ts."tripCode" AND st."deletedAt" IS NULL AND (st."licensePlate" ILIKE ${p} OR st."driverName" ILIKE ${p})) OR EXISTS (SELECT 1 FROM "trip" st JOIN "order" so ON so.id = st."orderId" WHERE st."tripCode" = ts."tripCode" AND st."deletedAt" IS NULL AND (so."orderCode" ILIKE ${p} OR so."goodsDescription" ILIKE ${p})))`,
+        `(ts."tripCode" ILIKE ${p} OR EXISTS (SELECT 1 FROM "trip" st WHERE st."tripCode" = ts."tripCode" AND (st."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'}) AND (st."licensePlate" ILIKE ${p} OR st."driverName" ILIKE ${p})) OR EXISTS (SELECT 1 FROM "trip" st JOIN "order" so ON so.id = st."orderId" WHERE st."tripCode" = ts."tripCode" AND (st."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'}) AND (so."orderCode" ILIKE ${p} OR so."goodsDescription" ILIKE ${p})))`,
       );
     }
 
@@ -5181,16 +5558,18 @@ export class WarehouseService {
       const pFromIso = bind(fromIso);
       const pFromDate = bind(dateRange.fromDate);
       where.push(
-        `(ts."createdAt" >= ${pFromIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND dt."deletedAt" IS NULL AND dt."pickupDate" >= ${pFromDate}))`,
+        `(COALESCE(ts."processedAt", ts."deletedAt", ts."updatedAt", ts."createdAt") >= ${pFromIso} OR ts."createdAt" >= ${pFromIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND (dt."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'}) AND dt."pickupDate" >= ${pFromDate}))`,
       );
     }
 
     if (dateRange.toDate) {
-      const toIso = new Date(`${dateRange.toDate}T23:59:59.999Z`).toISOString();
+      const toIso = new Date(
+        `${dateRange.toDate}T23:59:59.999+07:00`,
+      ).toISOString();
       const pToIso = bind(toIso);
       const pToDate = bind(dateRange.toDate);
       where.push(
-        `(ts."createdAt" <= ${pToIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND dt."deletedAt" IS NULL AND dt."pickupDate" <= ${pToDate}))`,
+        `(COALESCE(ts."processedAt", ts."deletedAt", ts."updatedAt", ts."createdAt") <= ${pToIso} OR ts."createdAt" <= ${pToIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND (dt."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'}) AND dt."pickupDate" <= ${pToDate}))`,
       );
     }
 
@@ -5202,7 +5581,10 @@ export class WarehouseService {
              ts."stopType",
              ts."stopSequence",
              ts."hubId",
-             ts."createdAt"
+             ts."createdAt",
+             ts."updatedAt",
+             ts."processedAt",
+             ts."deletedAt"
       FROM "trip_stop" ts
       WHERE ${whereSql}
     ),
@@ -5210,14 +5592,17 @@ export class WarehouseService {
       SELECT DISTINCT ON (rs."tripCode")
              rs."tripCode",
              CASE
-               WHEN BOOL_OR(rs."status" = 'PENDING') OVER (PARTITION BY rs."tripCode") THEN 'PENDING'
+               WHEN rs."deletedAt" IS NOT NULL THEN 'DELETED'
+               WHEN BOOL_OR(rs."status" = 'PENDING' AND rs."deletedAt" IS NULL) OVER (PARTITION BY rs."tripCode") THEN 'PENDING'
                ELSE 'COMPLETED'
              END AS "status",
              rs."stopType",
              rs."hubId",
-             MAX(rs."createdAt") OVER (PARTITION BY rs."tripCode") AS "createdAt"
+             MAX(rs."createdAt") OVER (PARTITION BY rs."tripCode") AS "createdAt",
+             MAX(COALESCE(rs."processedAt", rs."deletedAt", rs."updatedAt", rs."createdAt")) OVER (PARTITION BY rs."tripCode") AS "updatedAt"
       FROM raw_stops rs
       ORDER BY rs."tripCode",
+               CASE WHEN rs."deletedAt" IS NULL THEN 0 ELSE 1 END ASC,
                CASE WHEN rs."status" = 'PENDING' THEN 0 ELSE 1 END ASC,
                rs."stopSequence" ASC,
                rs."createdAt" DESC
@@ -5230,7 +5615,7 @@ export class WarehouseService {
              BOOL_OR(t."type" = 'TRANSFER') AS "hasTransferTrip"
       FROM "trip" t
       JOIN unique_trip_codes u ON u."tripCode" = t."tripCode"
-      WHERE t."deletedAt" IS NULL
+      WHERE (t."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'})
       GROUP BY t."tripCode"
     ),
     hub_stop_counts AS (
@@ -5238,7 +5623,7 @@ export class WarehouseService {
              (COUNT(DISTINCT all_ts."hubId") > 1) AS "multiHub"
       FROM "trip_stop" all_ts
       JOIN unique_trip_codes u ON u."tripCode" = all_ts."tripCode"
-      WHERE all_ts."deletedAt" IS NULL
+      WHERE (all_ts."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'})
       GROUP BY all_ts."tripCode"
     ),
     base AS MATERIALIZED (
@@ -5246,6 +5631,7 @@ export class WarehouseService {
              fs."status",
              fs."hubId",
              fs."createdAt",
+             fs."updatedAt",
              (
                CASE
                  WHEN fs."stopType" = 'TRANSIT' THEN TRUE
@@ -5259,11 +5645,12 @@ export class WarehouseService {
       LEFT JOIN hub_stop_counts hsc ON hsc."tripCode" = fs."tripCode"
     )`;
 
-    const statusUpper = query?.status?.toUpperCase();
     const statusCond =
-      statusUpper === 'PENDING' || statusUpper === 'COMPLETED'
-        ? `b."status" = '${statusUpper}'`
-        : 'TRUE';
+      statusUpper === 'DELETED' && isSuperAdmin
+        ? `b."status" = 'DELETED'`
+        : statusUpper === 'PENDING' || statusUpper === 'COMPLETED'
+          ? `b."status" = '${statusUpper}'`
+          : `b."status" <> 'DELETED'`;
     const typeUpper = query?.type?.toUpperCase();
     const typeCond =
       typeUpper === 'CUSTOMER'
@@ -5274,9 +5661,10 @@ export class WarehouseService {
 
     const countSql = `${baseCte}
        SELECT
-         COUNT(*)::int AS "allCount",
+         COUNT(*) FILTER (WHERE b."status" <> 'DELETED')::int AS "allCount",
          COUNT(*) FILTER (WHERE b."status" = 'PENDING')::int AS "pendingCount",
          COUNT(*) FILTER (WHERE b."status" = 'COMPLETED')::int AS "completedCount",
+         COUNT(*) FILTER (WHERE b."status" = 'DELETED')::int AS "deletedCount",
          COUNT(*) FILTER (WHERE ${statusCond})::int AS "typeAllCount",
          COUNT(*) FILTER (WHERE NOT b."isTransfer" AND ${statusCond})::int AS "customerCount",
          COUNT(*) FILTER (WHERE b."isTransfer" AND ${statusCond})::int AS "transferCount",
@@ -5289,6 +5677,8 @@ export class WarehouseService {
               ts."stopType",
               ts."hubId",
               ts."processedAt",
+              ts."updatedAt",
+              ts."deletedAt",
               ts."processedByUserId",
               p."createdAt",
               p."isTransfer",
@@ -5298,21 +5688,29 @@ export class WarehouseService {
                JOIN "hub" sh ON sh.id = sts."hubId"
                WHERE sts."tripCode" = ts."tripCode"
                  AND sts."stopType" <> 'ORIGIN'
-                 AND sts."deletedAt" IS NULL) AS "routeStopsSummary",
+                 AND (sts."deletedAt" IS NULL OR p."status" = 'DELETED')) AS "routeStopsSummary",
               (SELECT oh."name" FROM "trip_stop" os JOIN "hub" oh ON oh.id = os."hubId"
-               WHERE os."tripCode" = ts."tripCode" AND os."stopType" = 'ORIGIN' AND os."deletedAt" IS NULL
+               WHERE os."tripCode" = ts."tripCode" AND os."stopType" = 'ORIGIN' AND (os."deletedAt" IS NULL OR p."status" = 'DELETED')
                LIMIT 1) AS "originHubName",
               agg."firstTripId", agg."licensePlate", agg."driverName", agg."pickupDate",
               agg."ordersCount", agg."ordersForHubCount", agg."totalWeight", agg."totalVolume", agg."totalQuantity",
               agg."unloadQuantity", agg."stayQuantity"
        FROM (
-         SELECT b."tripCode", b."status", b."hubId", b."isTransfer", b."createdAt"
+         SELECT b."tripCode", b."status", b."hubId", b."isTransfer", b."createdAt", b."updatedAt"
          FROM base b
          WHERE ${statusCond} AND ${typeCond}
-         ORDER BY CASE WHEN b."status" = 'PENDING' THEN 0 ELSE 1 END, b."createdAt" DESC
+         ORDER BY CASE WHEN b."status" = 'PENDING' THEN 0 ELSE 1 END, COALESCE(b."updatedAt", b."createdAt") DESC
          LIMIT ${limit} OFFSET ${skip}
        ) p
-       JOIN "trip_stop" ts ON ts."tripCode" = p."tripCode" AND ts."hubId" = p."hubId" AND ts."deletedAt" IS NULL
+       JOIN LATERAL (
+         SELECT *
+         FROM "trip_stop" ts_sub
+         WHERE ts_sub."tripCode" = p."tripCode"
+           AND ts_sub."hubId" = p."hubId"
+           AND ((p."status" = 'DELETED' AND ts_sub."deletedAt" IS NOT NULL) OR (p."status" <> 'DELETED' AND ts_sub."deletedAt" IS NULL))
+         ORDER BY ts_sub.id DESC
+         LIMIT 1
+       ) ts ON true
        JOIN "hub" h ON h.id = ts."hubId"
        LEFT JOIN LATERAL (
          SELECT MIN(t.id) AS "firstTripId",
@@ -5322,28 +5720,28 @@ export class WarehouseService {
                 COUNT(DISTINCT t."orderId")::int AS "ordersCount",
                 COUNT(DISTINCT t."orderId") FILTER (
                   WHERE COALESCE(t."destinationHubId", o."destinationHubId") = ts."hubId"
-                     OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND ds."deletedAt" IS NULL))
+                     OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND (ds."deletedAt" IS NULL OR p."status" = 'DELETED')))
                 )::int AS "ordersForHubCount",
                 COALESCE(SUM(t."weightAllocated"), 0) AS "totalWeight",
                 COALESCE(SUM(t."volumeAllocated"), 0) AS "totalVolume",
                 COALESCE(SUM(COALESCE(t."quantityAllocated", o."totalQuantity", 1)), 0) AS "totalQuantity",
                 COALESCE(SUM(CASE
                   WHEN COALESCE(t."destinationHubId", o."destinationHubId") = ts."hubId"
-                    OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND ds."deletedAt" IS NULL))
+                    OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND (ds."deletedAt" IS NULL OR p."status" = 'DELETED')))
                   THEN COALESCE(t."quantityAllocated", o."totalQuantity", 1)
                   ELSE 0
                 END), 0) AS "unloadQuantity",
                 COALESCE(SUM(CASE
                   WHEN COALESCE(t."destinationHubId", o."destinationHubId") = ts."hubId"
-                    OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND ds."deletedAt" IS NULL))
+                    OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND (ds."deletedAt" IS NULL OR p."status" = 'DELETED')))
                   THEN 0
                   ELSE COALESCE(t."quantityAllocated", o."totalQuantity", 1)
                 END), 0) AS "stayQuantity"
          FROM "trip" t
-         JOIN "order" o ON o.id = t."orderId" AND o."deletedAt" IS NULL
-         WHERE t."tripCode" = ts."tripCode" AND t."deletedAt" IS NULL
+         JOIN "order" o ON o.id = t."orderId" AND (o."deletedAt" IS NULL OR p."status" = 'DELETED')
+         WHERE t."tripCode" = ts."tripCode" AND (t."deletedAt" IS NULL OR p."status" = 'DELETED')
        ) agg ON true
-       ORDER BY CASE WHEN p."status" = 'PENDING' THEN 0 ELSE 1 END, p."createdAt" DESC`;
+       ORDER BY CASE WHEN p."status" = 'PENDING' THEN 0 ELSE 1 END, COALESCE(p."updatedAt", p."createdAt") DESC`;
 
     const [countRows, pageRows] = await Promise.all([
       this.dataSource.query(countSql, params),
@@ -5360,6 +5758,7 @@ export class WarehouseService {
       allCount: Number(c.allCount) || 0,
       pendingCount: Number(c.pendingCount) || 0,
       completedCount: Number(c.completedCount) || 0,
+      deletedCount: isSuperAdmin ? Number(c.deletedCount) || 0 : 0,
       typeAllCount: Number(c.typeAllCount) || 0,
       customerCount: Number(c.customerCount) || 0,
       transferCount: Number(c.transferCount) || 0,
@@ -5370,33 +5769,42 @@ export class WarehouseService {
     }
 
     const tripCodes = pageRows.map((r) => r.tripCode);
+    const hasDeletedRows = pageRows.some((r) => r.status === 'DELETED');
     const ordersByTripCode = new Map<string, any[]>();
     let trips: TripEntity[] = [];
     let orders: OrderEntity[] = [];
 
     if (tripCodes.length > 0) {
-      trips = await this.tripRepository
-        .createQueryBuilder('t')
-        .where('t.deletedAt IS NULL')
+      const tripQb = this.tripRepository.createQueryBuilder('t');
+      if (hasDeletedRows) {
+        tripQb.withDeleted();
+      } else {
+        tripQb.where('t.deletedAt IS NULL');
+      }
+      trips = await tripQb
         .andWhere('t.tripCode IN (:...tripCodes)', { tripCodes })
         .orderBy('t.id', 'ASC')
         .getMany();
 
       const orderIds = Array.from(new Set(trips.map((t) => t.orderId)));
-      orders =
-        orderIds.length > 0
-          ? await this.orderRepository
-              .createQueryBuilder('order')
-              .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
-              .leftJoinAndSelect(
-                'order.destinationHubEntity',
-                'destinationHubEntity',
-              )
-              .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
-              .where('order.deletedAt IS NULL')
-              .andWhere('order.id IN (:...orderIds)', { orderIds })
-              .getMany()
-          : [];
+      if (orderIds.length > 0) {
+        const orderQb = this.orderRepository
+          .createQueryBuilder('order')
+          .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+          .leftJoinAndSelect(
+            'order.destinationHubEntity',
+            'destinationHubEntity',
+          )
+          .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity');
+        if (hasDeletedRows) {
+          orderQb.withDeleted();
+        } else {
+          orderQb.where('order.deletedAt IS NULL');
+        }
+        orders = await orderQb
+          .andWhere('order.id IN (:...orderIds)', { orderIds })
+          .getMany();
+      }
 
       const tripsByOrderId = new Map<number, TripEntity[]>();
       for (const t of trips) {
@@ -5494,10 +5902,16 @@ export class WarehouseService {
       }
     }
 
-    const txs: Array<{ tripCode: string; performedByUserId: number | null }> =
+    const txs: Array<{
+      tripCode: string;
+      hubId: number | null;
+      performedByUserId: number | null;
+      createdAt?: Date | string;
+      invoiceCode?: string | null;
+    }> =
       tripCodes.length > 0
         ? await this.dataSource.query(
-            `SELECT "tripCode", "performedByUserId" FROM "order_inventory_transaction" WHERE "tripCode" = ANY($1) AND "deletedAt" IS NULL AND "performedByUserId" IS NOT NULL ORDER BY id DESC`,
+            `SELECT "tripCode", "hubId", "performedByUserId", "createdAt", "invoiceCode" FROM "order_inventory_transaction" WHERE "tripCode" = ANY($1) AND "type" = 'INBOUND' AND "deletedAt" IS NULL ORDER BY id DESC`,
             [tripCodes],
           )
         : [];
@@ -5567,23 +5981,42 @@ export class WarehouseService {
             ? `${descs[0]} (+${descs.length - 1} loại hàng)`
             : 'Hàng hóa tổng quan';
 
-      const receiveDateStr =
-        r.pickupDate ||
-        (r.createdAt
-          ? new Date(r.createdAt).toISOString().split('T')[0]
-          : undefined);
+      const tripTx =
+        txs.find(
+          (tx) =>
+            tx.tripCode === r.tripCode &&
+            (!r.hubId || !tx.hubId || Number(tx.hubId) === Number(r.hubId)),
+        ) || txs.find((tx) => tx.tripCode === r.tripCode);
+      const confirmedAt =
+        r.status === 'COMPLETED'
+          ? tripTx?.createdAt || r.processedAt || r.updatedAt || null
+          : null;
+      const effectiveInboundDateSource =
+        r.status === 'COMPLETED'
+          ? confirmedAt || r.pickupDate || r.createdAt
+          : r.status === 'DELETED'
+            ? r.deletedAt || r.updatedAt || r.pickupDate || r.createdAt
+            : r.updatedAt || r.createdAt || r.pickupDate;
+      const receiveDateStr = effectiveInboundDateSource
+        ? typeof effectiveInboundDateSource === 'string' &&
+          /^\d{4}-\d{2}-\d{2}$/.test(effectiveInboundDateSource)
+          ? effectiveInboundDateSource
+          : new Date(effectiveInboundDateSource).toLocaleDateString('sv-SE', {
+              timeZone: 'Asia/Ho_Chi_Minh',
+            })
+        : undefined;
 
-      const tripTx = txs.find((tx) => tx.tripCode === r.tripCode);
       const tripOrder = tripOrders.find((o) => o.createdByUserId);
       const matchedTrip = trips.find(
         (t) => t.tripCode === r.tripCode && t.assignedByUserId,
       );
+      const firstTripRow = trips.find((t) => t.tripCode === r.tripCode);
 
       const creatorUserId =
         matchedTrip?.assignedByUserId || tripOrder?.createdByUserId || null;
       const operatorUserId =
         r.status === 'COMPLETED'
-          ? r.processedByUserId || tripTx?.performedByUserId || creatorUserId
+          ? tripTx?.performedByUserId || r.processedByUserId || creatorUserId
           : creatorUserId || r.processedByUserId || tripTx?.performedByUserId;
 
       const creator = formatUserInfo(creatorUserId);
@@ -5600,6 +6033,11 @@ export class WarehouseService {
         driverName: r.driverName || '',
         pickupDate: r.pickupDate || null,
         receiveDate: receiveDateStr,
+        createdAt: firstTripRow?.createdAt || r.createdAt || null,
+        updatedAt: confirmedAt || r.deletedAt || r.updatedAt || r.createdAt,
+        confirmedAt,
+        deletedAt: r.deletedAt || null,
+        invoiceCode: tripTx?.invoiceCode || null,
         status: r.status,
         hubStatus: r.status,
         stopType: r.stopType,
@@ -5691,6 +6129,7 @@ export class WarehouseService {
     totalWeight: number;
     totalVolume: number;
     createdAt?: Date | string;
+    updatedAt?: Date | string;
     items: Array<{
       orderCode: string;
       goodsDescription: string;
@@ -5728,7 +6167,7 @@ export class WarehouseService {
     if (tripCode) {
       const resolvedUserHubId = await this.resolveUserHubId(user);
       const stops: any[] = await this.dataSource.query(
-        `SELECT ts."hubId", ts."status" FROM "trip_stop" ts WHERE ts."tripCode" = $1 AND ts."deletedAt" IS NULL`,
+        `SELECT ts."hubId", ts."status", ts."processedAt", ts."updatedAt" FROM "trip_stop" ts WHERE ts."tripCode" = $1 AND ts."deletedAt" IS NULL`,
         [tripCode],
       );
       const userStop = resolvedUserHubId
@@ -5737,6 +6176,10 @@ export class WarehouseService {
       const hasCompletedStop = userStop
         ? userStop.status === TripStopStatus.COMPLETED
         : stops.some((s) => s.status === TripStopStatus.COMPLETED);
+      const completedStopObj =
+        userStop?.status === TripStopStatus.COMPLETED
+          ? userStop
+          : stops.find((s) => s.status === TripStopStatus.COMPLETED);
 
       const inboundTx = await this.transactionRepository.findOne({
         where: {
@@ -5745,6 +6188,7 @@ export class WarehouseService {
           deletedAt: IsNull(),
           ...(resolvedUserHubId ? { hubId: resolvedUserHubId } : {}),
         },
+        order: { createdAt: 'DESC', id: 'DESC' },
       });
 
       if (!hasCompletedStop && !inboundTx) {
@@ -5765,7 +6209,13 @@ export class WarehouseService {
       if (trips.length > 0) {
         licensePlate = trips[0].licensePlate || '';
         driverName = trips[0].driverName || '';
-        createdAt = trips[0].createdAt || trips[0].pickupDate;
+        createdAt =
+          completedStopObj?.processedAt ||
+          inboundTx?.createdAt ||
+          completedStopObj?.updatedAt ||
+          trips[0].updatedAt ||
+          trips[0].createdAt ||
+          trips[0].pickupDate;
         const orderIds = Array.from(
           new Set(trips.map((t) => t.orderId).filter(Boolean)),
         );
@@ -5805,12 +6255,31 @@ export class WarehouseService {
       });
       if (singleOrder) {
         orders = [singleOrder];
+        const latestInTx = await this.transactionRepository.findOne({
+          where: {
+            orderId: singleOrder.id,
+            type: InventoryTransactionType.INBOUND,
+            deletedAt: IsNull(),
+          },
+          order: { createdAt: 'DESC', id: 'DESC' },
+        });
         if (singleOrder.trips && singleOrder.trips.length > 0) {
           const t = singleOrder.trips[0];
           tripCode = tripCode || t.tripCode || '';
           licensePlate = licensePlate || t.licensePlate || '';
           driverName = driverName || t.driverName || '';
-          createdAt = createdAt || t.createdAt;
+          createdAt =
+            createdAt ||
+            latestInTx?.createdAt ||
+            singleOrder.updatedAt ||
+            t.updatedAt ||
+            t.createdAt;
+        } else {
+          createdAt =
+            createdAt ||
+            latestInTx?.createdAt ||
+            singleOrder.updatedAt ||
+            singleOrder.createdAt;
         }
       }
     }
@@ -5854,6 +6323,8 @@ export class WarehouseService {
       0,
     );
 
+    const effectiveDate = createdAt || first.updatedAt || new Date();
+
     return {
       tripCode: tripCode || undefined,
       orderCode: first.orderCode,
@@ -5865,7 +6336,8 @@ export class WarehouseService {
       totalQuantity,
       totalWeight,
       totalVolume,
-      createdAt: createdAt || new Date(),
+      createdAt: effectiveDate,
+      updatedAt: effectiveDate,
       items,
     };
   }
@@ -5885,18 +6357,27 @@ export class WarehouseService {
       throw new NotFoundException('Không tìm thấy chuyến xe');
     }
     const resolvedUserHubId = await this.resolveUserHubId(user);
+    const manifestUserRoleId = Number(
+      user?.role?.id ?? (typeof user?.role === 'number' ? user.role : 0),
+    );
+    const isSuperAdmin = manifestUserRoleId === RoleEnum.SUPER_ADMIN;
 
-    const baseQb = () =>
-      this.tripRepository
+    const baseQb = (includeDeleted = false) => {
+      const qb = this.tripRepository
         .createQueryBuilder('trip')
         .innerJoinAndSelect('trip.order', 'order')
         .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
         .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
-        .leftJoinAndSelect('trip.destinationHub', 'tripDestinationHub')
-        .where('trip.deletedAt IS NULL')
-        .andWhere('order.deletedAt IS NULL');
+        .leftJoinAndSelect('trip.destinationHub', 'tripDestinationHub');
+      if (includeDeleted) {
+        qb.withDeleted();
+      } else {
+        qb.where('trip.deletedAt IS NULL').andWhere('order.deletedAt IS NULL');
+      }
+      return qb;
+    };
 
-    let trips = await baseQb()
+    let trips = await baseQb(false)
       .andWhere('trip.tripCode = :code', { code })
       .orderBy('trip.id', 'ASC')
       .getMany();
@@ -5904,9 +6385,21 @@ export class WarehouseService {
     // Legacy groups without a persisted code are displayed as TRIP-{id}
     const legacy = /^TRIP-(\d+)$/i.exec(code);
     if (trips.length === 0 && legacy) {
-      trips = await baseQb()
+      trips = await baseQb(false)
         .andWhere('trip.id = :id', { id: Number(legacy[1]) })
         .getMany();
+    }
+
+    if (trips.length === 0 && isSuperAdmin) {
+      trips = await baseQb(true)
+        .andWhere('trip.tripCode = :code', { code })
+        .orderBy('trip.id', 'ASC')
+        .getMany();
+      if (trips.length === 0 && legacy) {
+        trips = await baseQb(true)
+          .andWhere('trip.id = :id', { id: Number(legacy[1]) })
+          .getMany();
+      }
     }
 
     let tripRecord: TripEntity | null = null;
@@ -5924,13 +6417,22 @@ export class WarehouseService {
       }
     }
 
-    const stops: any[] = await this.dataSource.query(
-      `SELECT ts."hubId", h."name" AS "hubName", ts."stopSequence", ts."stopType", ts."status", ts."processedAt"
+    let stops: any[] = await this.dataSource.query(
+      `SELECT ts."hubId", h."name" AS "hubName", ts."stopSequence", ts."stopType", ts."status", ts."processedAt", ts."deletedAt"
        FROM "trip_stop" ts JOIN "hub" h ON h.id = ts."hubId"
        WHERE ts."tripCode" = $1 AND ts."deletedAt" IS NULL
        ORDER BY ts."stopSequence" ASC, ts.id ASC`,
       [code],
     );
+    if (stops.length === 0 && isSuperAdmin) {
+      stops = await this.dataSource.query(
+        `SELECT ts."hubId", h."name" AS "hubName", ts."stopSequence", ts."stopType", ts."status", ts."processedAt", ts."deletedAt"
+         FROM "trip_stop" ts JOIN "hub" h ON h.id = ts."hubId"
+         WHERE ts."tripCode" = $1
+         ORDER BY ts."stopSequence" ASC, ts.id ASC`,
+        [code],
+      );
+    }
 
     const txExists: any[] =
       trips.length === 0 && !tripRecord && stops.length === 0
@@ -6208,11 +6710,23 @@ export class WarehouseService {
     const canAddOrders = !isCurrentHubCompleted || isAdmin;
     const isReadOnlyForHub = isCurrentHubCompleted && !isAdmin;
 
+    const resolvedManifestDateRaw =
+      currentStop?.processedAt ||
+      stops.find((s) => s.processedAt)?.processedAt ||
+      first.updatedAt ||
+      first.createdAt ||
+      first.pickupDate;
+    const resolvedManifestDate = resolvedManifestDateRaw
+      ? new Date(resolvedManifestDateRaw).toLocaleDateString('sv-SE', {
+          timeZone: 'Asia/Ho_Chi_Minh',
+        })
+      : first.pickupDate || null;
+
     return {
       tripCode: first.tripCode || code,
       licensePlate: first.licensePlate || '',
       driverName: first.driverName || '',
-      pickupDate: first.pickupDate || null,
+      pickupDate: resolvedManifestDate,
       isTransfer:
         stops.length > 1 ||
         sums.some((s) => s.type === InventoryTransactionType.TRANSFER) ||
@@ -7823,6 +8337,8 @@ export class WarehouseService {
         'inboundQuantity',
         'outboundQuantity',
         'remainingQuantity',
+        'totalWeight',
+        'totalVolume',
         'status',
       ],
     });
@@ -7845,17 +8361,71 @@ export class WarehouseService {
       .addOrderBy('tx.id', 'ASC')
       .getMany();
 
+    const tripRepo = this.dataSource.getRepository(TripEntity);
+    const rawTrips = await tripRepo
+      .createQueryBuilder('t')
+      .withDeleted()
+      .leftJoinAndSelect('t.originHub', 'originHub')
+      .leftJoinAndSelect('t.destinationHub', 'destinationHub')
+      .where('t.orderId IN (:...orderIds)', { orderIds })
+      .orderBy('t.createdAt', 'ASC')
+      .addOrderBy('t.id', 'ASC')
+      .getMany();
+
+    const trips = rawTrips.map((t) => ({
+      id: t.id,
+      orderId: t.orderId,
+      tripCode: t.tripCode,
+      licensePlate: t.licensePlate,
+      driverName: t.driverName,
+      type: t.type,
+      status: t.status,
+      pickupDate: t.pickupDate,
+      quantityAllocated: t.quantityAllocated,
+      weightAllocated: t.weightAllocated,
+      volumeAllocated: t.volumeAllocated,
+      originHubId: t.originHubId,
+      originHubName: t.originHub?.name || null,
+      destinationHubId: t.destinationHubId,
+      destinationHubName: t.destinationHub?.name || null,
+      notes: t.notes,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      deletedAt: t.deletedAt,
+      isDeleted: !!t.deletedAt,
+    }));
+
     // Map running balance on active transactions
+    const round3Metric = (n: number) => Math.round(n * 1000) / 1000;
     let running = 0;
+    let runningWeight = 0;
+    let runningVolume = 0;
+    let totalInWeight = 0;
+    let totalInVolume = 0;
+    let totalOutWeight = 0;
+    let totalOutVolume = 0;
+
     const transactions = rawTxs.map((tx) => {
       const isDeleted = !!tx.deletedAt;
       const isIn = tx.type === 'INBOUND';
       const q = Number(tx.quantity) || 0;
+      const w = Number(tx.weight) || 0;
+      const v = Number(tx.volume) || 0;
       if (!isDeleted) {
         if (isIn) {
           running += q;
+          runningWeight = round3Metric(runningWeight + w);
+          runningVolume = round3Metric(runningVolume + v);
+          totalInWeight = round3Metric(totalInWeight + w);
+          totalInVolume = round3Metric(totalInVolume + v);
         } else {
           running = Math.max(0, running - q);
+          totalOutWeight = round3Metric(totalOutWeight + w);
+          totalOutVolume = round3Metric(totalOutVolume + v);
+          runningWeight =
+            running <= 0 ? 0 : Math.max(0, round3Metric(runningWeight - w));
+          runningVolume =
+            running <= 0 ? 0 : Math.max(0, round3Metric(runningVolume - v));
         }
       }
       return {
@@ -7878,6 +8448,8 @@ export class WarehouseService {
         createdAt: tx.createdAt,
         isDeleted,
         cumulativeStock: isDeleted ? null : running,
+        cumulativeWeight: isDeleted ? null : runningWeight,
+        cumulativeVolume: isDeleted ? null : runningVolume,
       };
     });
 
@@ -7893,6 +8465,22 @@ export class WarehouseService {
       roleName === 'SUPER ADMIN' ||
       roleName === 'ADMIN';
 
+    const effectiveInWeight = round3Metric(
+      Math.max(Number(order.totalWeight) || 0, totalInWeight),
+    );
+    const effectiveInVolume = round3Metric(
+      Math.max(Number(order.totalVolume) || 0, totalInVolume),
+    );
+    const effectiveRemQty = Number(order.remainingQuantity) || 0;
+    const effectiveRemWeight =
+      effectiveRemQty <= 0
+        ? 0
+        : Math.max(0, round3Metric(effectiveInWeight - totalOutWeight));
+    const effectiveRemVolume =
+      effectiveRemQty <= 0
+        ? 0
+        : Math.max(0, round3Metric(effectiveInVolume - totalOutVolume));
+
     return {
       userRole: isSuperAdmin ? 'SUPER_ADMIN' : roleName || null,
       order: {
@@ -7902,8 +8490,17 @@ export class WarehouseService {
         inboundQuantity: order.inboundQuantity,
         outboundQuantity: order.outboundQuantity,
         remainingQuantity: order.remainingQuantity,
+        totalWeight: effectiveInWeight,
+        totalVolume: effectiveInVolume,
+        inboundWeight: effectiveInWeight,
+        inboundVolume: effectiveInVolume,
+        outboundWeight: totalOutWeight,
+        outboundVolume: totalOutVolume,
+        remainingWeight: effectiveRemWeight,
+        remainingVolume: effectiveRemVolume,
         status: order.status,
       },
+      trips,
       transactions,
     };
   }
@@ -8839,9 +9436,20 @@ export class WarehouseService {
         statusLabel,
         licensePlate: latestTripRow?.licensePlate || 'CHƯA CÓ TT',
         driverName: latestTripRow?.driverName || null,
-        pickupDate: latestTripRow?.pickupDate
-          ? String(latestTripRow.pickupDate)
-          : null,
+        pickupDate: (() => {
+          const rawTs =
+            tripTxs[tripTxs.length - 1]?.createdAt ||
+            latestTripRow?.updatedAt ||
+            latestTripRow?.createdAt ||
+            latestTripRow?.pickupDate;
+          if (!rawTs) return null;
+          const d = new Date(rawTs);
+          return Number.isNaN(d.getTime())
+            ? String(rawTs)
+            : d.toLocaleDateString('sv-SE', {
+                timeZone: 'Asia/Ho_Chi_Minh',
+              });
+        })(),
         hubId: primaryHubId,
         hubName: primaryHubName,
         totalOrders: currentOrders.length,
