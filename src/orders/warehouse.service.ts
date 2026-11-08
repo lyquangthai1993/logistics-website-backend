@@ -138,26 +138,46 @@ export class WarehouseService {
 
   /**
    * Helper to resolve hubId from user entity or DB when missing on JWT payload.
+   * For SUPER_ADMIN (no fixed hubId), an explicit requestedHubId query filter is honored.
    */
   private async resolveUserHubId(
     user: UserEntity,
+    requestedHubId?: number | null,
   ): Promise<number | null | undefined> {
     if (user.hubId) return user.hubId;
-    if (!user.id) return undefined;
-    const dbUser = await this.userRepository.findOne({
-      where: { id: user.id },
-      select: ['id', 'hubId'],
-    });
-    return dbUser?.hubId ?? null;
+    if (user.id) {
+      const dbUser = await this.userRepository.findOne({
+        where: { id: user.id },
+        select: ['id', 'hubId'],
+      });
+      if (dbUser?.hubId) return dbUser.hubId;
+    }
+    if (
+      requestedHubId !== undefined &&
+      requestedHubId !== null &&
+      Number.isFinite(Number(requestedHubId)) &&
+      Number(requestedHubId) > 0
+    ) {
+      return Number(requestedHubId);
+    }
+    return null;
   }
 
-  /** Hub-scoped status context applies to Warehouse Managers assigned to a hub. */
+  /** Hub-scoped status context applies to Warehouse Managers or Super Admin filtering by hubId. */
   private async resolveHubContext(
     user: UserEntity,
+    requestedHubId?: number | null,
   ): Promise<{ userHubId: number | null; useHubContext: boolean }> {
-    const userHubId = (await this.resolveUserHubId(user)) ?? null;
+    const userHubId =
+      (await this.resolveUserHubId(user, requestedHubId)) ?? null;
+    const hasExplicitHubFilter =
+      requestedHubId !== undefined &&
+      requestedHubId !== null &&
+      Number.isFinite(Number(requestedHubId)) &&
+      Number(requestedHubId) > 0;
     const useHubContext =
-      user.role?.id === RoleEnum.WAREHOUSE_MANAGER && !!userHubId;
+      (user.role?.id === RoleEnum.WAREHOUSE_MANAGER || hasExplicitHubFilter) &&
+      !!userHubId;
     return { userHubId, useHubContext };
   }
 
@@ -328,6 +348,8 @@ export class WarehouseService {
       isExport?: string | boolean;
       /** Keyset / Cursor-based pagination: id của bản ghi cuối cùng đã xem (id < cursor) */
       cursor?: number;
+      /** Optional hubId filter for Super Admin */
+      hubId?: number;
     },
   ): Promise<WarehouseOrdersResult> {
     const isExport =
@@ -341,7 +363,10 @@ export class WarehouseService {
       : Math.max(1, Math.min(100, Number(query?.limit) || 20));
     const skip = isExport ? 0 : (page - 1) * limit;
 
-    const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const { userHubId, useHubContext } = await this.resolveHubContext(
+      user,
+      query?.hubId,
+    );
     const dateRange = this.sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
     const statusExpr = useHubContext
       ? this.ledgerService.hubStatusSql()
@@ -4200,6 +4225,7 @@ export class WarehouseService {
     query?: {
       fromDate?: string;
       toDate?: string;
+      hubId?: number;
     },
   ): Promise<{
     total: number;
@@ -4215,7 +4241,10 @@ export class WarehouseService {
     completedOutboundToday: number;
     completedOutbound: number;
   }> {
-    const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const { userHubId, useHubContext } = await this.resolveHubContext(
+      user,
+      query?.hubId,
+    );
     const dateRange = this.sanitizeDateRangeGuard(query, { maxSpanDays: 90 });
     const cacheKey = `warehouse:kpi:${user.id || user.role?.id || 'all'}:${userHubId || 'all'}:${dateRange.fromDate || 'none'}:${dateRange.toDate || 'none'}`;
     const cached = await this.redisCacheService.get<any>(cacheKey);
@@ -4330,13 +4359,17 @@ export class WarehouseService {
       toDate?: string;
       page?: number;
       limit?: number;
+      hubId?: number;
     },
   ): Promise<{ data: any[]; meta: any }> {
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(100, Number(query?.limit) || 20));
     const skip = (page - 1) * limit;
 
-    const { userHubId, useHubContext } = await this.resolveHubContext(user);
+    const { userHubId, useHubContext } = await this.resolveHubContext(
+      user,
+      query?.hubId,
+    );
     const dateRange = this.sanitizeDateRangeGuard(query, {
       defaultPastDays: 90,
       maxSpanDays: 90,
@@ -4387,16 +4420,24 @@ export class WarehouseService {
       );
     }
     if (dateRange.fromDate) {
-      const p = bind(new Date(`${dateRange.fromDate}T00:00:00`).toISOString());
-      txWhere.push(`tx."createdAt" >= ${p}`);
-      draftWhere.push(`t."createdAt" >= ${p}`);
+      const fromIso = new Date(
+        `${dateRange.fromDate}T00:00:00+07:00`,
+      ).toISOString();
+      const pIso = bind(fromIso);
+      const pDate = bind(dateRange.fromDate);
+      txWhere.push(`tx."createdAt" >= ${pIso}`);
+      draftWhere.push(
+        `(t."createdAt" >= ${pIso} OR t."pickupDate" >= ${pDate})`,
+      );
     }
     if (dateRange.toDate) {
-      const p = bind(
-        new Date(`${dateRange.toDate}T23:59:59.999`).toISOString(),
+      const toIso = new Date(`${dateRange.toDate}T23:59:59.999Z`).toISOString();
+      const pIso = bind(toIso);
+      const pDate = bind(dateRange.toDate);
+      txWhere.push(`tx."createdAt" <= ${pIso}`);
+      draftWhere.push(
+        `(t."createdAt" <= ${pIso} OR t."pickupDate" <= ${pDate})`,
       );
-      txWhere.push(`tx."createdAt" <= ${p}`);
-      draftWhere.push(`t."createdAt" <= ${p}`);
     }
 
     const txJoinOrder = hasSearch
@@ -4935,13 +4976,14 @@ export class WarehouseService {
       toDate?: string;
       page?: number;
       limit?: number;
+      hubId?: number;
     },
   ): Promise<{ data: any[]; meta: any }> {
     const page = Math.max(1, Number(query?.page) || 1);
     const limit = Math.max(1, Math.min(50, Number(query?.limit) || 15));
     const skip = (page - 1) * limit;
 
-    const userHubId = (await this.resolveUserHubId(user)) ?? null;
+    const userHubId = (await this.resolveUserHubId(user, query?.hubId)) ?? null;
     const dateRange = this.sanitizeDateRangeGuard(query, {
       defaultPastDays: 90,
       maxSpanDays: 90,
@@ -4969,25 +5011,52 @@ export class WarehouseService {
     }
 
     if (dateRange.fromDate) {
-      const fromIso = new Date(`${dateRange.fromDate}T00:00:00`).toISOString();
-      where.push(`ts."createdAt" >= ${bind(fromIso)}`);
+      const fromIso = new Date(
+        `${dateRange.fromDate}T00:00:00+07:00`,
+      ).toISOString();
+      const pFromIso = bind(fromIso);
+      const pFromDate = bind(dateRange.fromDate);
+      where.push(
+        `(ts."createdAt" >= ${pFromIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND dt."deletedAt" IS NULL AND dt."pickupDate" >= ${pFromDate}))`,
+      );
     }
 
     if (dateRange.toDate) {
-      const toIso = new Date(`${dateRange.toDate}T23:59:59.999`).toISOString();
-      where.push(`ts."createdAt" <= ${bind(toIso)}`);
+      const toIso = new Date(`${dateRange.toDate}T23:59:59.999Z`).toISOString();
+      const pToIso = bind(toIso);
+      const pToDate = bind(dateRange.toDate);
+      where.push(
+        `(ts."createdAt" <= ${pToIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND dt."deletedAt" IS NULL AND dt."pickupDate" <= ${pToDate}))`,
+      );
     }
 
     const whereSql = where.join(' AND ');
 
-    const baseCte = `WITH filtered_stops AS (
+    const baseCte = `WITH raw_stops AS (
       SELECT ts."tripCode",
              ts."status",
              ts."stopType",
+             ts."stopSequence",
              ts."hubId",
              ts."createdAt"
       FROM "trip_stop" ts
       WHERE ${whereSql}
+    ),
+    filtered_stops AS (
+      SELECT DISTINCT ON (rs."tripCode")
+             rs."tripCode",
+             CASE
+               WHEN BOOL_OR(rs."status" = 'PENDING') OVER (PARTITION BY rs."tripCode") THEN 'PENDING'
+               ELSE 'COMPLETED'
+             END AS "status",
+             rs."stopType",
+             rs."hubId",
+             MAX(rs."createdAt") OVER (PARTITION BY rs."tripCode") AS "createdAt"
+      FROM raw_stops rs
+      ORDER BY rs."tripCode",
+               CASE WHEN rs."status" = 'PENDING' THEN 0 ELSE 1 END ASC,
+               rs."stopSequence" ASC,
+               rs."createdAt" DESC
     ),
     unique_trip_codes AS (
       SELECT DISTINCT "tripCode" FROM filtered_stops
@@ -5052,14 +5121,20 @@ export class WarehouseService {
 
     const pageSql = `${baseCte}
        SELECT ts."tripCode",
-              ts."status",
+              p."status",
               ts."stopType",
               ts."hubId",
               ts."processedAt",
               ts."processedByUserId",
-              ts."createdAt",
+              p."createdAt",
               p."isTransfer",
               h."name" AS "hubName",
+              (SELECT STRING_AGG(sh."name", ' → ' ORDER BY sts."stopSequence" ASC, sts.id ASC)
+               FROM "trip_stop" sts
+               JOIN "hub" sh ON sh.id = sts."hubId"
+               WHERE sts."tripCode" = ts."tripCode"
+                 AND sts."stopType" <> 'ORIGIN'
+                 AND sts."deletedAt" IS NULL) AS "routeStopsSummary",
               (SELECT oh."name" FROM "trip_stop" os JOIN "hub" oh ON oh.id = os."hubId"
                WHERE os."tripCode" = ts."tripCode" AND os."stopType" = 'ORIGIN' AND os."deletedAt" IS NULL
                LIMIT 1) AS "originHubName",
@@ -5354,7 +5429,7 @@ export class WarehouseService {
 
       return {
         id: r.firstTripId != null ? Number(r.firstTripId) : null,
-        groupKey: r.tripCode,
+        groupKey: r.hubId ? `${r.tripCode}_${r.hubId}` : r.tripCode,
         tripCode: r.tripCode,
         vehicleLicensePlate: r.licensePlate || 'CHƯA GÁN XE',
         licensePlate: r.licensePlate || 'CHƯA GÁN XE',
@@ -5367,6 +5442,7 @@ export class WarehouseService {
         hubId: Number(r.hubId),
         originHub: r.originHubName || '',
         destinationHub: r.hubName || '',
+        routeStopsSummary: r.routeStopsSummary || r.hubName || '',
         isTransfer: !!r.isTransfer,
         ordersCount: Number(r.ordersCount) || tripOrders.length,
         remainingOrdersCount: Number(r.ordersForHubCount) || 0,
