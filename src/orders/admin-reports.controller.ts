@@ -17,13 +17,17 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { RolesGuard } from '../roles/roles.guard';
 import { Roles } from '../roles/roles.decorator';
 import { RoleEnum } from '../roles/roles.enum';
 import { AdminReportsService } from './admin-reports.service';
 
-@Throttle({ default: { limit: 300, ttl: 60000 } })
+@SkipThrottle({ default: true, auth: true })
+@Throttle({
+  default: { limit: 2000, ttl: 60000 },
+  auth: { limit: 2000, ttl: 60000 },
+})
 @ApiTags('Admin Reports')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -178,6 +182,7 @@ export class AdminReportsController {
       reportDate?: string;
       fromDate?: string;
       toDate?: string;
+      triggeredBy?: 'MANUAL_RERUN' | 'MANUAL_RANGE';
       notifySuperAdmins?: boolean;
     },
   ) {
@@ -196,11 +201,18 @@ export class AdminReportsController {
     const orderedEnd = fromDate <= toDate ? toDate : fromDate;
     const end = orderedEnd > maxEnd ? maxEnd : orderedEnd;
 
+    const resolvedTriggeredBy =
+      body?.triggeredBy === 'MANUAL_RANGE'
+        ? 'MANUAL_RANGE'
+        : start === end
+          ? 'MANUAL_RERUN'
+          : 'MANUAL_RANGE';
+
     return this.adminReportsService.executeAndLogCronRun({
       jobKey: body?.jobKey,
       fromDate: start,
       toDate: end,
-      triggeredBy: start === end ? 'MANUAL_RERUN' : 'MANUAL_RANGE',
+      triggeredBy: resolvedTriggeredBy,
       notifySuperAdmins: Boolean(body?.notifySuperAdmins),
       actorUser: req?.user,
     });

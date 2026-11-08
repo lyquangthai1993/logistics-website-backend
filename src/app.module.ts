@@ -155,12 +155,13 @@ const infrastructureDatabaseModule = (databaseConfig() as DatabaseConfig)
       {
         name: 'default',
         ttl: 60000, // 60 seconds
-        limit: 300, // 300 requests per minute per user/IP
+        limit: 600, // 600 requests per minute per user/IP
       },
       {
         name: 'auth',
         ttl: 60000, // 60 seconds
         limit: process.env.NODE_ENV === 'development' ? 200 : 15,
+        skipIf: (context) => context.getClass()?.name !== 'AuthController',
       },
     ]),
   ],

@@ -88,6 +88,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
   private lastCronRunAt: Date | null = null;
   private isRunningCron = false;
   private tableEnsured = false;
+  private defaultConfigsSeeded = false;
+  private cachedActiveHubs: { hubs: HubEntity[]; expiresAt: number } | null =
+    null;
+  private actorEmailCache = new Map<number, string>();
 
   constructor(
     private readonly dataSource: DataSource,
@@ -380,15 +384,18 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       },
     ];
 
-    for (const seed of defaultSeeds) {
-      const existing = await this.cronConfigRepository.findOne({
-        where: { jobKey: seed.jobKey },
-      });
-      if (!existing) {
-        await this.cronConfigRepository.save(
-          this.cronConfigRepository.create(seed),
-        );
+    if (!this.defaultConfigsSeeded) {
+      for (const seed of defaultSeeds) {
+        const existing = await this.cronConfigRepository.findOne({
+          where: { jobKey: seed.jobKey },
+        });
+        if (!existing) {
+          await this.cronConfigRepository.save(
+            this.cronConfigRepository.create(seed),
+          );
+        }
       }
+      this.defaultConfigsSeeded = true;
     }
 
     const targetKey = requestedJobKey?.trim() || 'DAILY_HUB_OPERATIONAL_REPORT';
@@ -535,10 +542,15 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const startWindow = this.getReportWindow(fromDate).windowStart;
     const endWindow = this.getReportWindow(toDate).windowEnd;
 
-    const activeHubs = await this.hubRepository.find({
-      where: { isActive: true },
-      order: { level: 'ASC', id: 'ASC' },
-    });
+    const nowMs = Date.now();
+    if (!this.cachedActiveHubs || this.cachedActiveHubs.expiresAt < nowMs) {
+      const fetchedHubs = await this.hubRepository.find({
+        where: { isActive: true },
+        order: { level: 'ASC', id: 'ASC' },
+      });
+      this.cachedActiveHubs = { hubs: fetchedHubs, expiresAt: nowMs + 60000 };
+    }
+    const activeHubs = this.cachedActiveHubs.hubs;
 
     if (activeHubs.length === 0) {
       return { processedDays: 0, upsertedRows: 0, fromDate, toDate };
@@ -1500,10 +1512,17 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       ? Number(params.actorUser.id)
       : null;
     if (!actorEmail && actorUserId) {
-      const foundUser = await this.userRepository.findOne({
-        where: { id: actorUserId },
-      });
-      actorEmail = foundUser?.email || null;
+      if (this.actorEmailCache.has(actorUserId)) {
+        actorEmail = this.actorEmailCache.get(actorUserId) || null;
+      } else {
+        const foundUser = await this.userRepository.findOne({
+          where: { id: actorUserId },
+        });
+        actorEmail = foundUser?.email || null;
+        if (actorEmail) {
+          this.actorEmailCache.set(actorUserId, actorEmail);
+        }
+      }
     }
 
     const startedAt = new Date();
@@ -1778,7 +1797,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const latestClosedReportDate = this.getLatestClosedReportDate(now);
     const currentOpenReportDate = this.addDays(latestClosedReportDate, 1);
 
-    const daysLimit = Math.max(7, Math.min(90, Number(query?.daysLimit) || 30));
+    const daysLimit = Math.max(
+      7,
+      Math.min(366, Number(query?.daysLimit) || 30),
+    );
     const snapshotStartDate = this.addDays(
       currentOpenReportDate,
       -(daysLimit - 1),
@@ -1790,7 +1812,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     const logs = await this.cronLogRepository.find({
       order: { startedAt: 'DESC', id: 'DESC' },
-      take: 50,
+      take: 200,
     });
 
     const rawSnapshots: Array<{
