@@ -76,7 +76,7 @@ export interface ConfirmedTripReportItem {
  * adding +6 hours to GMT+7 (= UTC + 13 hours) maps any timestamp in
  * [(D-1) 18:00:00+07:00, D 18:00:00+07:00) directly to calendar date D.
  */
-const OPERATIONAL_DAY_SHIFT_MS = 13 * 60 * 60 * 1000;
+const OPERATIONAL_DAY_SHIFT_MS = 25 * 60 * 60 * 1000;
 const VN_TZ_OFFSET_MS = 7 * 60 * 60 * 1000;
 
 @Injectable()
@@ -226,7 +226,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           (
             'DAILY_HUB_OPERATIONAL_REPORT',
             'Tổng hợp Báo cáo Vận hành Hub Hàng ngày',
-            'Tự động chốt sản lượng CBM, Số Tấn và Chuyến xe (TRIP) xác nhận Nhập/Xuất theo chu kỳ 18:00 (6:00 PM) ngày D-1 → 18:00 (6:00 PM) ngày D',
+            'Tự động chốt sản lượng CBM, Số Tấn và Chuyến xe (TRIP) xác nhận Nhập/Xuất theo chu kỳ 06:00 (6:00 AM) ngày D-1 → 05:59 (5:59 AM) ngày D',
             true,
             '18:05',
             18,
@@ -310,7 +310,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
    */
   public getLatestClosedReportDate(now: Date = new Date()): string {
     const vn = this.getVietnamDateParts(now);
-    if (vn.hour >= 18) {
+    if (vn.hour >= 6) {
       return vn.dateStr;
     }
     return this.addDays(vn.dateStr, -1);
@@ -329,13 +329,13 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     windowLabel: string;
   } {
     const prevDateStr = this.addDays(reportDate, -1);
-    const windowStart = new Date(`${prevDateStr}T18:00:00+07:00`);
-    const windowEnd = new Date(`${reportDate}T18:00:00+07:00`);
+    const windowStart = new Date(`${prevDateStr}T06:00:00+07:00`);
+    const windowEnd = new Date(`${reportDate}T06:00:00+07:00`);
     const formatVnDate = (s: string) => {
       const [y, m, d] = s.split('-');
       return `${d}/${m}/${y}`;
     };
-    const windowLabel = `18:00 ${formatVnDate(prevDateStr)} → 18:00 ${formatVnDate(reportDate)}`;
+    const windowLabel = `06:00 ${formatVnDate(prevDateStr)} → 05:59 ${formatVnDate(reportDate)}`;
     return { windowStart, windowEnd, prevDateStr, windowLabel };
   }
 
@@ -356,7 +356,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         jobKey: 'DAILY_HUB_OPERATIONAL_REPORT',
         name: 'Tổng hợp Báo cáo Vận hành Hub Hàng ngày',
         description:
-          'Tự động chốt sản lượng CBM, Số Tấn và Chuyến xe (TRIP) xác nhận Nhập/Xuất theo chu kỳ 18:00 (6:00 PM) ngày D-1 → 18:00 (6:00 PM) ngày D',
+          'Tự động chốt sản lượng CBM, Số Tấn và Chuyến xe (TRIP) xác nhận Nhập/Xuất theo chu kỳ 06:00 (6:00 AM) ngày D-1 → 05:59 (5:59 AM) ngày D',
         isEnabled: true,
         cronTime: '18:05',
         cutoffHour: 18,
@@ -1426,8 +1426,8 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         hubLevel: selectedHub?.level ?? null,
         direction,
         cutoffRule:
-          'Từ 18:00 (6:00 PM) ngày D-1 đến 18:00 (6:00 PM) ngày D (GMT+7)',
-        cronSchedule: '18:05 hàng ngày (GMT+7)',
+          'Từ 06:00 (6:00 AM) ngày D-1 đến 05:59 (5:59 AM) ngày D (GMT+7)',
+        cronSchedule: '06:05 hàng ngày (GMT+7)',
         lastClosedReportDate: latestClosedReportDate,
         lastCronRunAt: this.lastCronRunAt
           ? this.lastCronRunAt.toISOString()
@@ -1505,7 +1505,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const windowLabel =
       fromDate === toDate
         ? startWin.windowLabel
-        : `18:00 ${formatVnDate(startWin.prevDateStr)} → 18:00 ${formatVnDate(toDate)}`;
+        : `06:00 ${formatVnDate(startWin.prevDateStr)} → 05:59 ${formatVnDate(toDate)}`;
 
     let actorEmail = params.actorUser?.email || null;
     const actorUserId = params.actorUser?.id
@@ -1959,7 +1959,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         nextRunAt: primaryNextInfo.nextRunAt,
         nextRunLabel: primaryNextInfo.nextRunLabel,
         cutoffRule:
-          'Từ 18:00 (6:00 PM) ngày D-1 đến 18:00 (6:00 PM) ngày D (GMT+7)',
+          'Từ 06:00 (6:00 AM) ngày D-1 đến 05:59 (5:59 AM) ngày D (GMT+7)',
       },
       logs,
       dailySnapshots,
