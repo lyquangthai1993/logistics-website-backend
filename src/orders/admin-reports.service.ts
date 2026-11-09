@@ -76,7 +76,7 @@ export interface ConfirmedTripReportItem {
  * adding +6 hours to GMT+7 (= UTC + 13 hours) maps any timestamp in
  * [(D-1) 18:00:00+07:00, D 18:00:00+07:00) directly to calendar date D.
  */
-const OPERATIONAL_DAY_SHIFT_MS = 25 * 60 * 60 * 1000;
+const OPERATIONAL_DAY_SHIFT_MS = 1 * 60 * 60 * 1000;
 const VN_TZ_OFFSET_MS = 7 * 60 * 60 * 1000;
 
 @Injectable()
@@ -226,7 +226,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           (
             'DAILY_HUB_OPERATIONAL_REPORT',
             'Tổng hợp Báo cáo Vận hành Hub Hàng ngày',
-            'Tự động chốt sản lượng CBM, Số Tấn và Chuyến xe (TRIP) xác nhận Nhập/Xuất theo chu kỳ 06:00 (6:00 AM) ngày D-1 → 05:59 (5:59 AM) ngày D',
+            'Tự động chốt sản lượng CBM, Số Tấn và Chuyến xe (TRIP) xác nhận Nhập/Xuất theo chu kỳ 06:00 (6:00 AM) ngày D → 05:59 (5:59 AM) ngày D+1',
             true,
             '18:05',
             18,
@@ -311,32 +311,36 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
   public getLatestClosedReportDate(now: Date = new Date()): string {
     const vn = this.getVietnamDateParts(now);
     if (vn.hour >= 6) {
-      return vn.dateStr;
+      return this.addDays(vn.dateStr, -1);
     }
-    return this.addDays(vn.dateStr, -1);
+    return this.addDays(vn.dateStr, -2);
   }
 
   /**
-   * Compute exact UTC [windowStart, windowEnd) for a given reportDate `YYYY-MM-DD`.
-   * For reportDate = `2026-11-02`:
-   *   windowStart = `2026-11-01T18:00:00+07:00` (`2026-11-01T11:00:00.000Z`)
-   *   windowEnd   = `2026-11-02T18:00:00+07:00` (`2026-11-02T11:00:00.000Z`)
+   * Compute exact UTC [windowStart, windowEnd) for a given reportDate YYYY-MM-DD.
+   * Chu kỳ mới: từ 06:00 ngày D đến 05:59 ngày D+1.
+   * Ví dụ: reportDate = '2026-11-09' thì:
+   *   windowStart = '2026-11-09T06:00:00+07:00' ('2026-11-08T23:00:00.000Z')
+   *   windowEnd   = '2026-11-10T06:00:00+07:00' ('2026-11-09T23:00:00.000Z')
+   *   windowLabel = '06:00 09/11/2026 → 05:59 10/11/2026'
    */
   public getReportWindow(reportDate: string): {
     windowStart: Date;
     windowEnd: Date;
     prevDateStr: string;
+    nextDateStr: string;
     windowLabel: string;
   } {
+    const nextDateStr = this.addDays(reportDate, 1);
     const prevDateStr = this.addDays(reportDate, -1);
-    const windowStart = new Date(`${prevDateStr}T06:00:00+07:00`);
-    const windowEnd = new Date(`${reportDate}T06:00:00+07:00`);
+    const windowStart = new Date(`${reportDate}T06:00:00+07:00`);
+    const windowEnd = new Date(`${nextDateStr}T06:00:00+07:00`);
     const formatVnDate = (s: string) => {
       const [y, m, d] = s.split('-');
       return `${d}/${m}/${y}`;
     };
-    const windowLabel = `06:00 ${formatVnDate(prevDateStr)} → 05:59 ${formatVnDate(reportDate)}`;
-    return { windowStart, windowEnd, prevDateStr, windowLabel };
+    const windowLabel = `06:00 ${formatVnDate(reportDate)} → 05:59 ${formatVnDate(nextDateStr)}`;
+    return { windowStart, windowEnd, prevDateStr, nextDateStr, windowLabel };
   }
 
   private async getOrCreateDefaultCronConfig(
@@ -356,7 +360,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         jobKey: 'DAILY_HUB_OPERATIONAL_REPORT',
         name: 'Tổng hợp Báo cáo Vận hành Hub Hàng ngày',
         description:
-          'Tự động chốt sản lượng CBM, Số Tấn và Chuyến xe (TRIP) xác nhận Nhập/Xuất theo chu kỳ 06:00 (6:00 AM) ngày D-1 → 05:59 (5:59 AM) ngày D',
+          'Tự động chốt sản lượng CBM, Số Tấn và Chuyến xe (TRIP) xác nhận Nhập/Xuất theo chu kỳ 06:00 (6:00 AM) ngày D → 05:59 (5:59 AM) ngày D+1',
         isEnabled: true,
         cronTime: '18:05',
         cutoffHour: 18,
@@ -557,7 +561,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Query all confirmed inventory transactions in [startWindow, endWindow)
-    // Bucketed by operational reportDate = TO_CHAR(tx."createdAt" + INTERVAL '13 hours', 'YYYY-MM-DD')
+    // Bucketed by operational reportDate = TO_CHAR(tx."createdAt" + INTERVAL '1 hour', 'YYYY-MM-DD')
     // Strictly excludes draft trips (which have no inventory transactions) and soft-deleted/rolled-back transactions.
     const rawAggRows: Array<{
       reportDate: string;
@@ -576,7 +580,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       `
       WITH tx_enriched AS (
         SELECT
-          TO_CHAR(tx."createdAt" + INTERVAL '13 hours', 'YYYY-MM-DD') AS "reportDate",
+          TO_CHAR(tx."createdAt" + INTERVAL '1 hour', 'YYYY-MM-DD') AS "reportDate",
           COALESCE(tx."hubId", o."originHubId", o."currentHubId") AS "resolvedHubId",
           tx."type" AS "txType",
           tx."orderId" AS "orderId",
@@ -1329,7 +1333,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       SELECT
         COALESCE(NULLIF(tx."tripCode", ''), NULLIF(tx."invoiceCode", ''), 'TX-' || tx.id::text) AS "tripCode",
         MAX(tx."invoiceCode") AS "invoiceCode",
-        TO_CHAR(MAX(tx."createdAt") + INTERVAL '13 hours', 'YYYY-MM-DD') AS "reportDate",
+        TO_CHAR(MAX(tx."createdAt") + INTERVAL '1 hour', 'YYYY-MM-DD') AS "reportDate",
         MAX(tx."createdAt") AS "confirmedAt",
         CASE
           WHEN BOOL_OR(tx."type" = 'INBOUND') THEN 'INBOUND'
@@ -1368,7 +1372,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           SELECT 1
           FROM "daily_hub_operational_report" r_snap
           WHERE r_snap."deletedAt" IS NULL
-            AND r_snap."reportDate" = TO_CHAR(tx."createdAt" + INTERVAL '13 hours', 'YYYY-MM-DD')
+            AND r_snap."reportDate" = TO_CHAR(tx."createdAt" + INTERVAL '1 hour', 'YYYY-MM-DD')
         )
         ${tripTypeSql}
         ${tripHubSql}
@@ -1988,7 +1992,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       const latestActiveRow: Array<{ reportDate: string }> =
         await this.dataSource.query(
           `
-          SELECT TO_CHAR(MAX(tx."createdAt") + INTERVAL '13 hours', 'YYYY-MM-DD') AS "reportDate"
+          SELECT TO_CHAR(MAX(tx."createdAt") + INTERVAL '1 hour', 'YYYY-MM-DD') AS "reportDate"
           FROM "order_inventory_transaction" tx
           INNER JOIN "order" o ON o.id = tx."orderId" AND o."deletedAt" IS NULL
           WHERE tx."deletedAt" IS NULL
@@ -2384,7 +2388,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       `
       WITH tx_strip AS (
         SELECT
-          TO_CHAR(tx."createdAt" + INTERVAL '13 hours', 'YYYY-MM-DD') AS "reportDate",
+          TO_CHAR(tx."createdAt" + INTERVAL '1 hour', 'YYYY-MM-DD') AS "reportDate",
           tx."type" AS "txType",
           o.id AS "orderId",
           COALESCE(NULLIF(tx."tripCode", ''), NULLIF(tx."invoiceCode", ''), 'TX-' || tx.id::text) AS "cleanTripCode",
