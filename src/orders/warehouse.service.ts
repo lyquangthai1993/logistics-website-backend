@@ -5774,6 +5774,26 @@ export class WarehouseService {
     let trips: TripEntity[] = [];
     let orders: OrderEntity[] = [];
 
+    const txs: Array<{
+      id: number;
+      orderId: number;
+      tripCode: string;
+      hubId: number | null;
+      quantity: number;
+      expectedQuantity: number | null;
+      weight: number | null;
+      volume: number | null;
+      performedByUserId: number | null;
+      createdAt?: Date | string;
+      invoiceCode?: string | null;
+    }> =
+      tripCodes.length > 0
+        ? await this.dataSource.query(
+            `SELECT id, "orderId", "tripCode", "hubId", "quantity", "expectedQuantity", "weight", "volume", "performedByUserId", "createdAt", "invoiceCode" FROM "order_inventory_transaction" WHERE "tripCode" = ANY($1) AND "type" = 'INBOUND' AND "deletedAt" IS NULL ORDER BY id DESC`,
+            [tripCodes],
+          )
+        : [];
+
     if (tripCodes.length > 0) {
       const tripQb = this.tripRepository.createQueryBuilder('t');
       if (hasDeletedRows) {
@@ -5872,26 +5892,66 @@ export class WarehouseService {
                 (trip as any).destinationHub ||
                 order.destinationHubEntity ||
                 null;
+              const orderTripTxs = txs.filter(
+                (tx) =>
+                  tx.tripCode === trip.tripCode &&
+                  Number(tx.orderId) === Number(order.id),
+              );
+              const txQtySum = orderTripTxs.reduce(
+                (sum, tx) => sum + (Number(tx.quantity) || 0),
+                0,
+              );
+              const txWeightSum = orderTripTxs.reduce(
+                (sum, tx) => sum + (Number(tx.weight) || 0),
+                0,
+              );
+              const txVolumeSum = orderTripTxs.reduce(
+                (sum, tx) => sum + (Number(tx.volume) || 0),
+                0,
+              );
+              const tripQty =
+                txQtySum > 0
+                  ? txQtySum
+                  : trip.quantityAllocated != null &&
+                      Number(trip.quantityAllocated) > 0
+                    ? Number(trip.quantityAllocated)
+                    : Number(order.totalQuantity) || 1;
+              const tripWeight =
+                txWeightSum > 0
+                  ? txWeightSum
+                  : trip.weightAllocated != null &&
+                      Number(trip.weightAllocated) > 0
+                    ? Number(trip.weightAllocated)
+                    : Number(order.totalWeight) || 0;
+              const tripVolume =
+                txVolumeSum > 0
+                  ? txVolumeSum
+                  : trip.volumeAllocated != null &&
+                      Number(trip.volumeAllocated) > 0
+                    ? Number(trip.volumeAllocated)
+                    : Number(order.totalVolume) || 0;
+
               const tripEnrichedOrder = {
                 ...enrichedOrder,
                 tripId: trip.id,
                 destinationHubId: tripDestHubId,
                 destinationHubEntity: tripDestEntity,
-                quantityAllocated:
-                  trip.quantityAllocated != null &&
-                  Number(trip.quantityAllocated) > 0
-                    ? Number(trip.quantityAllocated)
-                    : Number(order.totalQuantity) || 1,
-                weightAllocated:
-                  trip.weightAllocated != null &&
-                  Number(trip.weightAllocated) >= 0
-                    ? Number(trip.weightAllocated)
-                    : Number(order.totalWeight) || 0,
-                volumeAllocated:
-                  trip.volumeAllocated != null &&
-                  Number(trip.volumeAllocated) >= 0
-                    ? Number(trip.volumeAllocated)
-                    : Number(order.totalVolume) || 0,
+                quantity: tripQty,
+                tripInboundQuantity: tripQty,
+                receivedQuantity: txQtySum > 0 ? txQtySum : undefined,
+                quantityAllocated: tripQty,
+                inboundQuantity: tripQty,
+                totalQuantity: tripQty,
+                orderTotalQuantity: Number(order.totalQuantity) || 1,
+                orderInboundQuantity: Number(order.inboundQuantity) || 0,
+                weightAllocated: tripWeight,
+                totalWeight: tripWeight,
+                volumeAllocated: tripVolume,
+                totalVolume: tripVolume,
+                inventoryTransactions: orderTripTxs.map((tx) => ({
+                  ...tx,
+                  type: 'INBOUND',
+                })),
                 tripNotes: trip.notes,
               };
               list.push(tripEnrichedOrder);
@@ -5901,20 +5961,6 @@ export class WarehouseService {
         }
       }
     }
-
-    const txs: Array<{
-      tripCode: string;
-      hubId: number | null;
-      performedByUserId: number | null;
-      createdAt?: Date | string;
-      invoiceCode?: string | null;
-    }> =
-      tripCodes.length > 0
-        ? await this.dataSource.query(
-            `SELECT "tripCode", "hubId", "performedByUserId", "createdAt", "invoiceCode" FROM "order_inventory_transaction" WHERE "tripCode" = ANY($1) AND "type" = 'INBOUND' AND "deletedAt" IS NULL ORDER BY id DESC`,
-            [tripCodes],
-          )
-        : [];
 
     const relevantUserIds = Array.from(
       new Set(
@@ -6163,6 +6209,9 @@ export class WarehouseService {
     let createdAt: Date | string | undefined;
 
     let orders: OrderEntity[] = [];
+    const qtyByOrderId = new Map<number, number>();
+    const weightByOrderId = new Map<number, number>();
+    const volumeByOrderId = new Map<number, number>();
 
     if (tripCode) {
       const resolvedUserHubId = await this.resolveUserHubId(user);
@@ -6181,7 +6230,7 @@ export class WarehouseService {
           ? userStop
           : stops.find((s) => s.status === TripStopStatus.COMPLETED);
 
-      const inboundTx = await this.transactionRepository.findOne({
+      const scopedTxs = await this.transactionRepository.find({
         where: {
           tripCode,
           type: InventoryTransactionType.INBOUND,
@@ -6190,6 +6239,20 @@ export class WarehouseService {
         },
         order: { createdAt: 'DESC', id: 'DESC' },
       });
+      const tripInboundTxs =
+        scopedTxs.length > 0
+          ? scopedTxs
+          : resolvedUserHubId
+            ? await this.transactionRepository.find({
+                where: {
+                  tripCode,
+                  type: InventoryTransactionType.INBOUND,
+                  deletedAt: IsNull(),
+                },
+                order: { createdAt: 'DESC', id: 'DESC' },
+              })
+            : [];
+      const inboundTx = tripInboundTxs[0] ?? null;
 
       if (!hasCompletedStop && !inboundTx) {
         throw new BadRequestException(
@@ -6219,6 +6282,48 @@ export class WarehouseService {
         const orderIds = Array.from(
           new Set(trips.map((t) => t.orderId).filter(Boolean)),
         );
+        for (const oid of orderIds) {
+          const orderTxs = tripInboundTxs.filter(
+            (tx) => Number(tx.orderId) === Number(oid),
+          );
+          const txQty = orderTxs.reduce(
+            (sum, tx) => sum + (Number(tx.quantity) || 0),
+            0,
+          );
+          const txWeight = orderTxs.reduce(
+            (sum, tx) => sum + (Number(tx.weight) || 0),
+            0,
+          );
+          const txVolume = orderTxs.reduce(
+            (sum, tx) => sum + (Number(tx.volume) || 0),
+            0,
+          );
+          const tripRow = trips.find((t) => Number(t.orderId) === Number(oid));
+          if (txQty > 0) {
+            qtyByOrderId.set(oid, txQty);
+          } else if (
+            tripRow?.quantityAllocated != null &&
+            Number(tripRow.quantityAllocated) > 0
+          ) {
+            qtyByOrderId.set(oid, Number(tripRow.quantityAllocated));
+          }
+          if (txWeight > 0) {
+            weightByOrderId.set(oid, txWeight);
+          } else if (
+            tripRow?.weightAllocated != null &&
+            Number(tripRow.weightAllocated) > 0
+          ) {
+            weightByOrderId.set(oid, Number(tripRow.weightAllocated));
+          }
+          if (txVolume > 0) {
+            volumeByOrderId.set(oid, txVolume);
+          } else if (
+            tripRow?.volumeAllocated != null &&
+            Number(tripRow.volumeAllocated) > 0
+          ) {
+            volumeByOrderId.set(oid, Number(tripRow.volumeAllocated));
+          }
+        }
         if (orderIds.length > 0) {
           orders = await this.orderRepository.find({
             where: { id: In(orderIds), deletedAt: IsNull() },
@@ -6244,7 +6349,29 @@ export class WarehouseService {
         driverName = driverName || txs[0].driverName || '';
         originHubName = originHubName || txs[0].hub?.name || '';
         createdAt = createdAt || txs[0].createdAt;
-        orders = txs.map((t) => t.order).filter(Boolean);
+        const uniqueOrders = new Map<number, OrderEntity>();
+        for (const tx of txs) {
+          if (tx.order) {
+            uniqueOrders.set(tx.order.id, tx.order);
+            qtyByOrderId.set(
+              tx.order.id,
+              (qtyByOrderId.get(tx.order.id) || 0) + (Number(tx.quantity) || 0),
+            );
+            if (Number(tx.weight) > 0) {
+              weightByOrderId.set(
+                tx.order.id,
+                (weightByOrderId.get(tx.order.id) || 0) + Number(tx.weight),
+              );
+            }
+            if (Number(tx.volume) > 0) {
+              volumeByOrderId.set(
+                tx.order.id,
+                (volumeByOrderId.get(tx.order.id) || 0) + Number(tx.volume),
+              );
+            }
+          }
+        }
+        orders = Array.from(uniqueOrders.values());
       }
     }
 
@@ -6263,17 +6390,44 @@ export class WarehouseService {
           },
           order: { createdAt: 'DESC', id: 'DESC' },
         });
+        if (latestInTx) {
+          if (Number(latestInTx.quantity) > 0) {
+            qtyByOrderId.set(singleOrder.id, Number(latestInTx.quantity));
+          }
+          if (Number(latestInTx.weight) > 0) {
+            weightByOrderId.set(singleOrder.id, Number(latestInTx.weight));
+          }
+          if (Number(latestInTx.volume) > 0) {
+            volumeByOrderId.set(singleOrder.id, Number(latestInTx.volume));
+          }
+          tripCode = tripCode || latestInTx.tripCode || '';
+          licensePlate = licensePlate || latestInTx.licensePlate || '';
+          driverName = driverName || latestInTx.driverName || '';
+        }
         if (singleOrder.trips && singleOrder.trips.length > 0) {
-          const t = singleOrder.trips[0];
-          tripCode = tripCode || t.tripCode || '';
-          licensePlate = licensePlate || t.licensePlate || '';
-          driverName = driverName || t.driverName || '';
+          const matchedTrip =
+            (tripCode
+              ? singleOrder.trips.find((tr) => tr.tripCode === tripCode)
+              : null) || singleOrder.trips[singleOrder.trips.length - 1];
+          tripCode = tripCode || matchedTrip.tripCode || '';
+          licensePlate = licensePlate || matchedTrip.licensePlate || '';
+          driverName = driverName || matchedTrip.driverName || '';
+          if (
+            !qtyByOrderId.has(singleOrder.id) &&
+            matchedTrip.quantityAllocated != null &&
+            Number(matchedTrip.quantityAllocated) > 0
+          ) {
+            qtyByOrderId.set(
+              singleOrder.id,
+              Number(matchedTrip.quantityAllocated),
+            );
+          }
           createdAt =
             createdAt ||
             latestInTx?.createdAt ||
             singleOrder.updatedAt ||
-            t.updatedAt ||
-            t.createdAt;
+            matchedTrip.updatedAt ||
+            matchedTrip.createdAt;
         } else {
           createdAt =
             createdAt ||
@@ -6290,16 +6444,28 @@ export class WarehouseService {
 
     const items = orders.map((o) => {
       const deliv = this.extractDeliveryAddress(o);
+      const tripQty = qtyByOrderId.get(o.id);
+      const tripWeight = weightByOrderId.get(o.id);
+      const tripVolume = volumeByOrderId.get(o.id);
       return {
         orderCode: o.orderCode,
         goodsDescription: o.goodsDescription || 'Hàng hóa nhập kho',
-        quantity: Number(o.inboundQuantity || o.totalQuantity || 1),
+        quantity:
+          tripQty != null && tripQty > 0
+            ? tripQty
+            : Number(o.inboundQuantity || o.totalQuantity || 1),
         unit: 'Kiện',
         deliveryAddress: deliv,
         accompanyingDocs: o.accompanyingDocs || 'KHÔNG CÓ',
         notes: o.notes || '',
-        weight: Number(o.totalWeight) || 0,
-        volume: Number(o.totalVolume) || 0,
+        weight:
+          tripWeight != null && tripWeight > 0
+            ? tripWeight
+            : Number(o.totalWeight) || 0,
+        volume:
+          tripVolume != null && tripVolume > 0
+            ? tripVolume
+            : Number(o.totalVolume) || 0,
       };
     });
 
@@ -6314,12 +6480,12 @@ export class WarehouseService {
     deliveryAddress = deliveryAddress || items[0]?.deliveryAddress || '—';
 
     const totalQuantity = items.reduce((sum, it) => sum + it.quantity, 0);
-    const totalWeight = orders.reduce(
-      (sum, o) => sum + (Number(o.totalWeight) || 0),
+    const totalWeight = items.reduce(
+      (sum, it) => sum + (Number(it.weight) || 0),
       0,
     );
-    const totalVolume = orders.reduce(
-      (sum, o) => sum + (Number(o.totalVolume) || 0),
+    const totalVolume = items.reduce(
+      (sum, it) => sum + (Number(it.volume) || 0),
       0,
     );
 
@@ -6656,6 +6822,16 @@ export class WarehouseService {
         }
 
         const view = hubView.get(o.id);
+        const effectiveReceivedHere =
+          receivedHere > 0
+            ? receivedHere
+            : receivedAll > 0 && (t.type === 'INBOUND' || stops.length <= 1)
+              ? receivedAll
+              : 0;
+        const allocatedQty =
+          Number(t.quantityAllocated) > 0
+            ? Number(t.quantityAllocated)
+            : expectedQuantity;
         return {
           ...o,
           originHub: resolvedOriginHub,
@@ -6670,13 +6846,18 @@ export class WarehouseService {
             originalDeliveryAddress || deliveryAddress || resolvedDestHub || '',
           deliveryMode,
           tripId: t.id,
+          quantityAllocated: allocatedQty,
+          tripInboundQuantity:
+            effectiveReceivedHere > 0
+              ? effectiveReceivedHere
+              : expectedQuantity,
           weightAllocated: Number(t.weightAllocated) || 0,
           volumeAllocated: Number(t.volumeAllocated) || 0,
           expectedQuantity,
           inTransitQuantity,
-          receivedQuantity: receivedHere,
+          receivedQuantity: effectiveReceivedHere,
           isForCurrentHub,
-          isReceivedHere: receivedHere > 0,
+          isReceivedHere: effectiveReceivedHere > 0,
           isContractLocked: !DRAFT_LIKE_STATUSES.includes(o.status),
           hubStatus: view?.hubStatus ?? o.status,
           hubStock: view ? view.hubStock : null,
