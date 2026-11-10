@@ -206,6 +206,8 @@ export class WarehouseService {
         hubStatus: string;
         hubStock: number;
         pendingOutboundQuantity: number;
+        pendingOutboundWeight: number;
+        pendingOutboundVolume: number;
         pendingOutboundTripCodes: string[];
         effectiveHubStock: number;
       }
@@ -217,6 +219,8 @@ export class WarehouseService {
         hubStatus: string;
         hubStock: number;
         pendingOutboundQuantity: number;
+        pendingOutboundWeight: number;
+        pendingOutboundVolume: number;
         pendingOutboundTripCodes: string[];
         effectiveHubStock: number;
         pendingInboundQuantity: number;
@@ -242,6 +246,8 @@ export class WarehouseService {
       const hubStock = Number(r.hubStock) || 0;
       const pendingAlloc = pendingAllocMap.get(id);
       const pendingOutboundQuantity = pendingAlloc?.pendingQty ?? 0;
+      const pendingOutboundWeight = pendingAlloc?.pendingWeight ?? 0;
+      const pendingOutboundVolume = pendingAlloc?.pendingVolume ?? 0;
       const pendingOutboundTripCodes = pendingAlloc?.tripCodes ?? [];
       const effectiveHubStock = Math.max(0, hubStock - pendingOutboundQuantity);
       const pendingInbound = pendingInboundMap.get(id);
@@ -252,6 +258,8 @@ export class WarehouseService {
         hubStatus: r.hubStatus,
         hubStock,
         pendingOutboundQuantity,
+        pendingOutboundWeight,
+        pendingOutboundVolume,
         pendingOutboundTripCodes,
         effectiveHubStock,
         pendingInboundQuantity,
@@ -668,7 +676,9 @@ export class WarehouseService {
             new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
         );
       const inboundDate =
-        inboundTxs.length > 0 ? inboundTxs[0].createdAt : item.createdAt;
+        inboundTxs.length > 0
+          ? inboundTxs[inboundTxs.length - 1].createdAt
+          : item.updatedAt || item.createdAt;
 
       let inboundTripCode: string | null = null;
       let inboundLicensePlate: string | null = null;
@@ -832,8 +842,77 @@ export class WarehouseService {
         item.province ||
         '';
 
+      const round3Metric = (n: number) => Math.round(n * 1000) / 1000;
+      const activeHubTxs = hubTxs.filter((t) => !t.deletedAt);
+      const sumInboundWeight = activeHubTxs
+        .filter((t) => t.type === InventoryTransactionType.INBOUND)
+        .reduce((s, t) => s + (Number(t.weight) || 0), 0);
+      const sumInboundVolume = activeHubTxs
+        .filter((t) => t.type === InventoryTransactionType.INBOUND)
+        .reduce((s, t) => s + (Number(t.volume) || 0), 0);
+      const baseTotalWeight = round3Metric(
+        Math.max(Number(item.totalWeight) || 0, sumInboundWeight),
+      );
+      const baseTotalVolume = round3Metric(
+        Math.max(Number(item.totalVolume) || 0, sumInboundVolume),
+      );
+      const exportedWeight = round3Metric(
+        activeHubTxs
+          .filter(
+            (t) =>
+              t.type === InventoryTransactionType.OUTBOUND ||
+              t.type === InventoryTransactionType.TRANSFER,
+          )
+          .reduce((s, t) => s + (Number(t.weight) || 0), 0),
+      );
+      const exportedVolume = round3Metric(
+        activeHubTxs
+          .filter(
+            (t) =>
+              t.type === InventoryTransactionType.OUTBOUND ||
+              t.type === InventoryTransactionType.TRANSFER,
+          )
+          .reduce((s, t) => s + (Number(t.volume) || 0), 0),
+      );
+      const pendingOutWeight = round3Metric(
+        (view as any)?.pendingOutboundWeight ?? 0,
+      );
+      const pendingOutVolume = round3Metric(
+        (view as any)?.pendingOutboundVolume ?? 0,
+      );
+      const availQtyForMetrics =
+        view &&
+        view.effectiveHubStock !== null &&
+        view.effectiveHubStock !== undefined
+          ? Number(view.effectiveHubStock)
+          : effectiveStock !== null && effectiveStock !== undefined
+            ? Number(effectiveStock)
+            : Number(item.totalQuantity) || 0;
+      const remainingWeight =
+        availQtyForMetrics <= 0
+          ? 0
+          : Math.max(
+              0,
+              round3Metric(baseTotalWeight - exportedWeight - pendingOutWeight),
+            );
+      const remainingVolume =
+        availQtyForMetrics <= 0
+          ? 0
+          : Math.max(
+              0,
+              round3Metric(baseTotalVolume - exportedVolume - pendingOutVolume),
+            );
+
       return {
         ...item,
+        totalWeight: baseTotalWeight,
+        totalVolume: baseTotalVolume,
+        exportedWeight,
+        exportedVolume,
+        pendingOutboundWeight: pendingOutWeight,
+        pendingOutboundVolume: pendingOutVolume,
+        remainingWeight,
+        remainingVolume,
         pickupAddress: pickupAddr || item.originHubEntity?.name || '',
         deliveryAddress:
           deliveryAddr ||
@@ -1092,9 +1171,11 @@ export class WarehouseService {
     const validInboundDates = normalizedItems
       .map((it) => it.inboundDate)
       .filter(Boolean)
-      .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
     const groupInboundDate =
-      validInboundDates.length > 0 ? validInboundDates[0] : first.createdAt;
+      validInboundDates.length > 0
+        ? validInboundDates[0]
+        : first.updatedAt || first.createdAt;
 
     const groupInboundTripDisplay =
       normalizedItems.find((it) => it.inboundTripDisplay)?.inboundTripDisplay ||
@@ -1195,6 +1276,39 @@ export class WarehouseService {
       ? 0
       : (normalizedHubStock ?? Math.max(0, normalizedTotalQty - totalOutbound));
 
+    const groupTotalWeight = round3(sum((it) => it.totalWeight));
+    const groupTotalVolume = round3(sum((it) => it.totalVolume));
+    const groupExportedWeight = round3(sum((it) => it.exportedWeight || 0));
+    const groupExportedVolume = round3(sum((it) => it.exportedVolume || 0));
+    const groupPendingOutWeight = round3(
+      sum((it) => it.pendingOutboundWeight || 0),
+    );
+    const groupPendingOutVolume = round3(
+      sum((it) => it.pendingOutboundVolume || 0),
+    );
+    const groupAvailStock =
+      effectiveHubStock !== null && effectiveHubStock !== undefined
+        ? effectiveHubStock
+        : effectiveRemaining;
+    const groupRemainingWeight =
+      groupAvailStock <= 0
+        ? 0
+        : Math.max(
+            0,
+            round3(
+              groupTotalWeight - groupExportedWeight - groupPendingOutWeight,
+            ),
+          );
+    const groupRemainingVolume =
+      groupAvailStock <= 0
+        ? 0
+        : Math.max(
+            0,
+            round3(
+              groupTotalVolume - groupExportedVolume - groupPendingOutVolume,
+            ),
+          );
+
     return {
       ...first,
       id: primaryRow.id,
@@ -1204,8 +1318,14 @@ export class WarehouseService {
       inboundQuantity: effectiveInbound,
       outboundQuantity: totalOutbound,
       remainingQuantity: effectiveRemaining,
-      totalWeight: round3(sum((it) => it.totalWeight)),
-      totalVolume: round3(sum((it) => it.totalVolume)),
+      totalWeight: groupTotalWeight,
+      totalVolume: groupTotalVolume,
+      exportedWeight: groupExportedWeight,
+      exportedVolume: groupExportedVolume,
+      pendingOutboundWeight: groupPendingOutWeight,
+      pendingOutboundVolume: groupPendingOutVolume,
+      remainingWeight: groupRemainingWeight,
+      remainingVolume: groupRemainingVolume,
       hubStock: normalizedHubStock,
       pendingOutboundQuantity: totalPendingOutbound,
       pendingOutboundTripCodes,
@@ -2039,9 +2159,10 @@ export class WarehouseService {
         );
       }
 
+      const { hubName: resolvedBatchHubName, label: batchHubLabel } =
+        await this.formatHubLogLabel(hubRepo, originHubId, originHubName);
+
       if (!allDraft) {
-        const { hubName: resolvedBatchHubName, label: batchHubLabel } =
-          await this.formatHubLogLabel(hubRepo, originHubId, originHubName);
         for (let idx = 0; idx < itemMetas.length; idx++) {
           const meta = itemMetas[idx];
           const savedOrder = savedOrdersMap.get(meta.orderCode);
@@ -2068,6 +2189,8 @@ export class WarehouseService {
                   outboundQuantity: savedOrder.outboundQuantity,
                   remainingQuantity: savedOrder.remainingQuantity,
                   status: savedOrder.status,
+                  licensePlate: plate || null,
+                  driverName: driver || null,
                 },
               },
               manager,
@@ -2085,6 +2208,43 @@ export class WarehouseService {
         this.logger.log(
           `[INBOUND BATCH CREATED] Chuyến ${sharedTripCode}${plate ? ` (xe ${plate})` : ''} tiếp nhận nhập kho ${savedOrders.length} đơn (${totalBatchQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${batchHubLabel}: ${orderSummaryList}`,
         );
+      } else {
+        for (let idx = 0; idx < itemMetas.length; idx++) {
+          const meta = itemMetas[idx];
+          const savedOrder = savedOrdersMap.get(meta.orderCode);
+          if (savedOrder) {
+            await this.activityLogService.safeLogActivity(
+              {
+                orderId: savedOrder.id,
+                orderCode: savedOrder.orderCode,
+                action: OrderActivityAction.TRIP_DRAFT_CREATED,
+                actorUserId: Number(user?.id || 0),
+                actorEmail: user?.email || undefined,
+                hubId: Number(originHubId || savedOrder.currentHubId || 0),
+                hubName:
+                  resolvedBatchHubName ||
+                  originHubName ||
+                  savedOrder.originHub ||
+                  'N/A Hub',
+                tripCode: sharedTripCode || null,
+                quantity: meta.qty,
+                reason: `Khởi tạo chuyến nhập nháp ${sharedTripCode}${plate ? ` (xe ${plate})` : ''} — ${meta.qty} kiện`,
+                newValues: {
+                  tripType: 'INBOUND',
+                  licensePlate: plate || null,
+                  driverName: driver || null,
+                  pickupDate: date || null,
+                  totalQuantity: meta.qty,
+                  totalWeight: meta.weight,
+                  totalVolume: meta.vol,
+                  goodsDescription: savedOrder.goodsDescription,
+                  status: 'DRAFT',
+                },
+              },
+              manager,
+            );
+          }
+        }
       }
     });
 
@@ -2507,6 +2667,44 @@ export class WarehouseService {
         );
       }
 
+      const prevTripLines = sharedTripCode
+        ? await tripRepo.find({ where: { tripCode: sharedTripCode } })
+        : [];
+      const prevTripByOrderId = new Map<
+        number,
+        {
+          licensePlate: string | null;
+          driverName: string | null;
+          pickupDate: string | null;
+          quantityAllocated: number | null;
+          weightAllocated: number | null;
+          volumeAllocated: number | null;
+        }
+      >();
+      for (const pt of prevTripLines) {
+        prevTripByOrderId.set(pt.orderId, {
+          licensePlate: pt.licensePlate || null,
+          driverName: pt.driverName || null,
+          pickupDate: pt.pickupDate ? String(pt.pickupDate) : null,
+          quantityAllocated:
+            pt.quantityAllocated != null ? Number(pt.quantityAllocated) : null,
+          weightAllocated:
+            pt.weightAllocated != null ? Number(pt.weightAllocated) : null,
+          volumeAllocated:
+            pt.volumeAllocated != null ? Number(pt.volumeAllocated) : null,
+        });
+      }
+      const prevOrderSnapshots = new Map<
+        number,
+        {
+          orderCode: string;
+          totalQuantity: number;
+          totalWeight: number;
+          totalVolume: number;
+          goodsDescription: string | null;
+        }
+      >();
+
       const savedOrders: OrderEntity[] = [];
       const processedTripCodes = new Set<string>();
       let newCreatedCount = 0;
@@ -2552,6 +2750,13 @@ export class WarehouseService {
         let order: OrderEntity;
 
         if (found) {
+          prevOrderSnapshots.set(found.id, {
+            orderCode: found.orderCode,
+            totalQuantity: Number(found.totalQuantity) || 0,
+            totalWeight: Number(found.totalWeight) || 0,
+            totalVolume: Number(found.totalVolume) || 0,
+            goodsDescription: found.goodsDescription || null,
+          });
           const isDirectInboundOrDraft =
             DRAFT_LIKE_STATUSES.includes(found.status) ||
             !found.originHubId ||
@@ -2583,7 +2788,7 @@ export class WarehouseService {
             ) {
               const nextQty = Number(row.totalQuantity);
               found.totalQuantity = nextQty;
-              if (isKeepStatus) {
+              if (isKeepStatus && !DRAFT_LIKE_STATUSES.includes(found.status)) {
                 found.inboundQuantity = nextQty;
                 found.remainingQuantity = Math.max(
                   0,
@@ -2796,19 +3001,27 @@ export class WarehouseService {
             actualWeight =
               row.actualWeight !== undefined
                 ? Number(row.actualWeight) || 0
-                : this.proportional(
-                    found.totalWeight,
-                    actualQty,
-                    found.totalQuantity,
-                  );
+                : inTransit === null &&
+                    row.totalWeight !== undefined &&
+                    Number(row.totalWeight) >= 0
+                  ? Number(row.totalWeight) || 0
+                  : this.proportional(
+                      found.totalWeight,
+                      actualQty,
+                      found.totalQuantity,
+                    );
             actualVolume =
               row.actualVolume !== undefined
                 ? Number(row.actualVolume) || 0
-                : this.proportional(
-                    found.totalVolume,
-                    actualQty,
-                    found.totalQuantity,
-                  );
+                : inTransit === null &&
+                    row.totalVolume !== undefined &&
+                    Number(row.totalVolume) >= 0
+                  ? Number(row.totalVolume) || 0
+                  : this.proportional(
+                      found.totalVolume,
+                      actualQty,
+                      found.totalQuantity,
+                    );
 
             found.inboundQuantity =
               (Number(found.inboundQuantity) || 0) + actualQty;
@@ -3182,13 +3395,18 @@ export class WarehouseService {
               hubName: hubName || ord.originHub || 'N/A Hub',
               tripCode: sharedTripCode || null,
               quantity: thisInboundQty,
-              reason: `Xác nhận nhập kho ${thisInboundQty} kiện${sharedTripCode ? ` chuyến ${sharedTripCode}` : ''}${inboundPlate ? ` (xe ${inboundPlate})` : ''}`,
+              reason: keepTripPending
+                ? `Nhập lẻ đơn hàng (${thisInboundQty} kiện) từ chuyến ${sharedTripCode || ''}${inboundPlate ? ` (xe ${inboundPlate})` : ''} — chuyến xe giữ trạng thái Chờ xử lý`
+                : `Xác nhận nhập kho ${thisInboundQty} kiện${sharedTripCode ? ` chuyến ${sharedTripCode}` : ''}${inboundPlate ? ` (xe ${inboundPlate})` : ''}`,
               newValues: {
                 totalQuantity: ord.totalQuantity,
                 inboundQuantity: ord.inboundQuantity,
                 outboundQuantity: ord.outboundQuantity,
                 remainingQuantity: ord.remainingQuantity,
                 status: ord.status,
+                licensePlate: inboundPlate || null,
+                driverName: inboundDriver || null,
+                keepTripPending: Boolean(keepTripPending),
               },
             },
             manager,
@@ -3215,6 +3433,80 @@ export class WarehouseService {
         this.logger.log(
           `[INBOUND CONFIRMED] ${sharedTripCode ? `Chuyến ${sharedTripCode} ` : ''}${inboundPlate ? `(xe ${inboundPlate}) ` : ''}nhập kho thành công ${savedOrders.length} đơn (${totalInboundQty} kiện) bởi ${user?.email || 'N/A'} tại Hub ${confirmInboundHubLabel}: ${orderSummaryList}`,
         );
+      } else {
+        const firstPrevTrip = prevTripLines[0] || null;
+        for (const ord of savedOrders) {
+          const prevTrip = prevTripByOrderId.get(ord.id) || firstPrevTrip;
+          const prevOrd = prevOrderSnapshots.get(ord.id);
+          const oldQty =
+            prevTrip?.quantityAllocated ?? prevOrd?.totalQuantity ?? null;
+          const newQty = Number(ord.totalQuantity) || 1;
+          const oldPlate = prevTrip?.licensePlate ?? null;
+          const newPlate = inboundPlate || prevTrip?.licensePlate || null;
+          const oldDriver = prevTrip?.driverName ?? null;
+          const newDriver = hasDriverField
+            ? inboundDriver || null
+            : inboundDriver || prevTrip?.driverName || null;
+
+          const changeParts: string[] = [];
+          if (oldPlate !== newPlate) {
+            changeParts.push(
+              `Biển số: ${oldPlate || 'Chưa gán'} → ${newPlate || 'Chưa gán'}`,
+            );
+          }
+          if ((oldDriver || '') !== (newDriver || '')) {
+            changeParts.push(
+              `Tài xế: ${oldDriver || 'Chưa gán'} → ${newDriver || 'Chưa gán'}`,
+            );
+          }
+          if (oldQty !== null && oldQty !== newQty) {
+            changeParts.push(
+              `Đơn ${ord.orderCode}: ${oldQty} kiện → ${newQty} kiện`,
+            );
+          } else if (!prevOrd) {
+            changeParts.push(`Thêm mới đơn ${ord.orderCode} (${newQty} kiện)`);
+          }
+
+          await this.activityLogService.safeLogActivity(
+            {
+              orderId: ord.id,
+              orderCode: ord.orderCode,
+              action: OrderActivityAction.TRIP_DRAFT_UPDATED,
+              actorUserId: Number(user?.id || 0),
+              actorEmail: user?.email || undefined,
+              hubId: Number(hubId || ord.currentHubId || ord.originHubId || 0),
+              hubName: hubName || ord.originHub || 'N/A Hub',
+              tripCode: sharedTripCode || null,
+              quantity: newQty,
+              reason:
+                changeParts.length > 0
+                  ? `Chỉnh sửa & Lưu nháp chuyến ${sharedTripCode || ''}: ${changeParts.join(' · ')}`
+                  : `Mở phiếu & Lưu nháp chuyến ${sharedTripCode || ''} (giữ nguyên ${newQty} kiện, chưa xác nhận nhập kho)`,
+              oldValues: {
+                licensePlate: oldPlate,
+                driverName: oldDriver,
+                pickupDate: prevTrip?.pickupDate ?? null,
+                totalQuantity: oldQty,
+                totalWeight:
+                  prevTrip?.weightAllocated ?? prevOrd?.totalWeight ?? null,
+                totalVolume:
+                  prevTrip?.volumeAllocated ?? prevOrd?.totalVolume ?? null,
+                goodsDescription: prevOrd?.goodsDescription ?? null,
+              },
+              newValues: {
+                licensePlate: newPlate,
+                driverName: newDriver,
+                pickupDate: inboundDate || null,
+                totalQuantity: newQty,
+                totalWeight: Number(ord.totalWeight) || 0,
+                totalVolume: Number(ord.totalVolume) || 0,
+                goodsDescription: ord.goodsDescription || null,
+                status: ord.status,
+              },
+            },
+            manager,
+          );
+        }
       }
 
       return {
@@ -3490,8 +3782,9 @@ export class WarehouseService {
         originHubId,
         manager,
       );
-      const dispatchDate =
-        dto.dispatchDate || new Date().toISOString().split('T')[0];
+      const dispatchDate = new Date().toLocaleDateString('sv-SE', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+      });
 
       let createdTrip: TripEntity | undefined;
       const itemExportQtyMap = new Map<number, number>();
@@ -3606,21 +3899,57 @@ export class WarehouseService {
           order.currentHubId = null;
         }
 
+        const wvLedger = await this.ledgerService.getHubWeightVolumeLedger(
+          order.id,
+          actingHubId,
+          manager,
+        );
+        const baseOrderWeight = Math.max(
+          Number(order.totalWeight) || 0,
+          wvLedger.inboundWeight,
+        );
+        const baseOrderVolume = Math.max(
+          Number(order.totalVolume) || 0,
+          wvLedger.inboundVolume,
+        );
+        const remWeightBefore = Math.max(
+          0,
+          Math.round(
+            (baseOrderWeight -
+              wvLedger.exportedWeight -
+              pendingAlloc.pendingWeight) *
+              1000,
+          ) / 1000,
+        );
+        const remVolumeBefore = Math.max(
+          0,
+          Math.round(
+            (baseOrderVolume -
+              wvLedger.exportedVolume -
+              pendingAlloc.pendingVolume) *
+              1000,
+          ) / 1000,
+        );
+
         const weight = Number(
           item?.weightToExport ??
-            this.proportional(
-              order.totalWeight,
-              qtyToExport,
-              order.totalQuantity,
-            ),
+            (qtyToExport === effectiveAvailable
+              ? remWeightBefore
+              : this.proportional(
+                  remWeightBefore,
+                  qtyToExport,
+                  effectiveAvailable || order.totalQuantity,
+                )),
         );
         const volume = Number(
           item?.volumeToExport ??
-            this.proportional(
-              order.totalVolume,
-              qtyToExport,
-              order.totalQuantity,
-            ),
+            (qtyToExport === effectiveAvailable
+              ? remVolumeBefore
+              : this.proportional(
+                  remVolumeBefore,
+                  qtyToExport,
+                  effectiveAvailable || order.totalQuantity,
+                )),
         );
 
         const tripNotes = isTransferLine
@@ -3888,8 +4217,9 @@ export class WarehouseService {
       const actingOriginId =
         userHubId ?? orders[0].currentHubId ?? orders[0].originHubId ?? null;
       const isTransferMode = dto.mode === OutboundMode.TRANSFER;
-      const dispatchDate =
-        dto.dispatchDate || new Date().toISOString().split('T')[0];
+      const dispatchDate = new Date().toLocaleDateString('sv-SE', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+      });
 
       for (const order of orders) {
         const item = this.mergeOutboundItemsForOrder(dto.items, order);
@@ -3989,6 +4319,38 @@ export class WarehouseService {
           ? ` | ĐC: ${customDraftAddr}`
           : '';
 
+        const draftWvLedger = await this.ledgerService.getHubWeightVolumeLedger(
+          order.id,
+          actingHubId,
+          manager,
+        );
+        const draftBaseWeight = Math.max(
+          Number(order.totalWeight) || 0,
+          draftWvLedger.inboundWeight,
+        );
+        const draftBaseVolume = Math.max(
+          Number(order.totalVolume) || 0,
+          draftWvLedger.inboundVolume,
+        );
+        const draftRemWeightBefore = Math.max(
+          0,
+          Math.round(
+            (draftBaseWeight -
+              draftWvLedger.exportedWeight -
+              pendingAlloc.pendingWeight) *
+              1000,
+          ) / 1000,
+        );
+        const draftRemVolumeBefore = Math.max(
+          0,
+          Math.round(
+            (draftBaseVolume -
+              draftWvLedger.exportedVolume -
+              pendingAlloc.pendingVolume) *
+              1000,
+          ) / 1000,
+        );
+
         await tripRepo.save(
           tripRepo.create({
             orderId: order.id,
@@ -4003,11 +4365,23 @@ export class WarehouseService {
             quantityAllocated: qty,
             weightAllocated: Number(
               item?.weightToExport ??
-                this.proportional(order.totalWeight, qty, order.totalQuantity),
+                (qty === effectiveAvailable
+                  ? draftRemWeightBefore
+                  : this.proportional(
+                      draftRemWeightBefore,
+                      qty,
+                      effectiveAvailable || order.totalQuantity,
+                    )),
             ),
             volumeAllocated: Number(
               item?.volumeToExport ??
-                this.proportional(order.totalVolume, qty, order.totalQuantity),
+                (qty === effectiveAvailable
+                  ? draftRemVolumeBefore
+                  : this.proportional(
+                      draftRemVolumeBefore,
+                      qty,
+                      effectiveAvailable || order.totalQuantity,
+                    )),
             ),
             assignedByUserId: user.id,
             notes: isTransferLine
@@ -4380,6 +4754,18 @@ export class WarehouseService {
       return `$${params.length}`;
     };
 
+    const roleId = Number(
+      user?.role?.id || (typeof user?.role === 'number' ? user.role : 0),
+    );
+    const roleName = String(
+      (user?.role as any)?.name || user?.role || '',
+    ).toUpperCase();
+    const isSuperAdmin =
+      roleId === RoleEnum.SUPER_ADMIN ||
+      roleName === 'SUPER_ADMIN' ||
+      roleName === 'SUPER ADMIN' ||
+      roleName === 'ADMIN';
+
     const hasSearch = Boolean(query?.search && query.search.trim());
     const dispatchTypes = `('${InventoryTransactionType.OUTBOUND}', '${InventoryTransactionType.TRANSFER}')`;
     const txWhere: string[] = [
@@ -4405,10 +4791,21 @@ export class WarehouseService {
       draftWhere.push(`o."deletedAt" IS NULL`);
     }
 
+    const deletedWhere: string[] = [
+      `t."deletedAt" IS NOT NULL`,
+      `t."type" IN ('OUTBOUND', 'TRANSFER')`,
+      `t."quantityAllocated" IS NOT NULL`,
+      `t."tripCode" IS NOT NULL`,
+      `t."tripCode" <> ''`,
+      `NOT EXISTS (SELECT 1 FROM "trip" act WHERE act."tripCode" = t."tripCode" AND act."deletedAt" IS NULL)`,
+      `NOT EXISTS (SELECT 1 FROM "order_inventory_transaction" dtx WHERE dtx."tripCode" = t."tripCode" AND dtx."type" IN ${dispatchTypes} AND dtx."deletedAt" IS NULL)`,
+    ];
+
     if (useHubContext && userHubId) {
       const p = bind(userHubId);
       txWhere.push(`tx."hubId" = ${p}`);
       draftWhere.push(`t."originHubId" = ${p}`);
+      deletedWhere.push(`t."originHubId" = ${p}`);
     }
     if (hasSearch) {
       const p = bind(`%${query.search!.trim()}%`);
@@ -4416,6 +4813,9 @@ export class WarehouseService {
         `(tx."tripCode" ILIKE ${p} OR tx."licensePlate" ILIKE ${p} OR tx."driverName" ILIKE ${p} OR o."orderCode" ILIKE ${p} OR o."goodsDescription" ILIKE ${p} OR EXISTS (SELECT 1 FROM "trip" st WHERE st."tripCode" = tx."tripCode" AND st."deletedAt" IS NULL AND (st."licensePlate" ILIKE ${p} OR st."driverName" ILIKE ${p})))`,
       );
       draftWhere.push(
+        `(t."tripCode" ILIKE ${p} OR t."licensePlate" ILIKE ${p} OR t."driverName" ILIKE ${p} OR o."orderCode" ILIKE ${p} OR o."goodsDescription" ILIKE ${p})`,
+      );
+      deletedWhere.push(
         `(t."tripCode" ILIKE ${p} OR t."licensePlate" ILIKE ${p} OR t."driverName" ILIKE ${p} OR o."orderCode" ILIKE ${p} OR o."goodsDescription" ILIKE ${p})`,
       );
     }
@@ -4427,16 +4827,24 @@ export class WarehouseService {
       const pDate = bind(dateRange.fromDate);
       txWhere.push(`tx."createdAt" >= ${pIso}`);
       draftWhere.push(
-        `(t."createdAt" >= ${pIso} OR t."pickupDate" >= ${pDate})`,
+        `(COALESCE(t."updatedAt", t."createdAt") >= ${pIso} OR t."pickupDate" >= ${pDate})`,
+      );
+      deletedWhere.push(
+        `(COALESCE(t."deletedAt", t."updatedAt", t."createdAt") >= ${pIso} OR t."pickupDate" >= ${pDate})`,
       );
     }
     if (dateRange.toDate) {
-      const toIso = new Date(`${dateRange.toDate}T23:59:59.999Z`).toISOString();
+      const toIso = new Date(
+        `${dateRange.toDate}T23:59:59.999+07:00`,
+      ).toISOString();
       const pIso = bind(toIso);
       const pDate = bind(dateRange.toDate);
       txWhere.push(`tx."createdAt" <= ${pIso}`);
       draftWhere.push(
-        `(t."createdAt" <= ${pIso} OR t."pickupDate" <= ${pDate})`,
+        `(COALESCE(t."updatedAt", t."createdAt") <= ${pIso} OR t."pickupDate" <= ${pDate})`,
+      );
+      deletedWhere.push(
+        `(COALESCE(t."deletedAt", t."updatedAt", t."createdAt") <= ${pIso} OR t."pickupDate" <= ${pDate})`,
       );
     }
 
@@ -4445,6 +4853,14 @@ export class WarehouseService {
       : '';
     const draftJoinOrder = hasSearch
       ? `JOIN "order" o ON o.id = t."orderId"`
+      : '';
+
+    const deletedUnionSql = isSuperAdmin
+      ? `UNION ALL
+        SELECT t."tripCode", (t."type" = 'TRANSFER'), COALESCE(t."deletedAt", t."updatedAt", t."createdAt"), 'DELETED'
+        FROM "trip" t
+        ${draftJoinOrder}
+        WHERE ${deletedWhere.join(' AND ')}`
       : '';
 
     const groupedCte = `WITH base AS MATERIALIZED (
@@ -4456,10 +4872,11 @@ export class WarehouseService {
         ${txJoinOrder}
         WHERE ${txWhere.join(' AND ')}
         UNION ALL
-        SELECT t."tripCode", (t."type" = 'TRANSFER'), t."createdAt", 'PENDING'
+        SELECT t."tripCode", (t."type" = 'TRANSFER'), COALESCE(t."updatedAt", t."createdAt"), 'PENDING'
         FROM "trip" t
         ${draftJoinOrder}
         WHERE ${draftWhere.join(' AND ')}
+        ${deletedUnionSql}
       ), g AS (
         SELECT "tripCode",
                BOOL_OR("isTransfer") AS "isTransfer",
@@ -4471,9 +4888,11 @@ export class WarehouseService {
 
     const statusUpper = query?.status?.toUpperCase();
     const statusCond =
-      statusUpper === 'PENDING' || statusUpper === 'COMPLETED'
-        ? `g."status" = '${statusUpper}'`
-        : 'TRUE';
+      statusUpper === 'DELETED' && isSuperAdmin
+        ? `g."status" = 'DELETED'`
+        : statusUpper === 'PENDING' || statusUpper === 'COMPLETED'
+          ? `g."status" = '${statusUpper}'`
+          : `g."status" <> 'DELETED'`;
     const typeUpper = query?.type?.toUpperCase();
     const typeCond =
       typeUpper === 'CUSTOMER'
@@ -4483,9 +4902,10 @@ export class WarehouseService {
           : 'TRUE';
 
     const countSql = `${groupedCte}
-       SELECT COUNT(*) FILTER (WHERE ${typeCond})::int AS "allCount",
+       SELECT COUNT(*) FILTER (WHERE g."status" <> 'DELETED' AND ${typeCond})::int AS "allCount",
               COUNT(*) FILTER (WHERE g."status" = 'PENDING' AND ${typeCond})::int AS "pendingCount",
               COUNT(*) FILTER (WHERE g."status" = 'COMPLETED' AND ${typeCond})::int AS "completedCount",
+              COUNT(*) FILTER (WHERE g."status" = 'DELETED' AND ${typeCond})::int AS "deletedCount",
               COUNT(*) FILTER (WHERE ${statusCond})::int AS "typeAllCount",
               COUNT(*) FILTER (WHERE NOT g."isTransfer" AND ${statusCond})::int AS "customerCount",
               COUNT(*) FILTER (WHERE g."isTransfer" AND ${statusCond})::int AS "transferCount",
@@ -4507,7 +4927,7 @@ export class WarehouseService {
           tripCode: string;
           isTransfer: boolean;
           dispatchedAt: string;
-          status: 'PENDING' | 'COMPLETED';
+          status: 'PENDING' | 'COMPLETED' | 'DELETED';
         }>
       >(pageSql, params),
     ]);
@@ -4523,6 +4943,7 @@ export class WarehouseService {
       allCount: Number(c.allCount) || 0,
       pendingCount: Number(c.pendingCount) || 0,
       completedCount: Number(c.completedCount) || 0,
+      deletedCount: Number(c.deletedCount) || 0,
       typeAllCount: Number(c.typeAllCount) || 0,
       customerCount: Number(c.customerCount) || 0,
       transferCount: Number(c.transferCount) || 0,
@@ -4538,8 +4959,9 @@ export class WarehouseService {
       .filter((r) => r.status === 'COMPLETED')
       .map((r) => r.tripCode);
     const pendingCodes = pageRows
-      .filter((r) => r.status === 'PENDING')
+      .filter((r) => r.status === 'PENDING' || r.status === 'DELETED')
       .map((r) => r.tripCode);
+    const hasDeletedRows = pageRows.some((r) => r.status === 'DELETED');
 
     // Wave 1: Fetch dispatch invoices and planned draft lines in parallel
     const [dispatchTxs, draftLines] = await Promise.all([
@@ -4566,16 +4988,22 @@ export class WarehouseService {
           })()
         : Promise.resolve([]),
       pendingCodes.length > 0
-        ? this.tripRepository
-            .createQueryBuilder('t')
-            .leftJoinAndSelect('t.originHub', 'draftOriginHub')
-            .leftJoinAndSelect('t.destinationHub', 'draftDestinationHub')
-            .where('t.deletedAt IS NULL')
-            .andWhere('t.tripCode IN (:...pendingCodes)', { pendingCodes })
-            .andWhere(`t.status = 'PENDING'`)
-            .andWhere('t.quantityAllocated IS NOT NULL')
-            .orderBy('t.id', 'ASC')
-            .getMany()
+        ? (() => {
+            const tQb = this.tripRepository
+              .createQueryBuilder('t')
+              .leftJoinAndSelect('t.originHub', 'draftOriginHub')
+              .leftJoinAndSelect('t.destinationHub', 'draftDestinationHub');
+            if (hasDeletedRows) {
+              tQb.withDeleted();
+            } else {
+              tQb.where('t.deletedAt IS NULL');
+            }
+            return tQb
+              .andWhere('t.tripCode IN (:...pendingCodes)', { pendingCodes })
+              .andWhere('t.quantityAllocated IS NOT NULL')
+              .orderBy('t.id', 'ASC')
+              .getMany();
+          })()
         : Promise.resolve([]),
     ]);
 
@@ -4590,24 +5018,38 @@ export class WarehouseService {
     if (orderIds.length > 0) {
       // Wave 2: Fetch orders, trips, txs and compute hub view simultaneously
       const [orders, trips, txs, hubView] = await Promise.all([
-        this.orderRepository
-          .createQueryBuilder('order')
-          .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
-          .leftJoinAndSelect(
-            'order.destinationHubEntity',
-            'destinationHubEntity',
-          )
-          .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
-          .where('order.deletedAt IS NULL')
-          .andWhere('order.id IN (:...orderIds)', { orderIds })
-          .getMany(),
-        this.tripRepository
-          .createQueryBuilder('t')
-          .leftJoinAndSelect('t.originHub', 'tripOriginHub')
-          .leftJoinAndSelect('t.destinationHub', 'tripDestinationHub')
-          .where('t.deletedAt IS NULL')
-          .andWhere('t.orderId IN (:...orderIds)', { orderIds })
-          .getMany(),
+        (() => {
+          const oQb = this.orderRepository
+            .createQueryBuilder('order')
+            .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+            .leftJoinAndSelect(
+              'order.destinationHubEntity',
+              'destinationHubEntity',
+            )
+            .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity');
+          if (hasDeletedRows) {
+            oQb.withDeleted();
+          } else {
+            oQb.where('order.deletedAt IS NULL');
+          }
+          return oQb
+            .andWhere('order.id IN (:...orderIds)', { orderIds })
+            .getMany();
+        })(),
+        (() => {
+          const trQb = this.tripRepository
+            .createQueryBuilder('t')
+            .leftJoinAndSelect('t.originHub', 'tripOriginHub')
+            .leftJoinAndSelect('t.destinationHub', 'tripDestinationHub');
+          if (hasDeletedRows) {
+            trQb.withDeleted();
+          } else {
+            trQb.where('t.deletedAt IS NULL');
+          }
+          return trQb
+            .andWhere('t.orderId IN (:...orderIds)', { orderIds })
+            .getMany();
+        })(),
         this.transactionRepository
           .createQueryBuilder('tx')
           .leftJoinAndSelect('tx.hub', 'inventoryTransactionHub')
@@ -4651,16 +5093,44 @@ export class WarehouseService {
     );
 
     const pageTripCodes = pageRows.map((r) => r.tripCode);
-    const tripStops: Array<{
-      tripCode: string;
-      processedByUserId: number | null;
-    }> =
+    const [tripStops, tripAuditRows] = await Promise.all([
       pageTripCodes.length > 0
-        ? await this.dataSource.query(
+        ? this.dataSource.query<
+            Array<{
+              tripCode: string;
+              processedByUserId: number | null;
+            }>
+          >(
             `SELECT "tripCode", "processedByUserId" FROM "trip_stop" WHERE "tripCode" = ANY($1) AND "deletedAt" IS NULL AND "processedByUserId" IS NOT NULL`,
             [pageTripCodes],
           )
-        : [];
+        : Promise.resolve([]),
+      pageTripCodes.length > 0
+        ? this.dataSource.query<
+            Array<{
+              tripCode: string;
+              firstCreatedAt: Date | string | null;
+              lastUpdatedAt: Date | string | null;
+              lastDeletedAt: Date | string | null;
+              firstAssignedByUserId: number | null;
+              lastAssignedByUserId: number | null;
+            }>
+          >(
+            `SELECT "tripCode",
+                    MIN("createdAt") AS "firstCreatedAt",
+                    MAX(COALESCE("updatedAt", "createdAt")) AS "lastUpdatedAt",
+                    MAX("deletedAt") AS "lastDeletedAt",
+                    (ARRAY_AGG("assignedByUserId" ORDER BY id ASC) FILTER (WHERE "assignedByUserId" IS NOT NULL))[1] AS "firstAssignedByUserId",
+                    (ARRAY_AGG("assignedByUserId" ORDER BY id DESC) FILTER (WHERE "assignedByUserId" IS NOT NULL))[1] AS "lastAssignedByUserId"
+             FROM "trip"
+             WHERE "tripCode" = ANY($1)
+               AND "type" IN ('OUTBOUND', 'TRANSFER')
+             GROUP BY "tripCode"`,
+            [pageTripCodes],
+          )
+        : Promise.resolve([]),
+    ]);
+    const tripAuditMap = new Map(tripAuditRows.map((r) => [r.tripCode, r]));
 
     const orderCreatorRows: Array<{
       id: number;
@@ -4684,6 +5154,12 @@ export class WarehouseService {
           ...orderEntities.map((o) => o.createdByUserId),
           ...orderCreatorRows.map((r) => r.createdByUserId),
           ...tripStops.map((ts) => ts.processedByUserId),
+          ...tripAuditRows.map((r) =>
+            r.firstAssignedByUserId ? Number(r.firstAssignedByUserId) : null,
+          ),
+          ...tripAuditRows.map((r) =>
+            r.lastAssignedByUserId ? Number(r.lastAssignedByUserId) : null,
+          ),
         ].filter((id): id is number => typeof id === 'number' && id > 0),
       ),
     );
@@ -4731,7 +5207,8 @@ export class WarehouseService {
     };
 
     const data = pageRows.map((row) => {
-      const isDraft = row.status === 'PENDING';
+      const isDraft = row.status === 'PENDING' || row.status === 'DELETED';
+      const isDeletedTrip = row.status === 'DELETED';
       const sourceLines: Array<{
         orderId: number;
         quantity: number;
@@ -4899,6 +5376,13 @@ export class WarehouseService {
         (o.trips ?? []).some((t: any) => t?.tripCode === row.tripCode),
       );
 
+      const audit = tripAuditMap.get(row.tripCode);
+      const firstTripAssignerId = audit?.firstAssignedByUserId
+        ? Number(audit.firstAssignedByUserId)
+        : null;
+      const lastTripAssignerId = audit?.lastAssignedByUserId
+        ? Number(audit.lastAssignedByUserId)
+        : null;
       const draftAssignerId =
         matchedDrafts.find((t) => t.assignedByUserId)?.assignedByUserId ?? null;
       const draftOrderCreatorId =
@@ -4916,27 +5400,76 @@ export class WarehouseService {
         matchedStops.find((ts) => ts.processedByUserId)?.processedByUserId ??
         null;
 
-      const creatorUserId = draftAssignerId || orderCreatorId || null;
+      const creatorUserId =
+        firstTripAssignerId ||
+        draftAssignerId ||
+        txPerformerId ||
+        stopProcessorId ||
+        orderCreatorId ||
+        null;
       const operatorUserId = isDraft
-        ? creatorUserId || txPerformerId || stopProcessorId
-        : txPerformerId || stopProcessorId || creatorUserId;
+        ? lastTripAssignerId ||
+          draftAssignerId ||
+          creatorUserId ||
+          txPerformerId ||
+          stopProcessorId
+        : txPerformerId ||
+          stopProcessorId ||
+          lastTripAssignerId ||
+          creatorUserId;
 
       const creator = formatUserInfo(creatorUserId);
       const operator = formatUserInfo(operatorUserId);
       const creatorName = creator?.name || null;
       const operatorName = operator?.name || creatorName || null;
 
+      const createdAt =
+        audit?.firstCreatedAt ||
+        firstDraft?.createdAt ||
+        firstTx?.createdAt ||
+        row.dispatchedAt ||
+        null;
+      const updatedAt =
+        row.status === 'COMPLETED'
+          ? row.dispatchedAt || audit?.lastUpdatedAt || createdAt
+          : audit?.lastUpdatedAt || row.dispatchedAt || createdAt;
+      const confirmedAt =
+        row.status === 'COMPLETED'
+          ? row.dispatchedAt || firstTx?.createdAt || null
+          : null;
+      const deletedAt =
+        row.status === 'DELETED'
+          ? audit?.lastDeletedAt || row.dispatchedAt || null
+          : null;
+
+      const rawDispatchDate =
+        row.status === 'COMPLETED'
+          ? confirmedAt || row.dispatchedAt || tripRecord?.pickupDate
+          : row.status === 'DELETED'
+            ? deletedAt || updatedAt || tripRecord?.pickupDate
+            : updatedAt || row.dispatchedAt || tripRecord?.pickupDate;
+      const formattedDispatchDate = rawDispatchDate
+        ? new Date(rawDispatchDate).toLocaleDateString('sv-SE', {
+            timeZone: 'Asia/Ho_Chi_Minh',
+          })
+        : tripRecord?.pickupDate || row.dispatchedAt;
+
       return {
         tripCode: row.tripCode,
         type: row.isTransfer ? 'TRANSFER' : 'CUSTOMER',
         isTransfer: !!row.isTransfer,
-        isDraft,
-        /** Status of this trip at the dispatching hub: PENDING = Chờ xử lý (nháp), COMPLETED = Đã xử lý. */
+        isDraft: row.status === 'PENDING',
+        isDeleted: isDeletedTrip,
+        /** Status of this trip at the dispatching hub: PENDING = Chờ xử lý (nháp), COMPLETED = Đã xử lý, DELETED = Đã xóa. */
         status: row.status,
         licensePlate: tripRecord?.licensePlate || firstTx?.licensePlate || '',
         driverName: tripRecord?.driverName || firstTx?.driverName || '',
-        dispatchDate: tripRecord?.pickupDate || row.dispatchedAt,
+        dispatchDate: formattedDispatchDate,
         dispatchedAt: row.dispatchedAt,
+        createdAt,
+        updatedAt,
+        confirmedAt,
+        deletedAt,
         invoiceCode: firstTx?.invoiceCode || null,
         destinationHubId: firstDraft?.destinationHubId ?? null,
         dispatchHubId: firstTx?.hubId ?? firstDraft?.originHubId ?? null,
@@ -4984,6 +5517,12 @@ export class WarehouseService {
     const skip = (page - 1) * limit;
 
     const userHubId = (await this.resolveUserHubId(user, query?.hubId)) ?? null;
+    const roleId = Number(
+      user?.role?.id ?? (typeof user?.role === 'number' ? user.role : 0),
+    );
+    const isSuperAdmin = roleId === RoleEnum.SUPER_ADMIN;
+    const statusUpper = query?.status?.toUpperCase();
+
     const dateRange = this.sanitizeDateRangeGuard(query, {
       defaultPastDays: 90,
       maxSpanDays: 90,
@@ -4995,7 +5534,9 @@ export class WarehouseService {
     };
 
     const where: string[] = [
-      `ts."deletedAt" IS NULL`,
+      isSuperAdmin
+        ? `(ts."deletedAt" IS NULL OR NOT EXISTS (SELECT 1 FROM "trip_stop" act_ts WHERE act_ts."tripCode" = ts."tripCode" AND act_ts."hubId" = ts."hubId" AND act_ts."deletedAt" IS NULL))`
+        : `ts."deletedAt" IS NULL`,
       `ts."stopType" <> 'ORIGIN'`,
     ];
 
@@ -5006,7 +5547,7 @@ export class WarehouseService {
     if (query?.search && query.search.trim()) {
       const p = bind(`%${query.search.trim()}%`);
       where.push(
-        `(ts."tripCode" ILIKE ${p} OR EXISTS (SELECT 1 FROM "trip" st WHERE st."tripCode" = ts."tripCode" AND st."deletedAt" IS NULL AND (st."licensePlate" ILIKE ${p} OR st."driverName" ILIKE ${p})) OR EXISTS (SELECT 1 FROM "trip" st JOIN "order" so ON so.id = st."orderId" WHERE st."tripCode" = ts."tripCode" AND st."deletedAt" IS NULL AND (so."orderCode" ILIKE ${p} OR so."goodsDescription" ILIKE ${p})))`,
+        `(ts."tripCode" ILIKE ${p} OR EXISTS (SELECT 1 FROM "trip" st WHERE st."tripCode" = ts."tripCode" AND (st."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'}) AND (st."licensePlate" ILIKE ${p} OR st."driverName" ILIKE ${p})) OR EXISTS (SELECT 1 FROM "trip" st JOIN "order" so ON so.id = st."orderId" WHERE st."tripCode" = ts."tripCode" AND (st."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'}) AND (so."orderCode" ILIKE ${p} OR so."goodsDescription" ILIKE ${p})))`,
       );
     }
 
@@ -5017,16 +5558,18 @@ export class WarehouseService {
       const pFromIso = bind(fromIso);
       const pFromDate = bind(dateRange.fromDate);
       where.push(
-        `(ts."createdAt" >= ${pFromIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND dt."deletedAt" IS NULL AND dt."pickupDate" >= ${pFromDate}))`,
+        `(COALESCE(ts."processedAt", ts."deletedAt", ts."updatedAt", ts."createdAt") >= ${pFromIso} OR ts."createdAt" >= ${pFromIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND (dt."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'}) AND dt."pickupDate" >= ${pFromDate}))`,
       );
     }
 
     if (dateRange.toDate) {
-      const toIso = new Date(`${dateRange.toDate}T23:59:59.999Z`).toISOString();
+      const toIso = new Date(
+        `${dateRange.toDate}T23:59:59.999+07:00`,
+      ).toISOString();
       const pToIso = bind(toIso);
       const pToDate = bind(dateRange.toDate);
       where.push(
-        `(ts."createdAt" <= ${pToIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND dt."deletedAt" IS NULL AND dt."pickupDate" <= ${pToDate}))`,
+        `(COALESCE(ts."processedAt", ts."deletedAt", ts."updatedAt", ts."createdAt") <= ${pToIso} OR ts."createdAt" <= ${pToIso} OR EXISTS (SELECT 1 FROM "trip" dt WHERE dt."tripCode" = ts."tripCode" AND (dt."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'}) AND dt."pickupDate" <= ${pToDate}))`,
       );
     }
 
@@ -5038,7 +5581,10 @@ export class WarehouseService {
              ts."stopType",
              ts."stopSequence",
              ts."hubId",
-             ts."createdAt"
+             ts."createdAt",
+             ts."updatedAt",
+             ts."processedAt",
+             ts."deletedAt"
       FROM "trip_stop" ts
       WHERE ${whereSql}
     ),
@@ -5046,14 +5592,17 @@ export class WarehouseService {
       SELECT DISTINCT ON (rs."tripCode")
              rs."tripCode",
              CASE
-               WHEN BOOL_OR(rs."status" = 'PENDING') OVER (PARTITION BY rs."tripCode") THEN 'PENDING'
+               WHEN rs."deletedAt" IS NOT NULL THEN 'DELETED'
+               WHEN BOOL_OR(rs."status" = 'PENDING' AND rs."deletedAt" IS NULL) OVER (PARTITION BY rs."tripCode") THEN 'PENDING'
                ELSE 'COMPLETED'
              END AS "status",
              rs."stopType",
              rs."hubId",
-             MAX(rs."createdAt") OVER (PARTITION BY rs."tripCode") AS "createdAt"
+             MAX(rs."createdAt") OVER (PARTITION BY rs."tripCode") AS "createdAt",
+             MAX(COALESCE(rs."processedAt", rs."deletedAt", rs."updatedAt", rs."createdAt")) OVER (PARTITION BY rs."tripCode") AS "updatedAt"
       FROM raw_stops rs
       ORDER BY rs."tripCode",
+               CASE WHEN rs."deletedAt" IS NULL THEN 0 ELSE 1 END ASC,
                CASE WHEN rs."status" = 'PENDING' THEN 0 ELSE 1 END ASC,
                rs."stopSequence" ASC,
                rs."createdAt" DESC
@@ -5066,7 +5615,7 @@ export class WarehouseService {
              BOOL_OR(t."type" = 'TRANSFER') AS "hasTransferTrip"
       FROM "trip" t
       JOIN unique_trip_codes u ON u."tripCode" = t."tripCode"
-      WHERE t."deletedAt" IS NULL
+      WHERE (t."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'})
       GROUP BY t."tripCode"
     ),
     hub_stop_counts AS (
@@ -5074,7 +5623,7 @@ export class WarehouseService {
              (COUNT(DISTINCT all_ts."hubId") > 1) AS "multiHub"
       FROM "trip_stop" all_ts
       JOIN unique_trip_codes u ON u."tripCode" = all_ts."tripCode"
-      WHERE all_ts."deletedAt" IS NULL
+      WHERE (all_ts."deletedAt" IS NULL OR ${isSuperAdmin ? 'TRUE' : 'FALSE'})
       GROUP BY all_ts."tripCode"
     ),
     base AS MATERIALIZED (
@@ -5082,6 +5631,7 @@ export class WarehouseService {
              fs."status",
              fs."hubId",
              fs."createdAt",
+             fs."updatedAt",
              (
                CASE
                  WHEN fs."stopType" = 'TRANSIT' THEN TRUE
@@ -5095,11 +5645,12 @@ export class WarehouseService {
       LEFT JOIN hub_stop_counts hsc ON hsc."tripCode" = fs."tripCode"
     )`;
 
-    const statusUpper = query?.status?.toUpperCase();
     const statusCond =
-      statusUpper === 'PENDING' || statusUpper === 'COMPLETED'
-        ? `b."status" = '${statusUpper}'`
-        : 'TRUE';
+      statusUpper === 'DELETED' && isSuperAdmin
+        ? `b."status" = 'DELETED'`
+        : statusUpper === 'PENDING' || statusUpper === 'COMPLETED'
+          ? `b."status" = '${statusUpper}'`
+          : `b."status" <> 'DELETED'`;
     const typeUpper = query?.type?.toUpperCase();
     const typeCond =
       typeUpper === 'CUSTOMER'
@@ -5110,9 +5661,10 @@ export class WarehouseService {
 
     const countSql = `${baseCte}
        SELECT
-         COUNT(*)::int AS "allCount",
+         COUNT(*) FILTER (WHERE b."status" <> 'DELETED')::int AS "allCount",
          COUNT(*) FILTER (WHERE b."status" = 'PENDING')::int AS "pendingCount",
          COUNT(*) FILTER (WHERE b."status" = 'COMPLETED')::int AS "completedCount",
+         COUNT(*) FILTER (WHERE b."status" = 'DELETED')::int AS "deletedCount",
          COUNT(*) FILTER (WHERE ${statusCond})::int AS "typeAllCount",
          COUNT(*) FILTER (WHERE NOT b."isTransfer" AND ${statusCond})::int AS "customerCount",
          COUNT(*) FILTER (WHERE b."isTransfer" AND ${statusCond})::int AS "transferCount",
@@ -5125,6 +5677,8 @@ export class WarehouseService {
               ts."stopType",
               ts."hubId",
               ts."processedAt",
+              ts."updatedAt",
+              ts."deletedAt",
               ts."processedByUserId",
               p."createdAt",
               p."isTransfer",
@@ -5134,21 +5688,29 @@ export class WarehouseService {
                JOIN "hub" sh ON sh.id = sts."hubId"
                WHERE sts."tripCode" = ts."tripCode"
                  AND sts."stopType" <> 'ORIGIN'
-                 AND sts."deletedAt" IS NULL) AS "routeStopsSummary",
+                 AND (sts."deletedAt" IS NULL OR p."status" = 'DELETED')) AS "routeStopsSummary",
               (SELECT oh."name" FROM "trip_stop" os JOIN "hub" oh ON oh.id = os."hubId"
-               WHERE os."tripCode" = ts."tripCode" AND os."stopType" = 'ORIGIN' AND os."deletedAt" IS NULL
+               WHERE os."tripCode" = ts."tripCode" AND os."stopType" = 'ORIGIN' AND (os."deletedAt" IS NULL OR p."status" = 'DELETED')
                LIMIT 1) AS "originHubName",
               agg."firstTripId", agg."licensePlate", agg."driverName", agg."pickupDate",
               agg."ordersCount", agg."ordersForHubCount", agg."totalWeight", agg."totalVolume", agg."totalQuantity",
               agg."unloadQuantity", agg."stayQuantity"
        FROM (
-         SELECT b."tripCode", b."status", b."hubId", b."isTransfer", b."createdAt"
+         SELECT b."tripCode", b."status", b."hubId", b."isTransfer", b."createdAt", b."updatedAt"
          FROM base b
          WHERE ${statusCond} AND ${typeCond}
-         ORDER BY CASE WHEN b."status" = 'PENDING' THEN 0 ELSE 1 END, b."createdAt" DESC
+         ORDER BY CASE WHEN b."status" = 'PENDING' THEN 0 ELSE 1 END, COALESCE(b."updatedAt", b."createdAt") DESC
          LIMIT ${limit} OFFSET ${skip}
        ) p
-       JOIN "trip_stop" ts ON ts."tripCode" = p."tripCode" AND ts."hubId" = p."hubId" AND ts."deletedAt" IS NULL
+       JOIN LATERAL (
+         SELECT *
+         FROM "trip_stop" ts_sub
+         WHERE ts_sub."tripCode" = p."tripCode"
+           AND ts_sub."hubId" = p."hubId"
+           AND ((p."status" = 'DELETED' AND ts_sub."deletedAt" IS NOT NULL) OR (p."status" <> 'DELETED' AND ts_sub."deletedAt" IS NULL))
+         ORDER BY ts_sub.id DESC
+         LIMIT 1
+       ) ts ON true
        JOIN "hub" h ON h.id = ts."hubId"
        LEFT JOIN LATERAL (
          SELECT MIN(t.id) AS "firstTripId",
@@ -5158,28 +5720,28 @@ export class WarehouseService {
                 COUNT(DISTINCT t."orderId")::int AS "ordersCount",
                 COUNT(DISTINCT t."orderId") FILTER (
                   WHERE COALESCE(t."destinationHubId", o."destinationHubId") = ts."hubId"
-                     OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND ds."deletedAt" IS NULL))
+                     OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND (ds."deletedAt" IS NULL OR p."status" = 'DELETED')))
                 )::int AS "ordersForHubCount",
                 COALESCE(SUM(t."weightAllocated"), 0) AS "totalWeight",
                 COALESCE(SUM(t."volumeAllocated"), 0) AS "totalVolume",
                 COALESCE(SUM(COALESCE(t."quantityAllocated", o."totalQuantity", 1)), 0) AS "totalQuantity",
                 COALESCE(SUM(CASE
                   WHEN COALESCE(t."destinationHubId", o."destinationHubId") = ts."hubId"
-                    OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND ds."deletedAt" IS NULL))
+                    OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND (ds."deletedAt" IS NULL OR p."status" = 'DELETED')))
                   THEN COALESCE(t."quantityAllocated", o."totalQuantity", 1)
                   ELSE 0
                 END), 0) AS "unloadQuantity",
                 COALESCE(SUM(CASE
                   WHEN COALESCE(t."destinationHubId", o."destinationHubId") = ts."hubId"
-                    OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND ds."deletedAt" IS NULL))
+                    OR (COALESCE(t."destinationHubId", o."destinationHubId") IS NULL AND NOT EXISTS (SELECT 1 FROM "trip_stop" ds WHERE ds."tripCode" = ts."tripCode" AND ds."hubId" <> ts."hubId" AND (ds."deletedAt" IS NULL OR p."status" = 'DELETED')))
                   THEN 0
                   ELSE COALESCE(t."quantityAllocated", o."totalQuantity", 1)
                 END), 0) AS "stayQuantity"
          FROM "trip" t
-         JOIN "order" o ON o.id = t."orderId" AND o."deletedAt" IS NULL
-         WHERE t."tripCode" = ts."tripCode" AND t."deletedAt" IS NULL
+         JOIN "order" o ON o.id = t."orderId" AND (o."deletedAt" IS NULL OR p."status" = 'DELETED')
+         WHERE t."tripCode" = ts."tripCode" AND (t."deletedAt" IS NULL OR p."status" = 'DELETED')
        ) agg ON true
-       ORDER BY CASE WHEN p."status" = 'PENDING' THEN 0 ELSE 1 END, p."createdAt" DESC`;
+       ORDER BY CASE WHEN p."status" = 'PENDING' THEN 0 ELSE 1 END, COALESCE(p."updatedAt", p."createdAt") DESC`;
 
     const [countRows, pageRows] = await Promise.all([
       this.dataSource.query(countSql, params),
@@ -5196,6 +5758,7 @@ export class WarehouseService {
       allCount: Number(c.allCount) || 0,
       pendingCount: Number(c.pendingCount) || 0,
       completedCount: Number(c.completedCount) || 0,
+      deletedCount: isSuperAdmin ? Number(c.deletedCount) || 0 : 0,
       typeAllCount: Number(c.typeAllCount) || 0,
       customerCount: Number(c.customerCount) || 0,
       transferCount: Number(c.transferCount) || 0,
@@ -5206,33 +5769,62 @@ export class WarehouseService {
     }
 
     const tripCodes = pageRows.map((r) => r.tripCode);
+    const hasDeletedRows = pageRows.some((r) => r.status === 'DELETED');
     const ordersByTripCode = new Map<string, any[]>();
     let trips: TripEntity[] = [];
     let orders: OrderEntity[] = [];
 
+    const txs: Array<{
+      id: number;
+      orderId: number;
+      tripCode: string;
+      hubId: number | null;
+      quantity: number;
+      expectedQuantity: number | null;
+      weight: number | null;
+      volume: number | null;
+      performedByUserId: number | null;
+      createdAt?: Date | string;
+      invoiceCode?: string | null;
+    }> =
+      tripCodes.length > 0
+        ? await this.dataSource.query(
+            `SELECT id, "orderId", "tripCode", "hubId", "quantity", "expectedQuantity", "weight", "volume", "performedByUserId", "createdAt", "invoiceCode" FROM "order_inventory_transaction" WHERE "tripCode" = ANY($1) AND "type" = 'INBOUND' AND "deletedAt" IS NULL ORDER BY id DESC`,
+            [tripCodes],
+          )
+        : [];
+
     if (tripCodes.length > 0) {
-      trips = await this.tripRepository
-        .createQueryBuilder('t')
-        .where('t.deletedAt IS NULL')
+      const tripQb = this.tripRepository.createQueryBuilder('t');
+      if (hasDeletedRows) {
+        tripQb.withDeleted();
+      } else {
+        tripQb.where('t.deletedAt IS NULL');
+      }
+      trips = await tripQb
         .andWhere('t.tripCode IN (:...tripCodes)', { tripCodes })
         .orderBy('t.id', 'ASC')
         .getMany();
 
       const orderIds = Array.from(new Set(trips.map((t) => t.orderId)));
-      orders =
-        orderIds.length > 0
-          ? await this.orderRepository
-              .createQueryBuilder('order')
-              .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
-              .leftJoinAndSelect(
-                'order.destinationHubEntity',
-                'destinationHubEntity',
-              )
-              .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity')
-              .where('order.deletedAt IS NULL')
-              .andWhere('order.id IN (:...orderIds)', { orderIds })
-              .getMany()
-          : [];
+      if (orderIds.length > 0) {
+        const orderQb = this.orderRepository
+          .createQueryBuilder('order')
+          .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
+          .leftJoinAndSelect(
+            'order.destinationHubEntity',
+            'destinationHubEntity',
+          )
+          .leftJoinAndSelect('order.currentHubEntity', 'currentHubEntity');
+        if (hasDeletedRows) {
+          orderQb.withDeleted();
+        } else {
+          orderQb.where('order.deletedAt IS NULL');
+        }
+        orders = await orderQb
+          .andWhere('order.id IN (:...orderIds)', { orderIds })
+          .getMany();
+      }
 
       const tripsByOrderId = new Map<number, TripEntity[]>();
       for (const t of trips) {
@@ -5300,26 +5892,66 @@ export class WarehouseService {
                 (trip as any).destinationHub ||
                 order.destinationHubEntity ||
                 null;
+              const orderTripTxs = txs.filter(
+                (tx) =>
+                  tx.tripCode === trip.tripCode &&
+                  Number(tx.orderId) === Number(order.id),
+              );
+              const txQtySum = orderTripTxs.reduce(
+                (sum, tx) => sum + (Number(tx.quantity) || 0),
+                0,
+              );
+              const txWeightSum = orderTripTxs.reduce(
+                (sum, tx) => sum + (Number(tx.weight) || 0),
+                0,
+              );
+              const txVolumeSum = orderTripTxs.reduce(
+                (sum, tx) => sum + (Number(tx.volume) || 0),
+                0,
+              );
+              const tripQty =
+                txQtySum > 0
+                  ? txQtySum
+                  : trip.quantityAllocated != null &&
+                      Number(trip.quantityAllocated) > 0
+                    ? Number(trip.quantityAllocated)
+                    : Number(order.totalQuantity) || 1;
+              const tripWeight =
+                txWeightSum > 0
+                  ? txWeightSum
+                  : trip.weightAllocated != null &&
+                      Number(trip.weightAllocated) > 0
+                    ? Number(trip.weightAllocated)
+                    : Number(order.totalWeight) || 0;
+              const tripVolume =
+                txVolumeSum > 0
+                  ? txVolumeSum
+                  : trip.volumeAllocated != null &&
+                      Number(trip.volumeAllocated) > 0
+                    ? Number(trip.volumeAllocated)
+                    : Number(order.totalVolume) || 0;
+
               const tripEnrichedOrder = {
                 ...enrichedOrder,
                 tripId: trip.id,
                 destinationHubId: tripDestHubId,
                 destinationHubEntity: tripDestEntity,
-                quantityAllocated:
-                  trip.quantityAllocated != null &&
-                  Number(trip.quantityAllocated) > 0
-                    ? Number(trip.quantityAllocated)
-                    : Number(order.totalQuantity) || 1,
-                weightAllocated:
-                  trip.weightAllocated != null &&
-                  Number(trip.weightAllocated) >= 0
-                    ? Number(trip.weightAllocated)
-                    : Number(order.totalWeight) || 0,
-                volumeAllocated:
-                  trip.volumeAllocated != null &&
-                  Number(trip.volumeAllocated) >= 0
-                    ? Number(trip.volumeAllocated)
-                    : Number(order.totalVolume) || 0,
+                quantity: tripQty,
+                tripInboundQuantity: tripQty,
+                receivedQuantity: txQtySum > 0 ? txQtySum : undefined,
+                quantityAllocated: tripQty,
+                inboundQuantity: tripQty,
+                totalQuantity: tripQty,
+                orderTotalQuantity: Number(order.totalQuantity) || 1,
+                orderInboundQuantity: Number(order.inboundQuantity) || 0,
+                weightAllocated: tripWeight,
+                totalWeight: tripWeight,
+                volumeAllocated: tripVolume,
+                totalVolume: tripVolume,
+                inventoryTransactions: orderTripTxs.map((tx) => ({
+                  ...tx,
+                  type: 'INBOUND',
+                })),
                 tripNotes: trip.notes,
               };
               list.push(tripEnrichedOrder);
@@ -5329,14 +5961,6 @@ export class WarehouseService {
         }
       }
     }
-
-    const txs: Array<{ tripCode: string; performedByUserId: number | null }> =
-      tripCodes.length > 0
-        ? await this.dataSource.query(
-            `SELECT "tripCode", "performedByUserId" FROM "order_inventory_transaction" WHERE "tripCode" = ANY($1) AND "deletedAt" IS NULL AND "performedByUserId" IS NOT NULL ORDER BY id DESC`,
-            [tripCodes],
-          )
-        : [];
 
     const relevantUserIds = Array.from(
       new Set(
@@ -5403,23 +6027,42 @@ export class WarehouseService {
             ? `${descs[0]} (+${descs.length - 1} loại hàng)`
             : 'Hàng hóa tổng quan';
 
-      const receiveDateStr =
-        r.pickupDate ||
-        (r.createdAt
-          ? new Date(r.createdAt).toISOString().split('T')[0]
-          : undefined);
+      const tripTx =
+        txs.find(
+          (tx) =>
+            tx.tripCode === r.tripCode &&
+            (!r.hubId || !tx.hubId || Number(tx.hubId) === Number(r.hubId)),
+        ) || txs.find((tx) => tx.tripCode === r.tripCode);
+      const confirmedAt =
+        r.status === 'COMPLETED'
+          ? tripTx?.createdAt || r.processedAt || r.updatedAt || null
+          : null;
+      const effectiveInboundDateSource =
+        r.status === 'COMPLETED'
+          ? confirmedAt || r.pickupDate || r.createdAt
+          : r.status === 'DELETED'
+            ? r.deletedAt || r.updatedAt || r.pickupDate || r.createdAt
+            : r.updatedAt || r.createdAt || r.pickupDate;
+      const receiveDateStr = effectiveInboundDateSource
+        ? typeof effectiveInboundDateSource === 'string' &&
+          /^\d{4}-\d{2}-\d{2}$/.test(effectiveInboundDateSource)
+          ? effectiveInboundDateSource
+          : new Date(effectiveInboundDateSource).toLocaleDateString('sv-SE', {
+              timeZone: 'Asia/Ho_Chi_Minh',
+            })
+        : undefined;
 
-      const tripTx = txs.find((tx) => tx.tripCode === r.tripCode);
       const tripOrder = tripOrders.find((o) => o.createdByUserId);
       const matchedTrip = trips.find(
         (t) => t.tripCode === r.tripCode && t.assignedByUserId,
       );
+      const firstTripRow = trips.find((t) => t.tripCode === r.tripCode);
 
       const creatorUserId =
         matchedTrip?.assignedByUserId || tripOrder?.createdByUserId || null;
       const operatorUserId =
         r.status === 'COMPLETED'
-          ? r.processedByUserId || tripTx?.performedByUserId || creatorUserId
+          ? tripTx?.performedByUserId || r.processedByUserId || creatorUserId
           : creatorUserId || r.processedByUserId || tripTx?.performedByUserId;
 
       const creator = formatUserInfo(creatorUserId);
@@ -5436,6 +6079,11 @@ export class WarehouseService {
         driverName: r.driverName || '',
         pickupDate: r.pickupDate || null,
         receiveDate: receiveDateStr,
+        createdAt: firstTripRow?.createdAt || r.createdAt || null,
+        updatedAt: confirmedAt || r.deletedAt || r.updatedAt || r.createdAt,
+        confirmedAt,
+        deletedAt: r.deletedAt || null,
+        invoiceCode: tripTx?.invoiceCode || null,
         status: r.status,
         hubStatus: r.status,
         stopType: r.stopType,
@@ -5527,6 +6175,7 @@ export class WarehouseService {
     totalWeight: number;
     totalVolume: number;
     createdAt?: Date | string;
+    updatedAt?: Date | string;
     items: Array<{
       orderCode: string;
       goodsDescription: string;
@@ -5560,11 +6209,14 @@ export class WarehouseService {
     let createdAt: Date | string | undefined;
 
     let orders: OrderEntity[] = [];
+    const qtyByOrderId = new Map<number, number>();
+    const weightByOrderId = new Map<number, number>();
+    const volumeByOrderId = new Map<number, number>();
 
     if (tripCode) {
       const resolvedUserHubId = await this.resolveUserHubId(user);
       const stops: any[] = await this.dataSource.query(
-        `SELECT ts."hubId", ts."status" FROM "trip_stop" ts WHERE ts."tripCode" = $1 AND ts."deletedAt" IS NULL`,
+        `SELECT ts."hubId", ts."status", ts."processedAt", ts."updatedAt" FROM "trip_stop" ts WHERE ts."tripCode" = $1 AND ts."deletedAt" IS NULL`,
         [tripCode],
       );
       const userStop = resolvedUserHubId
@@ -5573,15 +6225,34 @@ export class WarehouseService {
       const hasCompletedStop = userStop
         ? userStop.status === TripStopStatus.COMPLETED
         : stops.some((s) => s.status === TripStopStatus.COMPLETED);
+      const completedStopObj =
+        userStop?.status === TripStopStatus.COMPLETED
+          ? userStop
+          : stops.find((s) => s.status === TripStopStatus.COMPLETED);
 
-      const inboundTx = await this.transactionRepository.findOne({
+      const scopedTxs = await this.transactionRepository.find({
         where: {
           tripCode,
           type: InventoryTransactionType.INBOUND,
           deletedAt: IsNull(),
           ...(resolvedUserHubId ? { hubId: resolvedUserHubId } : {}),
         },
+        order: { createdAt: 'DESC', id: 'DESC' },
       });
+      const tripInboundTxs =
+        scopedTxs.length > 0
+          ? scopedTxs
+          : resolvedUserHubId
+            ? await this.transactionRepository.find({
+                where: {
+                  tripCode,
+                  type: InventoryTransactionType.INBOUND,
+                  deletedAt: IsNull(),
+                },
+                order: { createdAt: 'DESC', id: 'DESC' },
+              })
+            : [];
+      const inboundTx = tripInboundTxs[0] ?? null;
 
       if (!hasCompletedStop && !inboundTx) {
         throw new BadRequestException(
@@ -5601,10 +6272,58 @@ export class WarehouseService {
       if (trips.length > 0) {
         licensePlate = trips[0].licensePlate || '';
         driverName = trips[0].driverName || '';
-        createdAt = trips[0].createdAt || trips[0].pickupDate;
+        createdAt =
+          completedStopObj?.processedAt ||
+          inboundTx?.createdAt ||
+          completedStopObj?.updatedAt ||
+          trips[0].updatedAt ||
+          trips[0].createdAt ||
+          trips[0].pickupDate;
         const orderIds = Array.from(
           new Set(trips.map((t) => t.orderId).filter(Boolean)),
         );
+        for (const oid of orderIds) {
+          const orderTxs = tripInboundTxs.filter(
+            (tx) => Number(tx.orderId) === Number(oid),
+          );
+          const txQty = orderTxs.reduce(
+            (sum, tx) => sum + (Number(tx.quantity) || 0),
+            0,
+          );
+          const txWeight = orderTxs.reduce(
+            (sum, tx) => sum + (Number(tx.weight) || 0),
+            0,
+          );
+          const txVolume = orderTxs.reduce(
+            (sum, tx) => sum + (Number(tx.volume) || 0),
+            0,
+          );
+          const tripRow = trips.find((t) => Number(t.orderId) === Number(oid));
+          if (txQty > 0) {
+            qtyByOrderId.set(oid, txQty);
+          } else if (
+            tripRow?.quantityAllocated != null &&
+            Number(tripRow.quantityAllocated) > 0
+          ) {
+            qtyByOrderId.set(oid, Number(tripRow.quantityAllocated));
+          }
+          if (txWeight > 0) {
+            weightByOrderId.set(oid, txWeight);
+          } else if (
+            tripRow?.weightAllocated != null &&
+            Number(tripRow.weightAllocated) > 0
+          ) {
+            weightByOrderId.set(oid, Number(tripRow.weightAllocated));
+          }
+          if (txVolume > 0) {
+            volumeByOrderId.set(oid, txVolume);
+          } else if (
+            tripRow?.volumeAllocated != null &&
+            Number(tripRow.volumeAllocated) > 0
+          ) {
+            volumeByOrderId.set(oid, Number(tripRow.volumeAllocated));
+          }
+        }
         if (orderIds.length > 0) {
           orders = await this.orderRepository.find({
             where: { id: In(orderIds), deletedAt: IsNull() },
@@ -5630,7 +6349,29 @@ export class WarehouseService {
         driverName = driverName || txs[0].driverName || '';
         originHubName = originHubName || txs[0].hub?.name || '';
         createdAt = createdAt || txs[0].createdAt;
-        orders = txs.map((t) => t.order).filter(Boolean);
+        const uniqueOrders = new Map<number, OrderEntity>();
+        for (const tx of txs) {
+          if (tx.order) {
+            uniqueOrders.set(tx.order.id, tx.order);
+            qtyByOrderId.set(
+              tx.order.id,
+              (qtyByOrderId.get(tx.order.id) || 0) + (Number(tx.quantity) || 0),
+            );
+            if (Number(tx.weight) > 0) {
+              weightByOrderId.set(
+                tx.order.id,
+                (weightByOrderId.get(tx.order.id) || 0) + Number(tx.weight),
+              );
+            }
+            if (Number(tx.volume) > 0) {
+              volumeByOrderId.set(
+                tx.order.id,
+                (volumeByOrderId.get(tx.order.id) || 0) + Number(tx.volume),
+              );
+            }
+          }
+        }
+        orders = Array.from(uniqueOrders.values());
       }
     }
 
@@ -5641,12 +6382,58 @@ export class WarehouseService {
       });
       if (singleOrder) {
         orders = [singleOrder];
+        const latestInTx = await this.transactionRepository.findOne({
+          where: {
+            orderId: singleOrder.id,
+            type: InventoryTransactionType.INBOUND,
+            deletedAt: IsNull(),
+          },
+          order: { createdAt: 'DESC', id: 'DESC' },
+        });
+        if (latestInTx) {
+          if (Number(latestInTx.quantity) > 0) {
+            qtyByOrderId.set(singleOrder.id, Number(latestInTx.quantity));
+          }
+          if (Number(latestInTx.weight) > 0) {
+            weightByOrderId.set(singleOrder.id, Number(latestInTx.weight));
+          }
+          if (Number(latestInTx.volume) > 0) {
+            volumeByOrderId.set(singleOrder.id, Number(latestInTx.volume));
+          }
+          tripCode = tripCode || latestInTx.tripCode || '';
+          licensePlate = licensePlate || latestInTx.licensePlate || '';
+          driverName = driverName || latestInTx.driverName || '';
+        }
         if (singleOrder.trips && singleOrder.trips.length > 0) {
-          const t = singleOrder.trips[0];
-          tripCode = tripCode || t.tripCode || '';
-          licensePlate = licensePlate || t.licensePlate || '';
-          driverName = driverName || t.driverName || '';
-          createdAt = createdAt || t.createdAt;
+          const matchedTrip =
+            (tripCode
+              ? singleOrder.trips.find((tr) => tr.tripCode === tripCode)
+              : null) || singleOrder.trips[singleOrder.trips.length - 1];
+          tripCode = tripCode || matchedTrip.tripCode || '';
+          licensePlate = licensePlate || matchedTrip.licensePlate || '';
+          driverName = driverName || matchedTrip.driverName || '';
+          if (
+            !qtyByOrderId.has(singleOrder.id) &&
+            matchedTrip.quantityAllocated != null &&
+            Number(matchedTrip.quantityAllocated) > 0
+          ) {
+            qtyByOrderId.set(
+              singleOrder.id,
+              Number(matchedTrip.quantityAllocated),
+            );
+          }
+          createdAt =
+            createdAt ||
+            latestInTx?.createdAt ||
+            singleOrder.updatedAt ||
+            matchedTrip.updatedAt ||
+            matchedTrip.createdAt;
+        } else {
+          createdAt =
+            createdAt ||
+            latestInTx?.createdAt ||
+            singleOrder.updatedAt ||
+            singleOrder.createdAt;
         }
       }
     }
@@ -5657,16 +6444,28 @@ export class WarehouseService {
 
     const items = orders.map((o) => {
       const deliv = this.extractDeliveryAddress(o);
+      const tripQty = qtyByOrderId.get(o.id);
+      const tripWeight = weightByOrderId.get(o.id);
+      const tripVolume = volumeByOrderId.get(o.id);
       return {
         orderCode: o.orderCode,
         goodsDescription: o.goodsDescription || 'Hàng hóa nhập kho',
-        quantity: Number(o.inboundQuantity || o.totalQuantity || 1),
+        quantity:
+          tripQty != null && tripQty > 0
+            ? tripQty
+            : Number(o.inboundQuantity || o.totalQuantity || 1),
         unit: 'Kiện',
         deliveryAddress: deliv,
         accompanyingDocs: o.accompanyingDocs || 'KHÔNG CÓ',
         notes: o.notes || '',
-        weight: Number(o.totalWeight) || 0,
-        volume: Number(o.totalVolume) || 0,
+        weight:
+          tripWeight != null && tripWeight > 0
+            ? tripWeight
+            : Number(o.totalWeight) || 0,
+        volume:
+          tripVolume != null && tripVolume > 0
+            ? tripVolume
+            : Number(o.totalVolume) || 0,
       };
     });
 
@@ -5681,14 +6480,16 @@ export class WarehouseService {
     deliveryAddress = deliveryAddress || items[0]?.deliveryAddress || '—';
 
     const totalQuantity = items.reduce((sum, it) => sum + it.quantity, 0);
-    const totalWeight = orders.reduce(
-      (sum, o) => sum + (Number(o.totalWeight) || 0),
+    const totalWeight = items.reduce(
+      (sum, it) => sum + (Number(it.weight) || 0),
       0,
     );
-    const totalVolume = orders.reduce(
-      (sum, o) => sum + (Number(o.totalVolume) || 0),
+    const totalVolume = items.reduce(
+      (sum, it) => sum + (Number(it.volume) || 0),
       0,
     );
+
+    const effectiveDate = createdAt || first.updatedAt || new Date();
 
     return {
       tripCode: tripCode || undefined,
@@ -5701,7 +6502,8 @@ export class WarehouseService {
       totalQuantity,
       totalWeight,
       totalVolume,
-      createdAt: createdAt || new Date(),
+      createdAt: effectiveDate,
+      updatedAt: effectiveDate,
       items,
     };
   }
@@ -5721,18 +6523,27 @@ export class WarehouseService {
       throw new NotFoundException('Không tìm thấy chuyến xe');
     }
     const resolvedUserHubId = await this.resolveUserHubId(user);
+    const manifestUserRoleId = Number(
+      user?.role?.id ?? (typeof user?.role === 'number' ? user.role : 0),
+    );
+    const isSuperAdmin = manifestUserRoleId === RoleEnum.SUPER_ADMIN;
 
-    const baseQb = () =>
-      this.tripRepository
+    const baseQb = (includeDeleted = false) => {
+      const qb = this.tripRepository
         .createQueryBuilder('trip')
         .innerJoinAndSelect('trip.order', 'order')
         .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
         .leftJoinAndSelect('order.destinationHubEntity', 'destinationHubEntity')
-        .leftJoinAndSelect('trip.destinationHub', 'tripDestinationHub')
-        .where('trip.deletedAt IS NULL')
-        .andWhere('order.deletedAt IS NULL');
+        .leftJoinAndSelect('trip.destinationHub', 'tripDestinationHub');
+      if (includeDeleted) {
+        qb.withDeleted();
+      } else {
+        qb.where('trip.deletedAt IS NULL').andWhere('order.deletedAt IS NULL');
+      }
+      return qb;
+    };
 
-    let trips = await baseQb()
+    let trips = await baseQb(false)
       .andWhere('trip.tripCode = :code', { code })
       .orderBy('trip.id', 'ASC')
       .getMany();
@@ -5740,9 +6551,21 @@ export class WarehouseService {
     // Legacy groups without a persisted code are displayed as TRIP-{id}
     const legacy = /^TRIP-(\d+)$/i.exec(code);
     if (trips.length === 0 && legacy) {
-      trips = await baseQb()
+      trips = await baseQb(false)
         .andWhere('trip.id = :id', { id: Number(legacy[1]) })
         .getMany();
+    }
+
+    if (trips.length === 0 && isSuperAdmin) {
+      trips = await baseQb(true)
+        .andWhere('trip.tripCode = :code', { code })
+        .orderBy('trip.id', 'ASC')
+        .getMany();
+      if (trips.length === 0 && legacy) {
+        trips = await baseQb(true)
+          .andWhere('trip.id = :id', { id: Number(legacy[1]) })
+          .getMany();
+      }
     }
 
     let tripRecord: TripEntity | null = null;
@@ -5760,13 +6583,22 @@ export class WarehouseService {
       }
     }
 
-    const stops: any[] = await this.dataSource.query(
-      `SELECT ts."hubId", h."name" AS "hubName", ts."stopSequence", ts."stopType", ts."status", ts."processedAt"
+    let stops: any[] = await this.dataSource.query(
+      `SELECT ts."hubId", h."name" AS "hubName", ts."stopSequence", ts."stopType", ts."status", ts."processedAt", ts."deletedAt"
        FROM "trip_stop" ts JOIN "hub" h ON h.id = ts."hubId"
        WHERE ts."tripCode" = $1 AND ts."deletedAt" IS NULL
        ORDER BY ts."stopSequence" ASC, ts.id ASC`,
       [code],
     );
+    if (stops.length === 0 && isSuperAdmin) {
+      stops = await this.dataSource.query(
+        `SELECT ts."hubId", h."name" AS "hubName", ts."stopSequence", ts."stopType", ts."status", ts."processedAt", ts."deletedAt"
+         FROM "trip_stop" ts JOIN "hub" h ON h.id = ts."hubId"
+         WHERE ts."tripCode" = $1
+         ORDER BY ts."stopSequence" ASC, ts.id ASC`,
+        [code],
+      );
+    }
 
     const txExists: any[] =
       trips.length === 0 && !tripRecord && stops.length === 0
@@ -5990,6 +6822,16 @@ export class WarehouseService {
         }
 
         const view = hubView.get(o.id);
+        const effectiveReceivedHere =
+          receivedHere > 0
+            ? receivedHere
+            : receivedAll > 0 && (t.type === 'INBOUND' || stops.length <= 1)
+              ? receivedAll
+              : 0;
+        const allocatedQty =
+          Number(t.quantityAllocated) > 0
+            ? Number(t.quantityAllocated)
+            : expectedQuantity;
         return {
           ...o,
           originHub: resolvedOriginHub,
@@ -6004,13 +6846,18 @@ export class WarehouseService {
             originalDeliveryAddress || deliveryAddress || resolvedDestHub || '',
           deliveryMode,
           tripId: t.id,
+          quantityAllocated: allocatedQty,
+          tripInboundQuantity:
+            effectiveReceivedHere > 0
+              ? effectiveReceivedHere
+              : expectedQuantity,
           weightAllocated: Number(t.weightAllocated) || 0,
           volumeAllocated: Number(t.volumeAllocated) || 0,
           expectedQuantity,
           inTransitQuantity,
-          receivedQuantity: receivedHere,
+          receivedQuantity: effectiveReceivedHere,
           isForCurrentHub,
-          isReceivedHere: receivedHere > 0,
+          isReceivedHere: effectiveReceivedHere > 0,
           isContractLocked: !DRAFT_LIKE_STATUSES.includes(o.status),
           hubStatus: view?.hubStatus ?? o.status,
           hubStock: view ? view.hubStock : null,
@@ -6044,11 +6891,23 @@ export class WarehouseService {
     const canAddOrders = !isCurrentHubCompleted || isAdmin;
     const isReadOnlyForHub = isCurrentHubCompleted && !isAdmin;
 
+    const resolvedManifestDateRaw =
+      currentStop?.processedAt ||
+      stops.find((s) => s.processedAt)?.processedAt ||
+      first.updatedAt ||
+      first.createdAt ||
+      first.pickupDate;
+    const resolvedManifestDate = resolvedManifestDateRaw
+      ? new Date(resolvedManifestDateRaw).toLocaleDateString('sv-SE', {
+          timeZone: 'Asia/Ho_Chi_Minh',
+        })
+      : first.pickupDate || null;
+
     return {
       tripCode: first.tripCode || code,
       licensePlate: first.licensePlate || '',
       driverName: first.driverName || '',
-      pickupDate: first.pickupDate || null,
+      pickupDate: resolvedManifestDate,
       isTransfer:
         stops.length > 1 ||
         sums.some((s) => s.type === InventoryTransactionType.TRANSFER) ||
@@ -7659,6 +8518,8 @@ export class WarehouseService {
         'inboundQuantity',
         'outboundQuantity',
         'remainingQuantity',
+        'totalWeight',
+        'totalVolume',
         'status',
       ],
     });
@@ -7681,17 +8542,71 @@ export class WarehouseService {
       .addOrderBy('tx.id', 'ASC')
       .getMany();
 
+    const tripRepo = this.dataSource.getRepository(TripEntity);
+    const rawTrips = await tripRepo
+      .createQueryBuilder('t')
+      .withDeleted()
+      .leftJoinAndSelect('t.originHub', 'originHub')
+      .leftJoinAndSelect('t.destinationHub', 'destinationHub')
+      .where('t.orderId IN (:...orderIds)', { orderIds })
+      .orderBy('t.createdAt', 'ASC')
+      .addOrderBy('t.id', 'ASC')
+      .getMany();
+
+    const trips = rawTrips.map((t) => ({
+      id: t.id,
+      orderId: t.orderId,
+      tripCode: t.tripCode,
+      licensePlate: t.licensePlate,
+      driverName: t.driverName,
+      type: t.type,
+      status: t.status,
+      pickupDate: t.pickupDate,
+      quantityAllocated: t.quantityAllocated,
+      weightAllocated: t.weightAllocated,
+      volumeAllocated: t.volumeAllocated,
+      originHubId: t.originHubId,
+      originHubName: t.originHub?.name || null,
+      destinationHubId: t.destinationHubId,
+      destinationHubName: t.destinationHub?.name || null,
+      notes: t.notes,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      deletedAt: t.deletedAt,
+      isDeleted: !!t.deletedAt,
+    }));
+
     // Map running balance on active transactions
+    const round3Metric = (n: number) => Math.round(n * 1000) / 1000;
     let running = 0;
+    let runningWeight = 0;
+    let runningVolume = 0;
+    let totalInWeight = 0;
+    let totalInVolume = 0;
+    let totalOutWeight = 0;
+    let totalOutVolume = 0;
+
     const transactions = rawTxs.map((tx) => {
       const isDeleted = !!tx.deletedAt;
       const isIn = tx.type === 'INBOUND';
       const q = Number(tx.quantity) || 0;
+      const w = Number(tx.weight) || 0;
+      const v = Number(tx.volume) || 0;
       if (!isDeleted) {
         if (isIn) {
           running += q;
+          runningWeight = round3Metric(runningWeight + w);
+          runningVolume = round3Metric(runningVolume + v);
+          totalInWeight = round3Metric(totalInWeight + w);
+          totalInVolume = round3Metric(totalInVolume + v);
         } else {
           running = Math.max(0, running - q);
+          totalOutWeight = round3Metric(totalOutWeight + w);
+          totalOutVolume = round3Metric(totalOutVolume + v);
+          runningWeight =
+            running <= 0 ? 0 : Math.max(0, round3Metric(runningWeight - w));
+          runningVolume =
+            running <= 0 ? 0 : Math.max(0, round3Metric(runningVolume - v));
         }
       }
       return {
@@ -7714,6 +8629,8 @@ export class WarehouseService {
         createdAt: tx.createdAt,
         isDeleted,
         cumulativeStock: isDeleted ? null : running,
+        cumulativeWeight: isDeleted ? null : runningWeight,
+        cumulativeVolume: isDeleted ? null : runningVolume,
       };
     });
 
@@ -7729,6 +8646,22 @@ export class WarehouseService {
       roleName === 'SUPER ADMIN' ||
       roleName === 'ADMIN';
 
+    const effectiveInWeight = round3Metric(
+      Math.max(Number(order.totalWeight) || 0, totalInWeight),
+    );
+    const effectiveInVolume = round3Metric(
+      Math.max(Number(order.totalVolume) || 0, totalInVolume),
+    );
+    const effectiveRemQty = Number(order.remainingQuantity) || 0;
+    const effectiveRemWeight =
+      effectiveRemQty <= 0
+        ? 0
+        : Math.max(0, round3Metric(effectiveInWeight - totalOutWeight));
+    const effectiveRemVolume =
+      effectiveRemQty <= 0
+        ? 0
+        : Math.max(0, round3Metric(effectiveInVolume - totalOutVolume));
+
     return {
       userRole: isSuperAdmin ? 'SUPER_ADMIN' : roleName || null,
       order: {
@@ -7738,9 +8671,989 @@ export class WarehouseService {
         inboundQuantity: order.inboundQuantity,
         outboundQuantity: order.outboundQuantity,
         remainingQuantity: order.remainingQuantity,
+        totalWeight: effectiveInWeight,
+        totalVolume: effectiveInVolume,
+        inboundWeight: effectiveInWeight,
+        inboundVolume: effectiveInVolume,
+        outboundWeight: totalOutWeight,
+        outboundVolume: totalOutVolume,
+        remainingWeight: effectiveRemWeight,
+        remainingVolume: effectiveRemVolume,
         status: order.status,
       },
+      trips,
       transactions,
+    };
+  }
+
+  /**
+   * Retrieve complete chronological history & operational audit trail of a Trip (SD...),
+   * including draft creation, draft modifications (field & order diffs), inbound/outbound
+   * confirmations, rollbacks, and active confirmation blockers (e.g. unconfirmed draft orders).
+   */
+  async getTripHistory(user: UserEntity, tripCodeParam: string) {
+    const tripCode = normalizeTripCode(decodeURIComponent(tripCodeParam || ''));
+    if (!tripCode) {
+      throw new NotFoundException('Mã chuyến xe không hợp lệ');
+    }
+
+    const tripRepo = this.dataSource.getRepository(TripEntity);
+    const stopRepo = this.dataSource.getRepository(TripStopEntity);
+    const orderRepo = this.dataSource.getRepository(OrderEntity);
+    const txRepo = this.dataSource.getRepository(
+      OrderInventoryTransactionEntity,
+    );
+    const logRepo = this.dataSource.getRepository(
+      'OrderActivityLogEntity' as any,
+    );
+    const userRepo = this.dataSource.getRepository(UserEntity);
+    const hubRepo = this.dataSource.getRepository(HubEntity);
+
+    const allTrips = await tripRepo
+      .createQueryBuilder('t')
+      .withDeleted()
+      .where('t.tripCode = :tripCode', { tripCode })
+      .orderBy('t.createdAt', 'ASC')
+      .addOrderBy('t.id', 'ASC')
+      .getMany();
+
+    if (allTrips.length === 0) {
+      throw new NotFoundException(`Không tìm thấy chuyến xe ${tripCode}`);
+    }
+
+    const allStops = await stopRepo
+      .createQueryBuilder('s')
+      .withDeleted()
+      .where('s.tripCode = :tripCode', { tripCode })
+      .orderBy('s.stopSequence', 'ASC')
+      .getMany();
+
+    const orderIds = Array.from(
+      new Set(allTrips.map((t) => Number(t.orderId)).filter((id) => id > 0)),
+    );
+
+    const allOrders =
+      orderIds.length > 0
+        ? await orderRepo
+            .createQueryBuilder('o')
+            .withDeleted()
+            .where('o.id IN (:...orderIds)', { orderIds })
+            .getMany()
+        : [];
+    const ordersById = new Map<number, OrderEntity>(
+      allOrders.map((o) => [o.id, o]),
+    );
+
+    // Also load any other trips linked to these orders (to detect pending inbound trips blocking an outbound draft)
+    const siblingTrips =
+      orderIds.length > 0
+        ? await tripRepo
+            .createQueryBuilder('st')
+            .where('st.orderId IN (:...orderIds)', { orderIds })
+            .andWhere('st.deletedAt IS NULL')
+            .orderBy('st.id', 'ASC')
+            .getMany()
+        : [];
+
+    const allTxs = await txRepo
+      .createQueryBuilder('tx')
+      .withDeleted()
+      .where(
+        orderIds.length > 0
+          ? '(tx.tripCode = :tripCode OR tx.orderId IN (:...orderIds))'
+          : 'tx.tripCode = :tripCode',
+        { tripCode, orderIds },
+      )
+      .orderBy('tx.createdAt', 'ASC')
+      .addOrderBy('tx.id', 'ASC')
+      .getMany();
+
+    const rawLogs: any[] = await logRepo
+      .createQueryBuilder('l')
+      .where(
+        orderIds.length > 0
+          ? '(l.tripCode = :tripCode OR l.orderId IN (:...orderIds))'
+          : 'l.tripCode = :tripCode',
+        { tripCode, orderIds },
+      )
+      .orderBy('l.createdAt', 'ASC')
+      .addOrderBy('l.id', 'ASC')
+      .getMany();
+
+    const userIds = new Set<number>();
+    const hubIds = new Set<number>();
+
+    allTrips.forEach((t) => {
+      if (t.assignedByUserId) userIds.add(Number(t.assignedByUserId));
+      if (t.originHubId) hubIds.add(Number(t.originHubId));
+      if (t.destinationHubId) hubIds.add(Number(t.destinationHubId));
+    });
+    allStops.forEach((s) => {
+      if (s.processedByUserId) userIds.add(Number(s.processedByUserId));
+      if (s.hubId) hubIds.add(Number(s.hubId));
+    });
+    allOrders.forEach((o) => {
+      if (o.createdByUserId) userIds.add(Number(o.createdByUserId));
+      if (o.originHubId) hubIds.add(Number(o.originHubId));
+      if (o.destinationHubId) hubIds.add(Number(o.destinationHubId));
+    });
+    allTxs.forEach((tx) => {
+      if (tx.performedByUserId) userIds.add(Number(tx.performedByUserId));
+      if (tx.hubId) hubIds.add(Number(tx.hubId));
+    });
+    rawLogs.forEach((l) => {
+      if (l.actorUserId) userIds.add(Number(l.actorUserId));
+      if (l.hubId) hubIds.add(Number(l.hubId));
+    });
+
+    const usersList =
+      userIds.size > 0
+        ? await userRepo.find({ where: { id: In(Array.from(userIds)) } })
+        : [];
+    const usersById = new Map<
+      number,
+      { id: number; name: string; email: string }
+    >();
+    usersList.forEach((u) => {
+      const fullName = [u.firstName, u.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      usersById.set(u.id, {
+        id: u.id,
+        name:
+          fullName ||
+          u.username ||
+          (u.email ? u.email.split('@')[0] : `User #${u.id}`),
+        email: u.email || '',
+      });
+    });
+
+    const hubsList =
+      hubIds.size > 0
+        ? await hubRepo.find({ where: { id: In(Array.from(hubIds)) } })
+        : [];
+    const hubsById = new Map<number, string>(
+      hubsList.map((h) => [h.id, h.name]),
+    );
+
+    const activeTrips = allTrips.filter((t) => !t.deletedAt);
+    const representativeTrips = activeTrips.length > 0 ? activeTrips : allTrips;
+
+    const isInboundTrip =
+      representativeTrips.some((t) => t.type === 'INBOUND') &&
+      !representativeTrips.some(
+        (t) => t.type === 'OUTBOUND' || t.type === 'TRANSFER',
+      );
+    const isTransferTrip = representativeTrips.some(
+      (t) => t.type === 'TRANSFER' || t.destinationHubId != null,
+    );
+    const tripType: 'INBOUND' | 'OUTBOUND' | 'TRANSFER' = isInboundTrip
+      ? 'INBOUND'
+      : isTransferTrip
+        ? 'TRANSFER'
+        : 'OUTBOUND';
+    const tripTypeLabel =
+      tripType === 'INBOUND'
+        ? 'Chuyến nhập kho'
+        : tripType === 'TRANSFER'
+          ? 'Chuyến xuất luân chuyển Hub'
+          : 'Chuyến xuất giao khách';
+
+    const tripTxs = allTxs.filter(
+      (tx) => tx.tripCode === tripCode && !tx.deletedAt,
+    );
+    const isCompleted =
+      activeTrips.some(
+        (t) => t.status === 'COMPLETED' || t.status === 'IN_TRANSIT',
+      ) ||
+      tripTxs.length > 0 ||
+      allStops.some((s) => !s.deletedAt && s.status === 'COMPLETED');
+    const isCancelled = activeTrips.length === 0;
+    const status: 'PENDING' | 'COMPLETED' | 'CANCELLED' = isCancelled
+      ? 'CANCELLED'
+      : isCompleted
+        ? 'COMPLETED'
+        : 'PENDING';
+    const statusLabel =
+      status === 'COMPLETED'
+        ? 'Đã xác nhận hoàn tất'
+        : status === 'CANCELLED'
+          ? 'Đã hủy nháp'
+          : 'Nháp chờ xử lý';
+
+    const latestTripRow = representativeTrips[representativeTrips.length - 1];
+    const firstTripRow = allTrips[0];
+    const primaryHubId =
+      latestTripRow?.originHubId ??
+      allStops[0]?.hubId ??
+      allOrders[0]?.originHubId ??
+      1;
+    const primaryHubName =
+      hubsById.get(Number(primaryHubId)) || 'Andromeda Hub - HCM';
+
+    const creatorId =
+      firstTripRow?.assignedByUserId ?? allOrders[0]?.createdByUserId ?? null;
+    const creator = creatorId ? usersById.get(Number(creatorId)) || null : null;
+
+    const operatorId =
+      tripTxs[tripTxs.length - 1]?.performedByUserId ??
+      allStops.find((s) => s.processedByUserId)?.processedByUserId ??
+      latestTripRow?.assignedByUserId ??
+      null;
+    const operator = operatorId
+      ? usersById.get(Number(operatorId)) || null
+      : null;
+
+    // Build current orders list & blockers (for pending outbound trips)
+    const blockers: Array<{
+      orderId: number;
+      orderCode: string;
+      goodsDescription: string;
+      quantityAllocated: number;
+      orderStatus: string;
+      pendingInboundTripCode: string | null;
+      pendingInboundPlate: string | null;
+      reason: string;
+    }> = [];
+
+    const currentOrders = representativeTrips.map((tr) => {
+      const ord = ordersById.get(tr.orderId);
+      const orderStatus = ord?.status || 'DRAFT';
+      const pendingInTrips = siblingTrips.filter(
+        (st) =>
+          st.orderId === tr.orderId &&
+          st.tripCode !== tripCode &&
+          st.type === 'INBOUND' &&
+          (st.status === 'PENDING' || st.status === 'WAITING'),
+      );
+      const confirmedInTx = allTxs.find(
+        (tx) =>
+          tx.orderId === tr.orderId &&
+          tx.type === InventoryTransactionType.INBOUND &&
+          !tx.deletedAt,
+      );
+      const inTrip =
+        pendingInTrips[0] ||
+        siblingTrips.find(
+          (st) => st.orderId === tr.orderId && st.type === 'INBOUND',
+        );
+
+      const isOrderBlockingOutbound =
+        tripType !== 'INBOUND' &&
+        status === 'PENDING' &&
+        (DRAFT_LIKE_STATUSES.includes(orderStatus) ||
+          pendingInTrips.length > 0);
+
+      if (isOrderBlockingOutbound && ord) {
+        const pCode = pendingInTrips[0]?.tripCode || inTrip?.tripCode || null;
+        const pPlate =
+          pendingInTrips[0]?.licensePlate || inTrip?.licensePlate || null;
+        blockers.push({
+          orderId: ord.id,
+          orderCode: ord.orderCode,
+          goodsDescription: ord.goodsDescription || 'Hàng hóa',
+          quantityAllocated: Number(tr.quantityAllocated) || 1,
+          orderStatus,
+          pendingInboundTripCode: pCode,
+          pendingInboundPlate: pPlate,
+          reason: pCode
+            ? `Đơn ${ord.orderCode} (${tr.quantityAllocated || 1} kiện) vẫn đang ở trạng thái Đơn nháp thuộc chuyến nhập ${pCode}${pPlate ? ` (Xe ${pPlate})` : ''} — chưa bấm Xác nhận nhập kho.`
+            : `Đơn ${ord.orderCode} (${tr.quantityAllocated || 1} kiện) vẫn đang ở trạng thái Đơn nháp — chưa xác nhận nhập kho.`,
+        });
+      }
+
+      return {
+        orderId: tr.orderId,
+        orderCode: ord?.orderCode || `#${tr.orderId}`,
+        goodsDescription: ord?.goodsDescription || 'Hàng hóa',
+        quantityAllocated: Number(tr.quantityAllocated) || 1,
+        weightAllocated: Number(tr.weightAllocated) || 0,
+        volumeAllocated: Number(tr.volumeAllocated) || 0,
+        orderStatus,
+        inboundTripCode: confirmedInTx?.tripCode || inTrip?.tripCode || null,
+        inboundLicensePlate:
+          confirmedInTx?.licensePlate || inTrip?.licensePlate || null,
+        inboundConfirmedAt: confirmedInTx?.createdAt || null,
+        isBlocker: isOrderBlockingOutbound,
+      };
+    });
+
+    // Build chronological timeline
+    const timeline: Array<{
+      id: string;
+      stepNumber?: number;
+      action: string;
+      actionLabel: string;
+      badgeColor: 'slate' | 'blue' | 'amber' | 'emerald' | 'purple' | 'rose';
+      createdAt: string | Date;
+      actorName: string;
+      actorEmail: string;
+      hubName: string;
+      summary: string;
+      note?: string | null;
+      changes: Array<{
+        label: string;
+        oldValue?: string | null;
+        newValue: string;
+      }>;
+    }> = [];
+
+    if (tripType === 'INBOUND') {
+      // 1. Parse initial creation from allTrips
+      const firstCreatedAt = allTrips[0].createdAt;
+      const firstCreatedMs = new Date(firstCreatedAt).getTime();
+      const firstConfirmedTx = tripTxs.find(
+        (tx) => tx.type === InventoryTransactionType.INBOUND,
+      );
+      const confirmedImmediately =
+        firstConfirmedTx &&
+        Math.abs(
+          new Date(firstConfirmedTx.createdAt).getTime() - firstCreatedMs,
+        ) <= 5000;
+
+      // Extract original plate & per-order quantities from trip.notes: "[NHẬP KHO] Xe <plate> tiếp nhận <qty> kiện tại <hub>"
+      let initialPlate: string | null = null;
+      const initialOrderQtyMap = new Map<number, number>();
+      for (const tr of allTrips) {
+        const m = tr.notes?.match(
+          /\[NHẬP KHO\]\s*Xe\s+(.+?)\s+tiếp nhận\s+(\d+)\s+kiện/i,
+        );
+        if (m) {
+          if (!initialPlate) initialPlate = m[1].trim();
+          initialOrderQtyMap.set(
+            tr.orderId,
+            Number(m[2]) || tr.quantityAllocated || 1,
+          );
+        } else {
+          initialOrderQtyMap.set(tr.orderId, Number(tr.quantityAllocated) || 1);
+        }
+      }
+      if (!initialPlate) {
+        initialPlate = firstTripRow.licensePlate || 'CHƯA CÓ TT';
+      }
+
+      const initChanges = allTrips.map((tr) => {
+        const ord = ordersById.get(tr.orderId);
+        const initQty =
+          initialOrderQtyMap.get(tr.orderId) ?? tr.quantityAllocated ?? 1;
+        return {
+          label: `Đơn ${ord?.orderCode || tr.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+          oldValue: null,
+          newValue: `${initQty} kiện`,
+        };
+      });
+
+      if (!confirmedImmediately) {
+        timeline.push({
+          id: `init-${tripCode}`,
+          action: 'TRIP_DRAFT_CREATED',
+          actionLabel: 'Tạo mới chuyến nhập nháp',
+          badgeColor: 'slate',
+          createdAt: firstCreatedAt,
+          actorName: creator?.name || 'Hệ thống',
+          actorEmail: creator?.email || '',
+          hubName: primaryHubName,
+          summary: `Khởi tạo phiếu nhập nháp ${tripCode} · Biển số: ${initialPlate}${firstTripRow.driverName && initialPlate === firstTripRow.licensePlate ? ` · Tài xế: ${firstTripRow.driverName}` : ''}`,
+          note: 'Thao tác: Bấm "Lưu nháp" (Chưa xác nhận nhập kho)',
+          changes: [
+            {
+              label: 'Biển số xe ban đầu',
+              oldValue: null,
+              newValue: initialPlate,
+            },
+            ...initChanges,
+          ],
+        });
+      }
+
+      // 2. Check explicit TRIP_DRAFT_UPDATED logs in order_activity_log
+      const draftUpdateLogs = rawLogs.filter(
+        (l) => l.tripCode === tripCode && l.action === 'TRIP_DRAFT_UPDATED',
+      );
+
+      if (draftUpdateLogs.length > 0) {
+        // Group by 2.5s window
+        const logBatches: any[][] = [];
+        for (const l of draftUpdateLogs) {
+          const lMs = new Date(l.createdAt).getTime();
+          const last = logBatches[logBatches.length - 1];
+          if (
+            last &&
+            Math.abs(lMs - new Date(last[0].createdAt).getTime()) <= 2500
+          ) {
+            last.push(l);
+          } else {
+            logBatches.push([l]);
+          }
+        }
+
+        for (const batch of logBatches) {
+          const firstLog = batch[0];
+          const actor = usersById.get(Number(firstLog.actorUserId));
+          const batchChanges: Array<{
+            label: string;
+            oldValue?: string | null;
+            newValue: string;
+          }> = [];
+          const firstOld = firstLog.oldValues || {};
+          const firstNew = firstLog.newValues || {};
+          if (
+            firstOld.licensePlate !== undefined &&
+            firstOld.licensePlate !== firstNew.licensePlate
+          ) {
+            batchChanges.push({
+              label: 'Biển số xe',
+              oldValue: firstOld.licensePlate || 'Chưa gán',
+              newValue: firstNew.licensePlate || 'Chưa gán',
+            });
+          }
+          if (
+            firstOld.driverName !== undefined &&
+            (firstOld.driverName || '') !== (firstNew.driverName || '')
+          ) {
+            batchChanges.push({
+              label: 'Tài xế',
+              oldValue: firstOld.driverName || 'Chưa gán',
+              newValue: firstNew.driverName || 'Chưa gán',
+            });
+          }
+          for (const l of batch) {
+            const ov = l.oldValues || {};
+            const nv = l.newValues || {};
+            if (
+              ov.totalQuantity !== undefined &&
+              ov.totalQuantity !== nv.totalQuantity
+            ) {
+              batchChanges.push({
+                label: `Đơn ${l.orderCode}${nv.goodsDescription ? ` (${nv.goodsDescription})` : ''}`,
+                oldValue: `${ov.totalQuantity} kiện`,
+                newValue: `${nv.totalQuantity} kiện (${nv.totalWeight ?? 0} kg · ${nv.totalVolume ?? 0} m³)`,
+              });
+            }
+          }
+
+          timeline.push({
+            id: `draft-upd-${firstLog.id}`,
+            action: 'TRIP_DRAFT_UPDATED',
+            actionLabel: 'Chỉnh sửa & Lưu nháp',
+            badgeColor: 'amber',
+            createdAt: firstLog.createdAt,
+            actorName:
+              actor?.name ||
+              (firstLog.actorEmail
+                ? firstLog.actorEmail.split('@')[0]
+                : 'Thủ kho'),
+            actorEmail: actor?.email || firstLog.actorEmail || '',
+            hubName: firstLog.hubName || primaryHubName,
+            summary:
+              batchChanges.length > 0
+                ? `Mở lại phiếu nháp ${tripCode} chỉnh sửa thông tin và bấm "Lưu nháp"`
+                : `Mở lại phiếu nháp ${tripCode} và bấm "Lưu nháp" (giữ nguyên thông tin xe ${firstNew.licensePlate || latestTripRow?.licensePlate || ''}, tài xế ${firstNew.driverName || latestTripRow?.driverName || '—'})`,
+            note: 'Thao tác: Bấm "Lưu nháp" (Chưa bấm Xác nhận nhập kho)',
+            changes: batchChanges,
+          });
+        }
+      } else {
+        // Reconstruct draft edits from timestamps & notes diff (for historical trips like SD1043, SD1055)
+        const candidateTimes: number[] = [];
+        allTrips.forEach((tr) => {
+          const uMs = new Date(tr.updatedAt).getTime();
+          if (uMs > firstCreatedMs + 3000) candidateTimes.push(uMs);
+        });
+        allStops.forEach((s) => {
+          const uMs = new Date(s.updatedAt).getTime();
+          if (s.status === 'PENDING' && uMs > firstCreatedMs + 3000) {
+            candidateTimes.push(uMs);
+          }
+        });
+        allOrders.forEach((o) => {
+          const uMs = new Date(o.updatedAt).getTime();
+          if (
+            DRAFT_LIKE_STATUSES.includes(o.status) &&
+            uMs > firstCreatedMs + 3000
+          ) {
+            candidateTimes.push(uMs);
+          }
+        });
+
+        const confirmedMs = firstConfirmedTx
+          ? new Date(firstConfirmedTx.createdAt).getTime()
+          : null;
+        const draftEditTimes = candidateTimes.filter(
+          (ms) => !confirmedMs || ms < confirmedMs - 3000,
+        );
+
+        if (draftEditTimes.length > 0) {
+          const latestDraftEditMs = Math.max(...draftEditTimes);
+          const diffChanges: Array<{
+            label: string;
+            oldValue?: string | null;
+            newValue: string;
+          }> = [];
+
+          const currentPlate = latestTripRow?.licensePlate || 'CHƯA CÓ TT';
+          const currentDriver = latestTripRow?.driverName || null;
+
+          if (
+            initialPlate &&
+            currentPlate &&
+            initialPlate.toUpperCase() !== currentPlate.toUpperCase()
+          ) {
+            diffChanges.push({
+              label: 'Biển số xe',
+              oldValue: initialPlate,
+              newValue: currentPlate,
+            });
+            if (currentDriver) {
+              diffChanges.push({
+                label: 'Tài xế',
+                oldValue: 'Chưa gán',
+                newValue: currentDriver,
+              });
+            }
+          }
+
+          for (const tr of allTrips) {
+            const ord = ordersById.get(tr.orderId);
+            const initQty = initialOrderQtyMap.get(tr.orderId);
+            const curQty = Number(tr.quantityAllocated) || 1;
+            if (tr.deletedAt) {
+              diffChanges.push({
+                label: `Đơn ${ord?.orderCode || tr.orderId}`,
+                oldValue: `${initQty ?? curQty} kiện`,
+                newValue: 'Đã xóa khỏi chuyến nháp',
+              });
+            } else if (initQty !== undefined && initQty !== curQty) {
+              diffChanges.push({
+                label: `Đơn ${ord?.orderCode || tr.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+                oldValue: `${initQty} kiện`,
+                newValue: `${curQty} kiện (${tr.weightAllocated ?? 0} kg · ${tr.volumeAllocated ?? 0} m³)`,
+              });
+            }
+          }
+
+          timeline.push({
+            id: `reconstructed-edit-${tripCode}`,
+            action: 'TRIP_DRAFT_UPDATED',
+            actionLabel:
+              diffChanges.length > 0
+                ? 'Chỉnh sửa & Lưu nháp'
+                : 'Mở phiếu & Lưu nháp lại',
+            badgeColor: 'amber',
+            createdAt: new Date(latestDraftEditMs).toISOString(),
+            actorName: operator?.name || creator?.name || 'Thủ kho',
+            actorEmail: operator?.email || creator?.email || '',
+            hubName: primaryHubName,
+            summary:
+              diffChanges.length > 0
+                ? `Mở lại phiếu nháp ${tripCode} để cập nhật thông tin xe / số lượng kiện`
+                : `Mở lại phiếu nháp ${tripCode} (giữ nguyên biển số ${currentPlate}${currentDriver ? `, tài xế ${currentDriver}` : ''}, tổng ${activeTrips.reduce((s, x) => s + (Number(x.quantityAllocated) || 0), 0)} kiện)`,
+            note: 'Thao tác: Bấm "Lưu nháp" (Chưa bấm Xác nhận nhập kho)',
+            changes: diffChanges,
+          });
+        }
+      }
+
+      // 3. Inbound Confirmations (from active INBOUND inventory transactions)
+      const inTxs = tripTxs.filter(
+        (tx) => tx.type === InventoryTransactionType.INBOUND,
+      );
+      if (inTxs.length > 0) {
+        const txBatches: OrderInventoryTransactionEntity[][] = [];
+        for (const tx of inTxs) {
+          const txMs = new Date(tx.createdAt).getTime();
+          const last = txBatches[txBatches.length - 1];
+          if (
+            last &&
+            Math.abs(txMs - new Date(last[0].createdAt).getTime()) <= 3000
+          ) {
+            last.push(tx);
+          } else {
+            txBatches.push([tx]);
+          }
+        }
+
+        for (const batch of txBatches) {
+          const firstTx = batch[0];
+          const txActor = firstTx.performedByUserId
+            ? usersById.get(Number(firstTx.performedByUserId))
+            : operator || creator;
+          const totalInQty = batch.reduce(
+            (s, x) => s + (Number(x.quantity) || 0),
+            0,
+          );
+          const isPartialReceive =
+            batch.length < activeTrips.length && status === 'PENDING';
+
+          timeline.push({
+            id: `inbound-confirm-${firstTx.id}`,
+            action: 'INBOUND_CONFIRMED',
+            actionLabel: isPartialReceive
+              ? 'Nhập kho đơn lẻ trên xe'
+              : 'Xác nhận nhập kho hoàn tất',
+            badgeColor: 'emerald',
+            createdAt: firstTx.createdAt,
+            actorName: txActor?.name || 'Thủ kho',
+            actorEmail: txActor?.email || '',
+            hubName:
+              (firstTx.hubId && hubsById.get(Number(firstTx.hubId))) ||
+              primaryHubName,
+            summary: `Xác nhận nhập kho ${batch.length} đơn (${totalInQty} kiện) từ chuyến ${tripCode}${firstTx.licensePlate ? ` (Xe ${firstTx.licensePlate})` : ''}${firstTx.invoiceCode ? ` · Mã phiếu: ${firstTx.invoiceCode}` : ''}`,
+            note: null,
+            changes: batch.map((tx) => {
+              const ord = ordersById.get(tx.orderId);
+              return {
+                label: `Đơn ${ord?.orderCode || tx.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+                oldValue: null,
+                newValue: `Nhập kho ${tx.quantity} kiện (${tx.weight ?? 0} kg · ${tx.volume ?? 0} m³)`,
+              };
+            }),
+          });
+        }
+      }
+    } else {
+      // OUTBOUND / TRANSFER TRIP TIMELINE
+      // Reconstruct all draft save batches from allTrips (withDeleted: true)
+      const draftTripRows = allTrips.filter(
+        (t) =>
+          t.status === 'PENDING' ||
+          (t.notes && t.notes.startsWith('[NHÁP XUẤT KHO')),
+      );
+      const batches: Array<{
+        timeMs: number;
+        createdAt: Date | string;
+        userId: number | null;
+        licensePlate: string | null;
+        driverName: string | null;
+        pickupDate: string | null;
+        items: TripEntity[];
+      }> = [];
+
+      for (const tr of draftTripRows) {
+        const tMs = new Date(tr.createdAt).getTime();
+        const last = batches[batches.length - 1];
+        if (last && Math.abs(tMs - last.timeMs) <= 2500) {
+          last.items.push(tr);
+        } else {
+          batches.push({
+            timeMs: tMs,
+            createdAt: tr.createdAt,
+            userId: tr.assignedByUserId ? Number(tr.assignedByUserId) : null,
+            licensePlate: tr.licensePlate || null,
+            driverName: tr.driverName || null,
+            pickupDate: tr.pickupDate ? String(tr.pickupDate) : null,
+            items: [tr],
+          });
+        }
+      }
+
+      for (let idx = 0; idx < batches.length; idx++) {
+        const b = batches[idx];
+        const bActor = b.userId ? usersById.get(b.userId) : creator;
+        const totalBatchQty = b.items.reduce(
+          (s, i) => s + (Number(i.quantityAllocated) || 0),
+          0,
+        );
+
+        if (idx === 0) {
+          timeline.push({
+            id: `out-batch-0`,
+            action: 'TRIP_DRAFT_CREATED',
+            actionLabel: 'Tạo mới chuyến xuất nháp',
+            badgeColor: 'slate',
+            createdAt: b.createdAt,
+            actorName: bActor?.name || 'Thủ kho',
+            actorEmail: bActor?.email || '',
+            hubName: primaryHubName,
+            summary: `Khởi tạo phiếu xuất nháp ${tripCode} · Xe ${b.licensePlate || 'Chưa gán'}${b.driverName ? ` · Tài xế: ${b.driverName}` : ''} (${b.items.length} đơn · ${totalBatchQty} kiện)`,
+            note: 'Thao tác: Bấm "Lưu nháp"',
+            changes: b.items.map((item) => {
+              const ord = ordersById.get(item.orderId);
+              return {
+                label: `Đơn ${ord?.orderCode || item.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+                oldValue: null,
+                newValue: `Dự kiến xuất ${item.quantityAllocated || 1} kiện (${item.weightAllocated ?? 0} kg · ${item.volumeAllocated ?? 0} m³)`,
+              };
+            }),
+          });
+        } else {
+          const prev = batches[idx - 1];
+          const prevMap = new Map<number, TripEntity>(
+            prev.items.map((i) => [i.orderId, i]),
+          );
+          const currMap = new Map<number, TripEntity>(
+            b.items.map((i) => [i.orderId, i]),
+          );
+          const batchChanges: Array<{
+            label: string;
+            oldValue?: string | null;
+            newValue: string;
+          }> = [];
+
+          if ((prev.licensePlate || '') !== (b.licensePlate || '')) {
+            batchChanges.push({
+              label: 'Biển số xe',
+              oldValue: prev.licensePlate || 'Chưa gán',
+              newValue: b.licensePlate || 'Chưa gán',
+            });
+          }
+          if ((prev.driverName || '') !== (b.driverName || '')) {
+            batchChanges.push({
+              label: 'Tài xế',
+              oldValue: prev.driverName || 'Chưa gán',
+              newValue: b.driverName || 'Chưa gán',
+            });
+          }
+
+          for (const item of b.items) {
+            const ord = ordersById.get(item.orderId);
+            const prevItem = prevMap.get(item.orderId);
+            if (!prevItem) {
+              batchChanges.push({
+                label: `Thêm đơn ${ord?.orderCode || item.orderId}`,
+                oldValue: null,
+                newValue: `${item.quantityAllocated || 1} kiện (${item.weightAllocated ?? 0} kg · ${item.volumeAllocated ?? 0} m³)`,
+              });
+            } else if (
+              Number(prevItem.quantityAllocated) !==
+              Number(item.quantityAllocated)
+            ) {
+              batchChanges.push({
+                label: `Đơn ${ord?.orderCode || item.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+                oldValue: `${prevItem.quantityAllocated} kiện`,
+                newValue: `${item.quantityAllocated} kiện (${item.weightAllocated ?? 0} kg · ${item.volumeAllocated ?? 0} m³)`,
+              });
+            }
+          }
+
+          for (const prevItem of prev.items) {
+            if (!currMap.has(prevItem.orderId)) {
+              const ord = ordersById.get(prevItem.orderId);
+              batchChanges.push({
+                label: `Gỡ đơn ${ord?.orderCode || prevItem.orderId}`,
+                oldValue: `${prevItem.quantityAllocated} kiện`,
+                newValue: 'Đã gỡ khỏi chuyến xuất nháp',
+              });
+            }
+          }
+
+          timeline.push({
+            id: `out-batch-${idx}`,
+            action: 'TRIP_DRAFT_UPDATED',
+            actionLabel:
+              batchChanges.length > 0
+                ? 'Chỉnh sửa & Lưu nháp'
+                : 'Mở phiếu & Lưu nháp lại',
+            badgeColor: 'amber',
+            createdAt: b.createdAt,
+            actorName: bActor?.name || 'Thủ kho',
+            actorEmail: bActor?.email || '',
+            hubName: primaryHubName,
+            summary:
+              batchChanges.length > 0
+                ? `Cập nhật phiếu xuất nháp ${tripCode} (${b.items.length} đơn · ${totalBatchQty} kiện)`
+                : `Mở phiếu xuất nháp ${tripCode} và bấm "Lưu nháp" (giữ nguyên ${b.items.length} đơn · ${totalBatchQty} kiện)`,
+            note: 'Thao tác: Bấm "Lưu nháp" (Chưa xác nhận xuất kho)',
+            changes: batchChanges,
+          });
+        }
+      }
+
+      // Also include milestones when draft inbound orders inside this outbound trip were confirmed inbound!
+      const firstBatchMs = batches[0]?.timeMs ?? 0;
+      const relatedInTxs = allTxs.filter(
+        (tx) =>
+          tx.type === InventoryTransactionType.INBOUND &&
+          !tx.deletedAt &&
+          orderIds.includes(tx.orderId) &&
+          new Date(tx.createdAt).getTime() > firstBatchMs,
+      );
+
+      if (relatedInTxs.length > 0) {
+        const inGroups = new Map<string, OrderInventoryTransactionEntity[]>();
+        for (const tx of relatedInTxs) {
+          const key = tx.tripCode || String(tx.id);
+          const list = inGroups.get(key) || [];
+          list.push(tx);
+          inGroups.set(key, list);
+        }
+
+        for (const [inTripCode, txList] of inGroups.entries()) {
+          const firstTx = txList[0];
+          const inActor = firstTx.performedByUserId
+            ? usersById.get(Number(firstTx.performedByUserId))
+            : null;
+          timeline.push({
+            id: `rel-in-${inTripCode}-${firstTx.id}`,
+            action: 'RELATED_INBOUND_CONFIRMED',
+            actionLabel: 'Đã xác nhận nhập kho đơn trong chuyến',
+            badgeColor: 'blue',
+            createdAt: firstTx.createdAt,
+            actorName: inActor?.name || 'Thủ kho',
+            actorEmail: inActor?.email || '',
+            hubName:
+              (firstTx.hubId && hubsById.get(Number(firstTx.hubId))) ||
+              primaryHubName,
+            summary: `Xác nhận nhập kho ${txList.length} đơn thuộc chuyến nhập ${inTripCode}${firstTx.licensePlate ? ` (Xe ${firstTx.licensePlate})` : ''} — sẵn sàng tồn kho để xuất`,
+            note: null,
+            changes: txList.map((tx) => {
+              const ord = ordersById.get(tx.orderId);
+              return {
+                label: `Đơn ${ord?.orderCode || tx.orderId}`,
+                oldValue: 'Đơn nháp (Chờ nhập)',
+                newValue: `Đã nhập kho ${tx.quantity} kiện (Lưu kho)`,
+              };
+            }),
+          });
+        }
+      }
+
+      // Outbound Confirmations
+      const outTxs = tripTxs.filter(
+        (tx) =>
+          tx.type === InventoryTransactionType.OUTBOUND ||
+          tx.type === InventoryTransactionType.TRANSFER,
+      );
+      if (outTxs.length > 0) {
+        const firstOut = outTxs[0];
+        const outActor = firstOut.performedByUserId
+          ? usersById.get(Number(firstOut.performedByUserId))
+          : operator || creator;
+        const totalOutQty = outTxs.reduce(
+          (s, x) => s + (Number(x.quantity) || 0),
+          0,
+        );
+        timeline.push({
+          id: `outbound-confirm-${firstOut.id}`,
+          action: 'OUTBOUND_CONFIRMED',
+          actionLabel: 'Xác nhận xuất kho hoàn tất',
+          badgeColor: 'purple',
+          createdAt: firstOut.createdAt,
+          actorName: outActor?.name || 'Thủ kho',
+          actorEmail: outActor?.email || '',
+          hubName:
+            (firstOut.hubId && hubsById.get(Number(firstOut.hubId))) ||
+            primaryHubName,
+          summary: `Xác nhận xuất kho ${outTxs.length} đơn (${totalOutQty} kiện) trên chuyến ${tripCode}${firstOut.licensePlate ? ` (Xe ${firstOut.licensePlate})` : ''}${firstOut.invoiceCode ? ` · Mã phiếu: ${firstOut.invoiceCode}` : ''}`,
+          note: null,
+          changes: outTxs.map((tx) => {
+            const ord = ordersById.get(tx.orderId);
+            return {
+              label: `Đơn ${ord?.orderCode || tx.orderId}${ord?.goodsDescription ? ` (${ord.goodsDescription})` : ''}`,
+              oldValue: null,
+              newValue: `Xuất kho ${tx.quantity} kiện${tx.destination ? ` → ${tx.destination}` : ''}`,
+            };
+          }),
+        });
+      }
+    }
+
+    // Append Rollback or Cancel events from order_activity_log
+    const specialLogs = rawLogs.filter(
+      (l) =>
+        l.tripCode === tripCode &&
+        (l.action === 'TRIP_ROLLBACK' || l.action === 'DRAFT_CANCELLED'),
+    );
+    const specialBatches: any[][] = [];
+    for (const l of specialLogs) {
+      const lMs = new Date(l.createdAt).getTime();
+      const last = specialBatches[specialBatches.length - 1];
+      if (
+        last &&
+        last[0].action === l.action &&
+        Math.abs(lMs - new Date(last[0].createdAt).getTime()) <= 2500
+      ) {
+        last.push(l);
+      } else {
+        specialBatches.push([l]);
+      }
+    }
+
+    for (const batch of specialBatches) {
+      const first = batch[0];
+      const sActor = usersById.get(Number(first.actorUserId));
+      timeline.push({
+        id: `special-${first.id}`,
+        action: first.action,
+        actionLabel:
+          first.action === 'TRIP_ROLLBACK'
+            ? 'Mở lại chuyến xe (Hoàn tác)'
+            : 'Hủy chuyến nháp',
+        badgeColor: 'rose',
+        createdAt: first.createdAt,
+        actorName:
+          sActor?.name ||
+          (first.actorEmail ? first.actorEmail.split('@')[0] : 'Quản trị viên'),
+        actorEmail: sActor?.email || first.actorEmail || '',
+        hubName: first.hubName || primaryHubName,
+        summary:
+          first.reason ||
+          (first.action === 'TRIP_ROLLBACK'
+            ? `Mở lại chuyến xe ${tripCode} về trạng thái Chờ xử lý`
+            : `Hủy chuyến nháp ${tripCode}`),
+        note: null,
+        changes: [],
+      });
+    }
+
+    // Sort timeline oldest -> newest to assign Lần 1..N, then return newest first (or with stepNumber)
+    timeline.sort(
+      (a, b) =>
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+    timeline.forEach((item, idx) => {
+      item.stepNumber = idx + 1;
+    });
+    const timelineNewestFirst = [...timeline].reverse();
+
+    return {
+      tripCode,
+      summary: {
+        tripCode,
+        tripType,
+        tripTypeLabel,
+        status,
+        statusLabel,
+        licensePlate: latestTripRow?.licensePlate || 'CHƯA CÓ TT',
+        driverName: latestTripRow?.driverName || null,
+        pickupDate: (() => {
+          const rawTs =
+            tripTxs[tripTxs.length - 1]?.createdAt ||
+            latestTripRow?.updatedAt ||
+            latestTripRow?.createdAt ||
+            latestTripRow?.pickupDate;
+          if (!rawTs) return null;
+          const d = new Date(rawTs);
+          return Number.isNaN(d.getTime())
+            ? String(rawTs)
+            : d.toLocaleDateString('sv-SE', {
+                timeZone: 'Asia/Ho_Chi_Minh',
+              });
+        })(),
+        hubId: primaryHubId,
+        hubName: primaryHubName,
+        totalOrders: currentOrders.length,
+        totalQuantity: currentOrders.reduce(
+          (s, o) => s + (Number(o.quantityAllocated) || 0),
+          0,
+        ),
+        totalWeight: currentOrders.reduce(
+          (s, o) => s + (Number(o.weightAllocated) || 0),
+          0,
+        ),
+        totalVolume: currentOrders.reduce(
+          (s, o) => s + (Number(o.volumeAllocated) || 0),
+          0,
+        ),
+        createdAt: firstTripRow?.createdAt,
+        updatedAt: latestTripRow?.updatedAt,
+        creator,
+        operator,
+      },
+      blockers,
+      orders: currentOrders,
+      timeline: timelineNewestFirst,
     };
   }
 }
