@@ -7,6 +7,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { DailyHubOperationalReportEntity } from './infrastructure/persistence/relational/entities/daily-hub-operational-report.entity';
+import { DailyRegionalDispatchReportEntity } from './infrastructure/persistence/relational/entities/daily-regional-dispatch-report.entity';
+import { normalizeRegion, RegionEnum } from './utils/region-normalizer.util';
 import { CronJobConfigEntity } from './infrastructure/persistence/relational/entities/cron-job-config.entity';
 import { CronJobExecutionLogEntity } from './infrastructure/persistence/relational/entities/cron-job-execution-log.entity';
 import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
@@ -97,6 +99,8 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     private readonly dataSource: DataSource,
     @InjectRepository(DailyHubOperationalReportEntity)
     private readonly reportRepository: Repository<DailyHubOperationalReportEntity>,
+    @InjectRepository(DailyRegionalDispatchReportEntity)
+    private readonly regionalReportRepository: Repository<DailyRegionalDispatchReportEntity>,
     @InjectRepository(CronJobConfigEntity)
     private readonly cronConfigRepository: Repository<CronJobConfigEntity>,
     @InjectRepository(CronJobExecutionLogEntity)
@@ -169,6 +173,43 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS "IDX_daily_hub_op_report_reportDate" ON "daily_hub_operational_report" ("reportDate");
         CREATE INDEX IF NOT EXISTS "IDX_daily_hub_op_report_hubId" ON "daily_hub_operational_report" ("hubId");
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE "order" ADD COLUMN IF NOT EXISTS "destinationRegion" character varying(50);
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS "IDX_order_destinationRegion" ON "order" ("destinationRegion");
+      `);
+      await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS "daily_regional_dispatch_report" (
+          "id" SERIAL NOT NULL,
+          "reportDate" character varying(10) NOT NULL,
+          "hubId" integer NOT NULL,
+          "region" character varying(50) NOT NULL,
+          "onhandWeightKg" double precision NOT NULL DEFAULT 0,
+          "onhandVolumeCbm" double precision NOT NULL DEFAULT 0,
+          "onhandPackageCount" integer NOT NULL DEFAULT 0,
+          "onhandOrderCount" integer NOT NULL DEFAULT 0,
+          "incomingWeightKg" double precision NOT NULL DEFAULT 0,
+          "incomingVolumeCbm" double precision NOT NULL DEFAULT 0,
+          "incomingPackageCount" integer NOT NULL DEFAULT 0,
+          "incomingTripCount" integer NOT NULL DEFAULT 0,
+          "totalWeightKg" double precision NOT NULL DEFAULT 0,
+          "totalVolumeCbm" double precision NOT NULL DEFAULT 0,
+          "triggeredBy" character varying(30) NOT NULL DEFAULT 'CRON',
+          "calculatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "deletedAt" TIMESTAMP,
+          CONSTRAINT "PK_daily_regional_dispatch_report_id" PRIMARY KEY ("id"),
+          CONSTRAINT "UQ_daily_regional_dispatch_report_date_hub_region" UNIQUE ("reportDate", "hubId", "region"),
+          CONSTRAINT "FK_daily_regional_dispatch_report_hub" FOREIGN KEY ("hubId") REFERENCES "hub"("id") ON DELETE CASCADE
+        );
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS "IDX_daily_regional_report_date" ON "daily_regional_dispatch_report" ("reportDate");
+        CREATE INDEX IF NOT EXISTS "IDX_daily_regional_report_hubId" ON "daily_regional_dispatch_report" ("hubId");
+        CREATE INDEX IF NOT EXISTS "IDX_daily_regional_report_region" ON "daily_regional_dispatch_report" ("region");
       `);
       await this.dataSource.query(`
         CREATE TABLE IF NOT EXISTS "cron_job_config" (
@@ -386,6 +427,16 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         cutoffHour: 18,
         notifySuperAdmins: false,
       },
+      {
+        jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT',
+        name: 'Cân đối Tải trọng Đội xe theo Miền (Bắc - Trung - Nam)',
+        description:
+          'Định kỳ quét tồn kho khả dụng và các chuyến xe trung chuyển đang trên đường để tổng hợp sản lượng tải trọng theo 3 miền (Bắc, Trung, Nam) phục vụ điều phối đội xe',
+        isEnabled: true,
+        cronTime: '17:00',
+        cutoffHour: 18,
+        notifySuperAdmins: true,
+      },
     ];
 
     if (!this.defaultConfigsSeeded) {
@@ -483,6 +534,48 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           );
         } finally {
           this.isRunningCron = false;
+        }
+      }
+
+      // ── 2. Kiểm tra và kích hoạt Cronjob Tải trọng Đội xe theo Miền ──
+      const regionalConfig = await this.cronConfigRepository.findOne({
+        where: { jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT' },
+      });
+      if (regionalConfig && regionalConfig.isEnabled) {
+        const [regH, regM] = (regionalConfig.cronTime || '17:00')
+          .split(':')
+          .map(Number);
+        if (vn.hour === regH && vn.minute >= regM) {
+          const todayDate = `${vn.year}-${String(vn.month).padStart(2, '0')}-${String(vn.day).padStart(2, '0')}`;
+          if (regionalConfig.lastReportDate !== todayDate) {
+            this.logger.log(
+              `[REGIONAL CRON ${regionalConfig.cronTime}] Đang chạy tổng hợp snapshot tải trọng đội xe ngày ${todayDate}...`,
+            );
+            const startTime = Date.now();
+            await this.calculateRegionalDispatchSnapshot({
+              date: todayDate,
+              triggeredBy: 'CRON',
+            });
+            const durationMs = Date.now() - startTime;
+            regionalConfig.lastReportDate = todayDate;
+            regionalConfig.lastRunAt = new Date();
+            regionalConfig.lastRunStatus = 'SUCCESS';
+            await this.cronConfigRepository.save(regionalConfig);
+
+            await this.cronLogRepository.save(
+              this.cronLogRepository.create({
+                jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT',
+                targetDate: todayDate,
+                targetEndDate: todayDate,
+                windowLabel: `Snapshot tải trọng đội xe ngày ${todayDate}`,
+                triggeredBy: 'CRON_SCHEDULED',
+                startedAt: new Date(startTime),
+                finishedAt: new Date(),
+                durationMs,
+                status: 'SUCCESS',
+              }),
+            );
+          }
         }
       }
     } catch (err) {
@@ -2622,6 +2715,604 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       outboundTripsList: outboundTripList,
       pendingTrips,
       recentDaysStrip,
+    };
+  }
+
+  // =========================================================================================
+  // ── PHÂN HỆ CÂN ĐỐI TẢI TRỌNG ĐỘI XE THEO MIỀN (REGIONAL DISPATCH CAPACITY REPORT) ───────
+  // =========================================================================================
+
+  /**
+   * Helper tính toán gợi ý phương tiện vận tải từ tổng khối lượng (tấn) và thể tích (khối)
+   */
+  public getVehicleRecommendation(
+    weightTons: number,
+    volumeCbm: number,
+  ): string {
+    if (weightTons <= 0 && volumeCbm <= 0) return 'Chưa có hàng';
+    if (weightTons >= 25 || volumeCbm >= 65) {
+      const conts = Math.max(1, Math.round(weightTons / 25));
+      return `Cần ~${conts} Container 40ft (hoặc xe đầu kéo)`;
+    }
+    if (weightTons >= 15 || volumeCbm >= 40) {
+      return 'Cần 01 Xe tải 15 Tấn';
+    }
+    if (weightTons >= 8 || volumeCbm >= 22) {
+      return 'Cần 01 Xe tải 8 Tấn';
+    }
+    if (weightTons >= 3.5 || volumeCbm >= 12) {
+      return 'Cần 01 Xe tải 5 Tấn (hoặc ghép chuyến)';
+    }
+    if (weightTons >= 1.5) {
+      return 'Cần 01 Xe tải 2.5 Tấn / Xe bo trung chuyển';
+    }
+    return 'Lượng hàng ít (< 1.5T) - Ưu tiên ghép xe chạy ngang';
+  }
+
+  /**
+   * Sinh đoạn tin nhắn nhanh (Quick Snippet) định dạng sẵn để copy gửi Zalo/Telegram cho đội xe
+   */
+  public generateRegionalQuickSnippet(params: {
+    regionName: string;
+    hubName: string;
+    onhandWeightKg: number;
+    onhandPackageCount: number;
+    onhandVolumeCbm: number;
+    incomingWeightKg: number;
+    incomingTripCount: number;
+    totalWeightKg: number;
+    totalVolumeCbm: number;
+    recommendedVehicle: string;
+  }): string {
+    const onhandTons = (params.onhandWeightKg / 1000).toFixed(2);
+    const incomingTons = (params.incomingWeightKg / 1000).toFixed(2);
+    const totalTons = (params.totalWeightKg / 1000).toFixed(2);
+
+    return [
+      `[THÔNG BÁO TẢI HÀNG ${params.regionName.toUpperCase()} - ${params.hubName.toUpperCase()}]`,
+      `- Hàng sẵn tại kho: ${onhandTons} Tấn (${params.onhandPackageCount} kiện • ${params.onhandVolumeCbm.toFixed(1)} m³)`,
+      `- Hàng đang về thêm: ${incomingTons} Tấn (${params.incomingTripCount} xe đang về)`,
+      `👉 TỔNG TẢI DỰ KIẾN: ${totalTons} TẤN (${params.totalVolumeCbm.toFixed(1)} m³)`,
+      `🚚 Đề xuất điều xe: ${params.recommendedVehicle}`,
+    ].join('\n');
+  }
+
+  /**
+   * Tính toán và lưu snapshot dữ liệu cân đối tải trọng đội xe theo miền vào database.
+   * Kích hoạt tự động bởi Cronjob hoặc Super Admin bấm đồng bộ thủ công.
+   */
+  public async calculateRegionalDispatchSnapshot(options?: {
+    hubId?: number;
+    date?: string;
+    triggeredBy?: 'CRON' | 'MANUAL';
+  }): Promise<{ success: boolean; rowsProcessed: number; reportDate: string }> {
+    await this.ensureTableExists();
+
+    const now = new Date();
+    const vnParts = this.getVietnamDateParts(now);
+    const reportDate =
+      options?.date && /^\d{4}-\d{2}-\d{2}$/.test(options.date.trim())
+        ? options.date.trim()
+        : `${vnParts.year}-${String(vnParts.month).padStart(2, '0')}-${String(vnParts.day).padStart(2, '0')}`;
+
+    const triggeredBy = options?.triggeredBy || 'CRON';
+
+    const hubFilterOrders = options?.hubId
+      ? `AND o."currentHubId" = ${options.hubId}`
+      : '';
+    const rawStoredOrders = await this.dataSource.query(`
+      SELECT 
+        o.id,
+        o."orderCode",
+        o."province",
+        o."destinationRegion",
+        o."remainingQuantity",
+        o."totalQuantity",
+        o."totalWeight",
+        o."totalVolume",
+        o."currentHubId"
+      FROM "order" o
+      WHERE o."deletedAt" IS NULL
+        AND o.status = 'STORED'
+        AND o."remainingQuantity" > 0
+        AND o."currentHubId" IS NOT NULL
+        ${hubFilterOrders}
+    `);
+
+    const hubFilterTrips = options?.hubId
+      ? `AND t."destinationHubId" = ${options.hubId}`
+      : '';
+    const rawIncomingTrips = await this.dataSource.query(`
+      SELECT 
+        t.id AS "tripId",
+        t."tripCode",
+        t."status",
+        t."destinationHubId",
+        t."weightAllocated",
+        t."volumeAllocated",
+        t."quantityAllocated",
+        o.id AS "orderId",
+        o."orderCode",
+        o."province",
+        o."destinationRegion",
+        o."totalWeight",
+        o."totalVolume",
+        o."totalQuantity"
+      FROM "trip" t
+      LEFT JOIN "order" o ON o.id = t."orderId"
+      WHERE t."deletedAt" IS NULL
+        AND t.status IN ('IN_TRANSIT', 'DISPATCHED')
+        AND t."destinationHubId" IS NOT NULL
+        ${hubFilterTrips}
+    `);
+
+    const hubs = await this.hubRepository.find({
+      where: options?.hubId ? { id: options.hubId } : {},
+      select: ['id'],
+    });
+
+    const targetRegions = [
+      RegionEnum.NORTH,
+      RegionEnum.CENTRAL,
+      RegionEnum.SOUTH,
+      RegionEnum.NA,
+    ];
+    const hubRegionMap = new Map<
+      string,
+      {
+        hubId: number;
+        region: string;
+        onhandWeightKg: number;
+        onhandVolumeCbm: number;
+        onhandPackageCount: number;
+        onhandOrderCount: number;
+        incomingWeightKg: number;
+        incomingVolumeCbm: number;
+        incomingPackageCount: number;
+        incomingTripIds: Set<number>;
+      }
+    >();
+
+    for (const h of hubs) {
+      for (const reg of targetRegions) {
+        hubRegionMap.set(`${h.id}:::${reg}`, {
+          hubId: h.id,
+          region: reg,
+          onhandWeightKg: 0,
+          onhandVolumeCbm: 0,
+          onhandPackageCount: 0,
+          onhandOrderCount: 0,
+          incomingWeightKg: 0,
+          incomingVolumeCbm: 0,
+          incomingPackageCount: 0,
+          incomingTripIds: new Set(),
+        });
+      }
+    }
+
+    for (const ord of rawStoredOrders) {
+      const hId = Number(ord.currentHubId);
+      const resolvedReg =
+        ord.destinationRegion || normalizeRegion(ord.province).region;
+      const target =
+        hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
+        hubRegionMap.get(`${hId}:::${RegionEnum.NA}`);
+      if (!target) continue;
+
+      const totalQty = Number(ord.totalQuantity) || 1;
+      const remainQty = Number(ord.remainingQuantity) || 0;
+      const ratio = totalQty > 0 ? remainQty / totalQty : 1;
+
+      target.onhandWeightKg += (Number(ord.totalWeight) || 0) * ratio;
+      target.onhandVolumeCbm += (Number(ord.totalVolume) || 0) * ratio;
+      target.onhandPackageCount += remainQty;
+      target.onhandOrderCount += 1;
+    }
+
+    for (const trip of rawIncomingTrips) {
+      const hId = Number(trip.destinationHubId);
+      const resolvedReg =
+        trip.destinationRegion || normalizeRegion(trip.province).region;
+      const target =
+        hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
+        hubRegionMap.get(`${hId}:::${RegionEnum.NA}`);
+      if (!target) continue;
+
+      target.incomingWeightKg +=
+        Number(trip.weightAllocated) || Number(trip.totalWeight) || 0;
+      target.incomingVolumeCbm +=
+        Number(trip.volumeAllocated) || Number(trip.totalVolume) || 0;
+      target.incomingPackageCount +=
+        Number(trip.quantityAllocated) || Number(trip.totalQuantity) || 0;
+      if (trip.tripId) {
+        target.incomingTripIds.add(Number(trip.tripId));
+      }
+    }
+
+    const valueRows: string[] = [];
+    for (const d of hubRegionMap.values()) {
+      const onhandW = Math.round(d.onhandWeightKg * 100) / 100;
+      const onhandV = Math.round(d.onhandVolumeCbm * 10) / 10;
+      const incomingW = Math.round(d.incomingWeightKg * 100) / 100;
+      const incomingV = Math.round(d.incomingVolumeCbm * 10) / 10;
+      const totalW = Math.round((onhandW + incomingW) * 100) / 100;
+      const totalV = Math.round((onhandV + incomingV) * 10) / 10;
+
+      valueRows.push(
+        `('${reportDate}', ${d.hubId}, '${d.region}', ${onhandW}, ${onhandV}, ${d.onhandPackageCount}, ${d.onhandOrderCount}, ${incomingW}, ${incomingV}, ${d.incomingPackageCount}, ${d.incomingTripIds.size}, ${totalW}, ${totalV}, '${triggeredBy}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      );
+    }
+
+    if (valueRows.length > 0) {
+      await this.dataSource.query(`
+        INSERT INTO "daily_regional_dispatch_report" (
+          "reportDate", "hubId", "region",
+          "onhandWeightKg", "onhandVolumeCbm", "onhandPackageCount", "onhandOrderCount",
+          "incomingWeightKg", "incomingVolumeCbm", "incomingPackageCount", "incomingTripCount",
+          "totalWeightKg", "totalVolumeCbm", "triggeredBy", "calculatedAt", "createdAt", "updatedAt"
+        ) VALUES 
+        ${valueRows.join(',\n')}
+        ON CONFLICT ("reportDate", "hubId", "region") DO UPDATE SET
+          "onhandWeightKg" = EXCLUDED."onhandWeightKg",
+          "onhandVolumeCbm" = EXCLUDED."onhandVolumeCbm",
+          "onhandPackageCount" = EXCLUDED."onhandPackageCount",
+          "onhandOrderCount" = EXCLUDED."onhandOrderCount",
+          "incomingWeightKg" = EXCLUDED."incomingWeightKg",
+          "incomingVolumeCbm" = EXCLUDED."incomingVolumeCbm",
+          "incomingPackageCount" = EXCLUDED."incomingPackageCount",
+          "incomingTripCount" = EXCLUDED."incomingTripCount",
+          "totalWeightKg" = EXCLUDED."totalWeightKg",
+          "totalVolumeCbm" = EXCLUDED."totalVolumeCbm",
+          "triggeredBy" = EXCLUDED."triggeredBy",
+          "calculatedAt" = EXCLUDED."calculatedAt",
+          "updatedAt" = CURRENT_TIMESTAMP
+      `);
+    }
+
+    return {
+      success: true,
+      rowsProcessed: valueRows.length,
+      reportDate,
+    };
+
+    return {
+      success: true,
+      rowsProcessed: valueRows.length,
+      reportDate,
+    };
+  }
+
+  /**
+   * Truy xuất toàn diện Báo cáo Cân Đối Tải Trọng Đội Xe Theo Miền (Super Admin).
+   * Hỗ trợ lọc theo từng Hub hoặc toàn hệ thống.
+   */
+  public async getRegionalDispatchReport(query: {
+    hubId?: string;
+    date?: string;
+    mode?: 'live' | 'snapshot';
+  }) {
+    await this.ensureTableExists();
+
+    const now = new Date();
+    const vnParts = this.getVietnamDateParts(now);
+    const todayStr = `${vnParts.year}-${String(vnParts.month).padStart(2, '0')}-${String(vnParts.day).padStart(2, '0')}`;
+    const reportDate =
+      query?.date && /^\d{4}-\d{2}-\d{2}$/.test(query.date.trim())
+        ? query.date.trim()
+        : todayStr;
+
+    const parsedHubId =
+      query?.hubId && query.hubId !== 'ALL' ? Number(query.hubId) : null;
+
+    // Lấy thông tin Hub được chọn
+    let selectedHub: HubEntity | null = null;
+    if (parsedHubId) {
+      selectedHub = await this.hubRepository.findOne({
+        where: { id: parsedHubId },
+      });
+    }
+
+    const allHubs = await this.hubRepository.find({
+      order: { level: 'ASC', name: 'ASC' },
+    });
+
+    // Lấy cấu hình và thời điểm chạy gần nhất của Cronjob
+    const cronConfig = await this.cronConfigRepository.findOne({
+      where: { jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT' },
+    });
+
+    // Luôn tính toán cập nhật dữ liệu mới nhất (Live-first with Snapshot persist)
+    await this.calculateRegionalDispatchSnapshot({
+      hubId: parsedHubId || undefined,
+      date: reportDate,
+      triggeredBy: 'MANUAL',
+    });
+
+    // Truy vấn dữ liệu snapshot tổng hợp từ daily_regional_dispatch_report
+    const queryBuilder = this.regionalReportRepository
+      .createQueryBuilder('r')
+      .leftJoinAndSelect('r.hub', 'hub')
+      .where('r.reportDate = :reportDate', { reportDate });
+
+    if (parsedHubId) {
+      queryBuilder.andWhere('r.hubId = :hubId', { hubId: parsedHubId });
+    }
+
+    const reportRows = await queryBuilder.getMany();
+
+    // Khởi tạo cấu trúc tổng hợp cho 3 miền chính + N/A
+    const initRegionSummary = (regionName: string) => ({
+      region: regionName,
+      onhandWeightKg: 0,
+      onhandWeightTons: 0,
+      onhandVolumeCbm: 0,
+      onhandPackageCount: 0,
+      onhandOrderCount: 0,
+      incomingWeightKg: 0,
+      incomingWeightTons: 0,
+      incomingVolumeCbm: 0,
+      incomingPackageCount: 0,
+      incomingTripCount: 0,
+      totalWeightKg: 0,
+      totalWeightTons: 0,
+      totalVolumeCbm: 0,
+      recommendedVehicle: 'Chưa có hàng',
+      quickSnippet: '',
+    });
+
+    const summaryMap: Record<string, ReturnType<typeof initRegionSummary>> = {
+      [RegionEnum.NORTH]: initRegionSummary(RegionEnum.NORTH),
+      [RegionEnum.CENTRAL]: initRegionSummary(RegionEnum.CENTRAL),
+      [RegionEnum.SOUTH]: initRegionSummary(RegionEnum.SOUTH),
+      [RegionEnum.NA]: initRegionSummary(RegionEnum.NA),
+    };
+
+    for (const row of reportRows) {
+      const target = summaryMap[row.region] || summaryMap[RegionEnum.NA];
+      target.onhandWeightKg += Number(row.onhandWeightKg) || 0;
+      target.onhandVolumeCbm += Number(row.onhandVolumeCbm) || 0;
+      target.onhandPackageCount += Number(row.onhandPackageCount) || 0;
+      target.onhandOrderCount += Number(row.onhandOrderCount) || 0;
+
+      target.incomingWeightKg += Number(row.incomingWeightKg) || 0;
+      target.incomingVolumeCbm += Number(row.incomingVolumeCbm) || 0;
+      target.incomingPackageCount += Number(row.incomingPackageCount) || 0;
+      target.incomingTripCount += Number(row.incomingTripCount) || 0;
+
+      target.totalWeightKg += Number(row.totalWeightKg) || 0;
+      target.totalVolumeCbm += Number(row.totalVolumeCbm) || 0;
+    }
+
+    const hubDisplayName = selectedHub
+      ? selectedHub.name
+      : 'Tất cả Chi nhánh (Toàn quốc)';
+
+    // Hoàn tất quy đổi tấn, khuyến nghị phương tiện và Quick Snippet cho từng miền
+    for (const key of Object.keys(summaryMap)) {
+      const item = summaryMap[key];
+      item.onhandWeightKg = Math.round(item.onhandWeightKg * 100) / 100;
+      item.onhandWeightTons =
+        Math.round((item.onhandWeightKg / 1000) * 100) / 100;
+      item.onhandVolumeCbm = Math.round(item.onhandVolumeCbm * 10) / 10;
+
+      item.incomingWeightKg = Math.round(item.incomingWeightKg * 100) / 100;
+      item.incomingWeightTons =
+        Math.round((item.incomingWeightKg / 1000) * 100) / 100;
+      item.incomingVolumeCbm = Math.round(item.incomingVolumeCbm * 10) / 10;
+
+      item.totalWeightKg =
+        Math.round((item.onhandWeightKg + item.incomingWeightKg) * 100) / 100;
+      item.totalWeightTons =
+        Math.round((item.totalWeightKg / 1000) * 100) / 100;
+      item.totalVolumeCbm =
+        Math.round((item.onhandVolumeCbm + item.incomingVolumeCbm) * 10) / 10;
+
+      item.recommendedVehicle = this.getVehicleRecommendation(
+        item.totalWeightTons,
+        item.totalVolumeCbm,
+      );
+
+      item.quickSnippet = this.generateRegionalQuickSnippet({
+        regionName: item.region,
+        hubName: hubDisplayName,
+        onhandWeightKg: item.onhandWeightKg,
+        onhandPackageCount: item.onhandPackageCount,
+        onhandVolumeCbm: item.onhandVolumeCbm,
+        incomingWeightKg: item.incomingWeightKg,
+        incomingTripCount: item.incomingTripCount,
+        totalWeightKg: item.totalWeightKg,
+        totalVolumeCbm: item.totalVolumeCbm,
+        recommendedVehicle: item.recommendedVehicle,
+      });
+    }
+
+    // Tính tổng toàn hệ thống
+    const grandTotals = {
+      totalWeightKg:
+        summaryMap[RegionEnum.NORTH].totalWeightKg +
+        summaryMap[RegionEnum.CENTRAL].totalWeightKg +
+        summaryMap[RegionEnum.SOUTH].totalWeightKg +
+        summaryMap[RegionEnum.NA].totalWeightKg,
+      totalWeightTons: 0,
+      totalVolumeCbm:
+        summaryMap[RegionEnum.NORTH].totalVolumeCbm +
+        summaryMap[RegionEnum.CENTRAL].totalVolumeCbm +
+        summaryMap[RegionEnum.SOUTH].totalVolumeCbm +
+        summaryMap[RegionEnum.NA].totalVolumeCbm,
+      onhandWeightKg:
+        summaryMap[RegionEnum.NORTH].onhandWeightKg +
+        summaryMap[RegionEnum.CENTRAL].onhandWeightKg +
+        summaryMap[RegionEnum.SOUTH].onhandWeightKg +
+        summaryMap[RegionEnum.NA].onhandWeightKg,
+      incomingWeightKg:
+        summaryMap[RegionEnum.NORTH].incomingWeightKg +
+        summaryMap[RegionEnum.CENTRAL].incomingWeightKg +
+        summaryMap[RegionEnum.SOUTH].incomingWeightKg +
+        summaryMap[RegionEnum.NA].incomingWeightKg,
+      packageCount:
+        summaryMap[RegionEnum.NORTH].onhandPackageCount +
+        summaryMap[RegionEnum.CENTRAL].onhandPackageCount +
+        summaryMap[RegionEnum.SOUTH].onhandPackageCount +
+        summaryMap[RegionEnum.NA].onhandPackageCount,
+      orderCount:
+        summaryMap[RegionEnum.NORTH].onhandOrderCount +
+        summaryMap[RegionEnum.CENTRAL].onhandOrderCount +
+        summaryMap[RegionEnum.SOUTH].onhandOrderCount +
+        summaryMap[RegionEnum.NA].onhandOrderCount,
+      incomingTripCount:
+        summaryMap[RegionEnum.NORTH].incomingTripCount +
+        summaryMap[RegionEnum.CENTRAL].incomingTripCount +
+        summaryMap[RegionEnum.SOUTH].incomingTripCount +
+        summaryMap[RegionEnum.NA].incomingTripCount,
+    };
+    grandTotals.totalWeightTons =
+      Math.round((grandTotals.totalWeightKg / 1000) * 100) / 100;
+    grandTotals.totalVolumeCbm =
+      Math.round(grandTotals.totalVolumeCbm * 10) / 10;
+
+    // Chi tiết danh sách chuyến xe đang chạy về kho
+    const hubFilterSql = parsedHubId
+      ? `AND t."destinationHubId" = ${parsedHubId}`
+      : '';
+    const rawIncomingTripsList = await this.dataSource.query(`
+      SELECT 
+        t.id,
+        t."tripCode",
+        t."licensePlate",
+        t."driverName",
+        t."status",
+        t."originHubId",
+        t."destinationHubId",
+        orig.name AS "originHubName",
+        dest.name AS "destinationHubName",
+        COALESCE(t."weightAllocated", 0) AS "weightAllocated",
+        COALESCE(t."volumeAllocated", 0) AS "volumeAllocated",
+        COALESCE(t."quantityAllocated", 0) AS "quantityAllocated",
+        t."estimatedDeliveryDate",
+        t."createdAt",
+        o."orderCode",
+        o."province",
+        o."destinationRegion"
+      FROM "trip" t
+      LEFT JOIN "hub" orig ON orig.id = t."originHubId"
+      LEFT JOIN "hub" dest ON dest.id = t."destinationHubId"
+      LEFT JOIN "order" o ON o.id = t."orderId"
+      WHERE t."deletedAt" IS NULL
+        AND t.status IN ('IN_TRANSIT', 'DISPATCHED')
+        ${hubFilterSql}
+      ORDER BY t."createdAt" DESC
+      LIMIT 100
+    `);
+
+    // Chi tiết danh sách đơn hàng đang tồn tại kho
+    const storedHubFilterSql = parsedHubId
+      ? `AND o."currentHubId" = ${parsedHubId}`
+      : '';
+    const rawStoredOrdersList = await this.dataSource.query(`
+      SELECT 
+        o.id,
+        o."orderCode",
+        o."province",
+        o."destinationRegion",
+        o."remainingQuantity",
+        o."totalQuantity",
+        o."totalWeight",
+        o."totalVolume",
+        o."goodsDescription",
+        o."notes",
+        o."currentHubId",
+        h.name AS "currentHubName"
+      FROM "order" o
+      LEFT JOIN "hub" h ON h.id = o."currentHubId"
+      WHERE o."deletedAt" IS NULL
+        AND o.status = 'STORED'
+        AND o."remainingQuantity" > 0
+        ${storedHubFilterSql}
+      ORDER BY o."createdAt" DESC
+      LIMIT 150
+    `);
+
+    const onhandOrdersList = rawStoredOrdersList.map((ord: any) => {
+      const reg = ord.destinationRegion || normalizeRegion(ord.province).region;
+      const totalQty = Number(ord.totalQuantity) || 1;
+      const remainQty = Number(ord.remainingQuantity) || 0;
+      const ratio = totalQty > 0 ? remainQty / totalQty : 1;
+      const wKg =
+        Math.round((Number(ord.totalWeight) || 0) * ratio * 100) / 100;
+      const vCbm = Math.round((Number(ord.totalVolume) || 0) * ratio * 10) / 10;
+
+      return {
+        id: ord.id,
+        orderCode: ord.orderCode,
+        province: ord.province || 'Chưa nhập',
+        region: reg,
+        remainingQuantity: remainQty,
+        totalQuantity: totalQty,
+        weightKg: wKg,
+        weightTons: Math.round((wKg / 1000) * 100) / 100,
+        volumeCbm: vCbm,
+        goodsDescription: ord.goodsDescription,
+        currentHubId: ord.currentHubId,
+        currentHubName: ord.currentHubName || 'Kho hiện tại',
+      };
+    });
+
+    const incomingTripsList = rawIncomingTripsList.map((trip: any) => {
+      const reg =
+        trip.destinationRegion || normalizeRegion(trip.province).region;
+      return {
+        id: trip.id,
+        tripCode: trip.tripCode,
+        licensePlate: trip.licensePlate || 'Chưa gán xe',
+        driverName: trip.driverName || 'Chưa gán tài xế',
+        status: trip.status,
+        originHubName: trip.originHubName || 'Kho gửi',
+        destinationHubName: trip.destinationHubName || 'Kho đích',
+        weightKg: Number(trip.weightAllocated) || 0,
+        weightTons:
+          Math.round(((Number(trip.weightAllocated) || 0) / 1000) * 100) / 100,
+        volumeCbm: Number(trip.volumeAllocated) || 0,
+        packageCount: Number(trip.quantityAllocated) || 0,
+        orderCode: trip.orderCode,
+        province: trip.province || '',
+        region: reg,
+        estimatedDeliveryDate: trip.estimatedDeliveryDate,
+      };
+    });
+
+    return {
+      hub: {
+        id: selectedHub ? selectedHub.id : 0,
+        code: selectedHub ? selectedHub.code : 'ALL',
+        name: hubDisplayName,
+        level: selectedHub ? selectedHub.level : 0,
+      },
+      reportDate,
+      cronInfo: {
+        jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT',
+        name: cronConfig?.name || 'Cân đối Tải trọng Đội xe theo Miền',
+        cronTime: cronConfig?.cronTime || '17:00',
+        isEnabled: cronConfig?.isEnabled ?? true,
+        lastRunAt: cronConfig?.lastRunAt
+          ? cronConfig.lastRunAt.toISOString()
+          : null,
+        lastRunStatus: cronConfig?.lastRunStatus || 'IDLE',
+      },
+      regions: {
+        north: summaryMap[RegionEnum.NORTH],
+        central: summaryMap[RegionEnum.CENTRAL],
+        south: summaryMap[RegionEnum.SOUTH],
+        na: summaryMap[RegionEnum.NA],
+      },
+      totals: grandTotals,
+      hubsList: allHubs.map((h) => ({
+        id: h.id,
+        code: h.code,
+        name: h.name,
+        level: h.level,
+      })),
+      incomingTripsList,
+      onhandOrdersList,
     };
   }
 }

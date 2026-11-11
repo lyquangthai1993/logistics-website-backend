@@ -15,6 +15,7 @@ import { TripStopEntity } from '../trips/infrastructure/persistence/relational/e
 import { OrderInventoryTransactionEntity } from './infrastructure/persistence/relational/entities/order-inventory-transaction.entity';
 import { OrderActivityLogEntity } from './infrastructure/persistence/relational/entities/order-activity-log.entity';
 import { DailyHubOperationalReportEntity } from './infrastructure/persistence/relational/entities/daily-hub-operational-report.entity';
+import { DailyRegionalDispatchReportEntity } from './infrastructure/persistence/relational/entities/daily-regional-dispatch-report.entity';
 import { CronJobConfigEntity } from './infrastructure/persistence/relational/entities/cron-job-config.entity';
 import { CronJobExecutionLogEntity } from './infrastructure/persistence/relational/entities/cron-job-execution-log.entity';
 import { OrderActivityLogService } from './order-activity-log.service';
@@ -36,6 +37,7 @@ import { AdminReportsService } from './admin-reports.service';
       OrderInventoryTransactionEntity,
       OrderActivityLogEntity,
       DailyHubOperationalReportEntity,
+      DailyRegionalDispatchReportEntity,
       CronJobConfigEntity,
       CronJobExecutionLogEntity,
     ]),
