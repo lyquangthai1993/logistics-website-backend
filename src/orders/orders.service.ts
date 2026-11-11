@@ -441,12 +441,20 @@ export class OrdersService {
       );
     }
 
+    const confirmedInboundTxs = (order.inventoryTransactions || []).filter(
+      (tx: any) => tx && tx.type === 'INBOUND' && !tx.deletedAt,
+    );
     const pendingInboundTrips = (order.trips || []).filter(
       (t: any) =>
         t &&
         t.type === 'INBOUND' &&
         (t.status === 'PENDING' || t.status === 'WAITING') &&
-        !t.deletedAt,
+        !t.deletedAt &&
+        !confirmedInboundTxs.some(
+          (tx: any) =>
+            (t.id && Number(tx.tripId) === Number(t.id)) ||
+            (t.tripCode && tx.tripCode === t.tripCode),
+        ),
     );
     const pendingInboundTripCodes = Array.from(
       new Set(

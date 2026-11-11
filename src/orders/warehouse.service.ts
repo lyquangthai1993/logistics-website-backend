@@ -409,8 +409,9 @@ export class WarehouseService {
         );
       }
       if (flowUpper === 'OUTBOUND_LOOKUP') {
+        const pendingInboundExistsSql = `EXISTS (SELECT 1 FROM "trip" pinbt WHERE pinbt."orderId" = order.id AND pinbt."type" = 'INBOUND' AND pinbt."status" IN ('PENDING', 'WAITING') AND pinbt."deletedAt" IS NULL ${useHubContext ? 'AND (pinbt."originHubId" = :userHubId OR pinbt."originHubId" IS NULL)' : ''} AND NOT EXISTS (SELECT 1 FROM "order_inventory_transaction" pinbtx WHERE pinbtx."orderId" = pinbt."orderId" AND (pinbtx."tripId" = pinbt."id" OR (pinbt."tripCode" IS NOT NULL AND pinbtx."tripCode" = pinbt."tripCode")) AND pinbtx."type" = 'INBOUND' AND pinbtx."deletedAt" IS NULL))`;
         q.andWhere(
-          `(${statusExpr} IN (${sqlList(STORED_STATUSES)}) OR ${statusExpr} IN (${sqlList(DRAFT_LIKE_STATUSES)}))`,
+          `(${statusExpr} IN (${sqlList(STORED_STATUSES)}) OR ${statusExpr} IN (${sqlList(DRAFT_LIKE_STATUSES)}) OR ${pendingInboundExistsSql})`,
         );
       } else if (isAllStatus && flowUpper === 'INBOUND') {
         // Only items physically in or inbound to the warehouse (exclude departed ones)
@@ -1135,6 +1136,13 @@ export class WarehouseService {
     const pendingOutboundTripCodes = Array.from(
       new Set(metricItems.flatMap((it) => it.pendingOutboundTripCodes || [])),
     );
+    const totalPendingInbound = sum((it) => it.pendingInboundQuantity || 0);
+    const pendingInboundTripCodes = Array.from(
+      new Set(metricItems.flatMap((it) => it.pendingInboundTripCodes || [])),
+    );
+    const hasPendingInboundTrip =
+      pendingInboundTripCodes.length > 0 ||
+      metricItems.some((it) => Boolean(it.hasPendingInboundTrip));
     const effectiveHubStock =
       normalizedHubStock !== null
         ? Math.max(0, normalizedHubStock - totalPendingOutbound)
@@ -1329,6 +1337,9 @@ export class WarehouseService {
       hubStock: normalizedHubStock,
       pendingOutboundQuantity: totalPendingOutbound,
       pendingOutboundTripCodes,
+      pendingInboundQuantity: totalPendingInbound,
+      pendingInboundTripCodes,
+      hasPendingInboundTrip,
       effectiveHubStock,
       hubStatus,
       destinationHub: groupOriginalDestination,
@@ -3755,6 +3766,29 @@ export class WarehouseService {
       // Auto-detect isTransfer if mode is TRANSFER OR any item/order has a destination hub different from origin
       const actingOriginId =
         userHubId ?? orders[0].currentHubId ?? orders[0].originHubId ?? null;
+
+      const pendingInboundOnConfirm =
+        await this.ledgerService.getBatchPendingInboundAllocations(
+          orders.map((o) => o.id),
+          actingOriginId,
+          manager,
+        );
+      const ordersWithPendingInbound = orders.filter(
+        (o) => (pendingInboundOnConfirm.get(o.id)?.tripCodes?.length ?? 0) > 0,
+      );
+      if (ordersWithPendingInbound.length > 0) {
+        const labels = ordersWithPendingInbound
+          .map((o) => {
+            const codes = pendingInboundOnConfirm.get(o.id)?.tripCodes ?? [];
+            return codes.length > 0
+              ? `${o.orderCode} (${codes.join(', ')})`
+              : o.orderCode;
+          })
+          .join(', ');
+        throw new BadRequestException(
+          `Không thể xác nhận xuất kho vì có đơn hàng còn chuyến nhập nháp chưa hoàn tất: ${labels}. Chỉ được phép Lưu nháp (Chờ xử lý) cho đến khi hoàn tất nhập kho.`,
+        );
+      }
       const hasTransferItem = orders.some((order) => {
         const item = this.mergeOutboundItemsForOrder(dto.items, order);
         if (item?.deliveryMode === 'DIRECT_CUSTOMER') return false;
@@ -4221,11 +4255,29 @@ export class WarehouseService {
         timeZone: 'Asia/Ho_Chi_Minh',
       });
 
+      const pendingInboundMap =
+        await this.ledgerService.getBatchPendingInboundAllocations(
+          orders.map((o) => o.id),
+          actingOriginId,
+          manager,
+        );
+
       for (const order of orders) {
         const item = this.mergeOutboundItemsForOrder(dto.items, order);
         const actingHubId =
           userHubId ?? order.currentHubId ?? order.originHubId ?? null;
         const isDraft = DRAFT_LIKE_STATUSES.includes(order.status);
+        const pendingInbound =
+          actingHubId === actingOriginId
+            ? pendingInboundMap.get(order.id)
+            : (
+                await this.ledgerService.getBatchPendingInboundAllocations(
+                  [order.id],
+                  actingHubId,
+                  manager,
+                )
+              ).get(order.id);
+        const pendingInboundQty = pendingInbound?.pendingQty ?? 0;
         const hubStock =
           !isDraft && actingHubId
             ? await this.ledgerService.getHubStock(
@@ -4235,10 +4287,22 @@ export class WarehouseService {
               )
             : null;
         const availableQty = isDraft
-          ? (order.remainingQuantity ?? order.totalQuantity ?? 0)
-          : hubStock !== null
-            ? hubStock
-            : (order.remainingQuantity ?? order.totalQuantity ?? 0);
+          ? Math.max(
+              Number(order.remainingQuantity) > 0
+                ? Number(order.remainingQuantity)
+                : Math.max(
+                    0,
+                    (Number(order.totalQuantity) || 0) -
+                      (Number(order.outboundQuantity) || 0),
+                  ),
+              pendingInboundQty,
+            )
+          : (hubStock !== null
+              ? Math.max(0, hubStock)
+              : Math.max(
+                  0,
+                  Number(order.remainingQuantity ?? order.totalQuantity ?? 0),
+                )) + pendingInboundQty;
         const pendingAlloc =
           await this.ledgerService.getPendingOutboundAllocation(
             order.id,
