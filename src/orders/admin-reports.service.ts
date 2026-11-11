@@ -2806,6 +2806,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         o."orderCode",
         o."province",
         o."destinationRegion",
+        o."destinationHub",
         o."remainingQuantity",
         o."totalQuantity",
         o."totalWeight",
@@ -2813,21 +2814,25 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         o."currentHubId"
       FROM "order" o
       WHERE o."deletedAt" IS NULL
-        AND o.status = 'STORED'
+        AND o.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE')
         AND o."remainingQuantity" > 0
         AND o."currentHubId" IS NOT NULL
         ${hubFilterOrders}
     `);
 
     const hubFilterTrips = options?.hubId
-      ? `AND t."destinationHubId" = ${options.hubId}`
+      ? `AND (
+          (t.type = 'TRANSFER' AND t."destinationHubId" = ${options.hubId})
+          OR (t.type = 'INBOUND' AND t."originHubId" = ${options.hubId})
+        )`
       : '';
     const rawIncomingTrips = await this.dataSource.query(`
       SELECT 
         t.id AS "tripId",
         t."tripCode",
+        t.type AS "tripType",
         t."status",
-        t."destinationHubId",
+        CASE WHEN t.type = 'TRANSFER' THEN t."destinationHubId" ELSE t."originHubId" END AS "effectiveHubId",
         t."weightAllocated",
         t."volumeAllocated",
         t."quantityAllocated",
@@ -2835,14 +2840,19 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         o."orderCode",
         o."province",
         o."destinationRegion",
+        o."destinationHub",
         o."totalWeight",
         o."totalVolume",
-        o."totalQuantity"
+        o."totalQuantity",
+        dest.name AS "destHubName"
       FROM "trip" t
       LEFT JOIN "order" o ON o.id = t."orderId"
+      LEFT JOIN "hub" dest ON dest.id = CASE WHEN t.type = 'TRANSFER' THEN t."destinationHubId" ELSE t."originHubId" END
       WHERE t."deletedAt" IS NULL
-        AND t.status IN ('IN_TRANSIT', 'DISPATCHED')
-        AND t."destinationHubId" IS NOT NULL
+        AND (
+          (t.type = 'TRANSFER' AND t.status IN ('IN_TRANSIT', 'DISPATCHED') AND t."destinationHubId" IS NOT NULL)
+          OR (t.type = 'INBOUND' AND t.status = 'PENDING')
+        )
         ${hubFilterTrips}
     `);
 
@@ -2892,8 +2902,14 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const ord of rawStoredOrders) {
       const hId = Number(ord.currentHubId);
-      const resolvedReg =
-        ord.destinationRegion || normalizeRegion(ord.province).region;
+      let resolvedReg = ord.destinationRegion;
+      if (!resolvedReg || resolvedReg === RegionEnum.NA) {
+        resolvedReg = normalizeRegion(ord.province).region;
+      }
+      if (resolvedReg === RegionEnum.NA && ord.destinationHub) {
+        resolvedReg = normalizeRegion(ord.destinationHub).region;
+      }
+
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
         hubRegionMap.get(`${hId}:::${RegionEnum.NA}`);
@@ -2910,9 +2926,18 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     }
 
     for (const trip of rawIncomingTrips) {
-      const hId = Number(trip.destinationHubId);
-      const resolvedReg =
-        trip.destinationRegion || normalizeRegion(trip.province).region;
+      const hId = Number(trip.effectiveHubId);
+      let resolvedReg = trip.destinationRegion;
+      if (!resolvedReg || resolvedReg === RegionEnum.NA) {
+        resolvedReg = normalizeRegion(trip.province).region;
+      }
+      if (resolvedReg === RegionEnum.NA && trip.destinationHub) {
+        resolvedReg = normalizeRegion(trip.destinationHub).region;
+      }
+      if (resolvedReg === RegionEnum.NA && trip.destHubName) {
+        resolvedReg = normalizeRegion(trip.destHubName).region;
+      }
+
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
         hubRegionMap.get(`${hId}:::${RegionEnum.NA}`);
@@ -3172,12 +3197,16 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     // Chi tiết danh sách chuyến xe đang chạy về kho
     const hubFilterSql = parsedHubId
-      ? `AND t."destinationHubId" = ${parsedHubId}`
+      ? `AND (
+          (t.type = 'TRANSFER' AND t."destinationHubId" = ${parsedHubId})
+          OR (t.type = 'INBOUND' AND t."originHubId" = ${parsedHubId})
+        )`
       : '';
     const rawIncomingTripsList = await this.dataSource.query(`
       SELECT 
         t.id,
         t."tripCode",
+        t.type AS "tripType",
         t."licensePlate",
         t."driverName",
         t."status",
@@ -3192,13 +3221,17 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         t."createdAt",
         o."orderCode",
         o."province",
-        o."destinationRegion"
+        o."destinationRegion",
+        o."destinationHub"
       FROM "trip" t
       LEFT JOIN "hub" orig ON orig.id = t."originHubId"
-      LEFT JOIN "hub" dest ON dest.id = t."destinationHubId"
+      LEFT JOIN "hub" dest ON dest.id = CASE WHEN t.type = 'TRANSFER' THEN t."destinationHubId" ELSE t."originHubId" END
       LEFT JOIN "order" o ON o.id = t."orderId"
       WHERE t."deletedAt" IS NULL
-        AND t.status IN ('IN_TRANSIT', 'DISPATCHED')
+        AND (
+          (t.type = 'TRANSFER' AND t.status IN ('IN_TRANSIT', 'DISPATCHED') AND t."destinationHubId" IS NOT NULL)
+          OR (t.type = 'INBOUND' AND t.status = 'PENDING')
+        )
         ${hubFilterSql}
       ORDER BY t."createdAt" DESC
       LIMIT 100
@@ -3214,6 +3247,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         o."orderCode",
         o."province",
         o."destinationRegion",
+        o."destinationHub",
         o."remainingQuantity",
         o."totalQuantity",
         o."totalWeight",
@@ -3225,7 +3259,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       FROM "order" o
       LEFT JOIN "hub" h ON h.id = o."currentHubId"
       WHERE o."deletedAt" IS NULL
-        AND o.status = 'STORED'
+        AND o.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE')
         AND o."remainingQuantity" > 0
         ${storedHubFilterSql}
       ORDER BY o."createdAt" DESC
@@ -3233,7 +3267,14 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     `);
 
     const onhandOrdersList = rawStoredOrdersList.map((ord: any) => {
-      const reg = ord.destinationRegion || normalizeRegion(ord.province).region;
+      let reg = ord.destinationRegion;
+      if (!reg || reg === RegionEnum.NA) {
+        reg = normalizeRegion(ord.province).region;
+      }
+      if (reg === RegionEnum.NA && ord.destinationHub) {
+        reg = normalizeRegion(ord.destinationHub).region;
+      }
+
       const totalQty = Number(ord.totalQuantity) || 1;
       const remainQty = Number(ord.remainingQuantity) || 0;
       const ratio = totalQty > 0 ? remainQty / totalQty : 1;
@@ -3258,8 +3299,17 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     });
 
     const incomingTripsList = rawIncomingTripsList.map((trip: any) => {
-      const reg =
-        trip.destinationRegion || normalizeRegion(trip.province).region;
+      let reg = trip.destinationRegion;
+      if (!reg || reg === RegionEnum.NA) {
+        reg = normalizeRegion(trip.province).region;
+      }
+      if (reg === RegionEnum.NA && trip.destinationHub) {
+        reg = normalizeRegion(trip.destinationHub).region;
+      }
+      if (reg === RegionEnum.NA && trip.destinationHubName) {
+        reg = normalizeRegion(trip.destinationHubName).region;
+      }
+
       return {
         id: trip.id,
         tripCode: trip.tripCode,
