@@ -315,7 +315,22 @@ const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
   {
     standardName: 'Đồng Nai',
     region: RegionEnum.SOUTH,
-    aliases: ['dong nai', 'dnai', 'bien hoa', 'long khanh'],
+    aliases: [
+      'dong nai',
+      'dnai',
+      'dn',
+      'bien hoa',
+      'long khanh',
+      'long thanh',
+      'nhon trach',
+      'trang bom',
+      'vinh cuu',
+      'dinh quan',
+      'xuan loc',
+      'thong nhat',
+      'cam my',
+      'tan phu',
+    ],
   },
   {
     standardName: 'Bà Rịa - Vũng Tàu',
