@@ -2858,10 +2858,18 @@ export class WarehouseService {
             }
             if (!isKeepStatus) {
               const q = Number(found.totalQuantity) || 1;
-              found.status = 'INBOUND';
+              const prevOutbound = Number(found.outboundQuantity) || 0;
               found.inboundQuantity = q;
-              found.remainingQuantity = q;
-              found.outboundQuantity = 0;
+              found.outboundQuantity = prevOutbound;
+              found.remainingQuantity = Math.max(0, q - prevOutbound);
+              if (found.remainingQuantity === 0 && prevOutbound >= q) {
+                found.status =
+                  found.status === 'WAITING' || found.status === 'DRAFT'
+                    ? 'COMPLETED_INBOUND'
+                    : found.status;
+              } else {
+                found.status = 'INBOUND';
+              }
               found.currentHubId = hubId;
               found.currentTripCode = null;
               actualQty = q;
@@ -2875,20 +2883,31 @@ export class WarehouseService {
               sharedTripCode || normalizeTripCode(found.currentTripCode);
 
             const checkTripCode = rowTripCode || sharedTripCode;
-            if (checkTripCode && hubId) {
-              const already = await txRepo.findOne({
-                where: {
-                  orderId: found.id,
-                  tripCode: checkTripCode,
-                  hubId,
-                  type: InventoryTransactionType.INBOUND,
-                },
-              });
+            if (checkTripCode) {
+              const txWhere: any = {
+                orderId: found.id,
+                tripCode: checkTripCode,
+                type: InventoryTransactionType.INBOUND,
+              };
+              if (hubId) {
+                txWhere.hubId = hubId;
+              }
+              let already = await txRepo.findOne({ where: txWhere });
+              if (!already && hubId) {
+                already = await txRepo.findOne({
+                  where: {
+                    orderId: found.id,
+                    tripCode: checkTripCode,
+                    type: InventoryTransactionType.INBOUND,
+                  },
+                });
+              }
+
               if (already) {
                 const requestedQty = Number(
                   row.actualQuantity ?? row.totalQuantity,
                 );
-                if (isSuperAdmin && requestedQty > 0) {
+                if (requestedQty > 0) {
                   const qtyDiff = requestedQty - Number(already.quantity);
                   already.quantity = requestedQty;
                   if (
@@ -2916,12 +2935,18 @@ export class WarehouseService {
                     ) {
                       found.totalQuantity = Number(found.inboundQuantity);
                     }
-                    found.remainingQuantity = Math.max(
-                      0,
-                      Number(found.inboundQuantity) -
-                        (Number(found.outboundQuantity) || 0),
-                    );
                   }
+                  const outQty = Number(found.outboundQuantity) || 0;
+                  found.remainingQuantity = Math.max(
+                    0,
+                    Number(found.inboundQuantity) - outQty,
+                  );
+                  if (found.remainingQuantity === 0 && outQty > 0) {
+                    // 🛡️ Bảo toàn trạng thái đơn đã xuất kho
+                  } else if (found.remainingQuantity > 0) {
+                    found.status = 'INBOUND';
+                  }
+
                   if (
                     row.totalWeight !== undefined &&
                     Number(row.totalWeight) >= 0
@@ -3049,12 +3074,16 @@ export class WarehouseService {
                   ((Number(found.totalVolume) || 0) + actualVolume) * 1000,
                 ) / 1000;
             }
+            const outQty = Number(found.outboundQuantity) || 0;
             found.remainingQuantity = Math.max(
               0,
-              Number(found.inboundQuantity) -
-                (Number(found.outboundQuantity) || 0),
+              Number(found.inboundQuantity) - outQty,
             );
-            found.status = 'INBOUND';
+            if (found.remainingQuantity === 0 && outQty > 0) {
+              // 🛡️ Đơn đã xuất kho hoàn tất -> Giữ nguyên trạng thái xuất kho, không kéo ngược về INBOUND!
+            } else {
+              found.status = 'INBOUND';
+            }
             found.currentHubId = hubId;
             if (
               rowTripCode &&
@@ -7860,10 +7889,23 @@ export class WarehouseService {
         }
         const txList = await txQb.getMany();
 
+        const nonOutboundedTxIds: number[] = [];
         for (const tx of txList) {
           affectedOrderIds.add(tx.orderId);
           const order = await orderRepo.findOne({ where: { id: tx.orderId } });
           if (order) {
+            const outQty = Number(order.outboundQuantity) || 0;
+            // 🛡️ CHỐT CHẶN BẢO VỆ ĐƠN ĐÃ XUẤT KHO:
+            // Nếu đơn hàng đã xuất kho (outboundQuantity > 0), TUYỆT ĐỐI KHÔNG hoàn tác số lượng đã xuất
+            // và KHÔNG xóa giao dịch INBOUND gốc của đơn này (tránh làm lệch âm sổ cái tồn kho).
+            if (outQty > 0) {
+              this.logger.warn(
+                `[ROLLBACK TRIP GUARD] Đơn hàng ${order.orderCode} đã xuất kho ${outQty} kiện. Bảo lưu giao dịch INBOUND và trạng thái xuất kho của đơn này!`,
+              );
+              continue;
+            }
+
+            nonOutboundedTxIds.push(tx.id);
             const qty = Number(tx.quantity) || 0;
             order.inboundQuantity = Math.max(
               0,
@@ -7894,13 +7936,11 @@ export class WarehouseService {
           affectedOrderIds.add(t.orderId);
         }
 
-        // Đánh dấu xóa giao dịch nhập kho
-        if (txList.length > 0) {
+        // Đánh dấu xóa giao dịch nhập kho (chỉ xóa các đơn CHƯA bị xuất kho)
+        if (nonOutboundedTxIds.length > 0) {
           await manager.query(
             `UPDATE "order_inventory_transaction" SET "deletedAt" = NOW()
-             WHERE "tripCode" = $1 AND "type" = 'INBOUND' AND "deletedAt" IS NULL
-             ${operatingHubId ? 'AND "hubId" = $2' : ''}`,
-            operatingHubId ? [normTripCode, operatingHubId] : [normTripCode],
+             WHERE "id" IN (${nonOutboundedTxIds.join(',')}) AND "deletedAt" IS NULL`,
           );
         }
 
