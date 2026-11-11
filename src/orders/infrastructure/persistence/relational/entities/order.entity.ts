@@ -13,6 +13,10 @@ import {
 import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 import { TripEntity } from '../../../../../trips/infrastructure/persistence/relational/entities/trip.entity';
 import { HubEntity } from '../../../../../hubs/infrastructure/persistence/relational/entities/hub.entity';
+import {
+  normalizeRegion,
+  RegionEnum,
+} from '../../../../utils/region-normalizer.util';
 
 @Entity({
   name: 'order',
@@ -73,6 +77,10 @@ export class OrderEntity extends AbstractBaseEntity {
 
   @Column({ type: String, length: 500, nullable: true })
   province: string | null;
+
+  @Index('IDX_order_destinationRegion')
+  @Column({ type: String, length: 50, nullable: true })
+  destinationRegion: string | null;
 
   @Column({ type: 'text', nullable: true })
   accompanyingDocs: string | null;
@@ -140,6 +148,11 @@ export class OrderEntity extends AbstractBaseEntity {
     }
     if (this.currentTripCode && this.currentTripCode.length > 50) {
       this.currentTripCode = this.currentTripCode.slice(0, 50);
+    }
+    if (this.province) {
+      this.destinationRegion = normalizeRegion(this.province).region;
+    } else {
+      this.destinationRegion = RegionEnum.NA;
     }
   }
 }
