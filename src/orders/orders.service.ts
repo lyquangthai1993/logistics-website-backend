@@ -4,6 +4,7 @@ import {
   NotFoundException,
   UnprocessableEntityException,
   ForbiddenException,
+  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -653,6 +654,20 @@ export class OrdersService {
       applyScalar('totalWeight');
       applyScalar('totalVolume');
       applyScalar('goodsDescription');
+
+      if (dto.orderCode && dto.orderCode.trim() !== order.orderCode) {
+        const candidateCode = dto.orderCode.trim().toUpperCase();
+        const duplicate = await orderRepo.findOne({
+          where: { orderCode: candidateCode },
+        });
+        if (duplicate && duplicate.id !== order.id) {
+          throw new ConflictException(
+            `Mã vận đơn ${candidateCode} đã tồn tại trong hệ thống.`,
+          );
+        }
+        changes.push(`Mã vận đơn: ${order.orderCode} → ${candidateCode}`);
+        order.orderCode = candidateCode;
+      }
 
       const applyHub = async (
         idField: 'originHubId' | 'destinationHubId',
