@@ -269,35 +269,62 @@ export class OperationalLedgerService {
   }
 
   /**
-   * Batch calculation of pending outbound allocation for multiple orders at a hub.
-   */
-  /**
-   * Batch calculation of pending inbound allocations (draft/pending inbound trips) for multiple orders at a hub.
+   * Batch calculation of pending inbound allocations (draft/pending inbound trips not yet
+   * recorded in the inbound inventory ledger) for multiple orders at a hub.
    */
   async getBatchPendingInboundAllocations(
     orderIds: number[],
     hubId?: number | null,
     manager?: EntityManager,
-  ): Promise<Map<number, { pendingQty: number; tripCodes: string[] }>> {
-    const map = new Map<number, { pendingQty: number; tripCodes: string[] }>();
+  ): Promise<
+    Map<
+      number,
+      {
+        pendingQty: number;
+        pendingWeight: number;
+        pendingVolume: number;
+        tripCodes: string[];
+      }
+    >
+  > {
+    const map = new Map<
+      number,
+      {
+        pendingQty: number;
+        pendingWeight: number;
+        pendingVolume: number;
+        tripCodes: string[];
+      }
+    >();
     if (orderIds.length === 0) return map;
     const em = this.em(manager);
     const rows = await em.query(
-      `SELECT "orderId",
-              COALESCE(SUM(COALESCE("quantityAllocated", 0)), 0)::int AS "pendingQty",
-              array_agg(DISTINCT "tripCode") FILTER (WHERE "tripCode" IS NOT NULL AND COALESCE("quantityAllocated", 0) > 0) AS "tripCodes"
-       FROM "trip"
-       WHERE "orderId" = ANY($1)
-         AND "status" = 'PENDING'
-         AND "type" = 'INBOUND'
-         AND "deletedAt" IS NULL
-         ${hubId ? 'AND ("originHubId" = $2 OR "originHubId" IS NULL)' : ''}
-       GROUP BY "orderId"`,
+      `SELECT t."orderId",
+              COALESCE(SUM(COALESCE(t."quantityAllocated", 0)), 0)::int AS "pendingQty",
+              COALESCE(SUM(COALESCE(t."weightAllocated", 0)), 0)::float AS "pendingWeight",
+              COALESCE(SUM(COALESCE(t."volumeAllocated", 0)), 0)::float AS "pendingVolume",
+              array_agg(DISTINCT t."tripCode") FILTER (WHERE t."tripCode" IS NOT NULL AND COALESCE(t."quantityAllocated", 0) > 0) AS "tripCodes"
+       FROM "trip" t
+       WHERE t."orderId" = ANY($1)
+         AND t."status" IN ('PENDING', 'WAITING')
+         AND t."type" = 'INBOUND'
+         AND t."deletedAt" IS NULL
+         ${hubId ? 'AND (t."originHubId" = $2 OR t."originHubId" IS NULL)' : ''}
+         AND NOT EXISTS (
+           SELECT 1 FROM "order_inventory_transaction" oit
+           WHERE oit."orderId" = t."orderId"
+             AND (oit."tripId" = t."id" OR (t."tripCode" IS NOT NULL AND oit."tripCode" = t."tripCode"))
+             AND oit."type" = 'INBOUND'
+             AND oit."deletedAt" IS NULL
+         )
+       GROUP BY t."orderId"`,
       hubId ? [orderIds, hubId] : [orderIds],
     );
     for (const r of rows) {
       map.set(Number(r.orderId), {
         pendingQty: Number(r.pendingQty) || 0,
+        pendingWeight: Math.round((Number(r.pendingWeight) || 0) * 1000) / 1000,
+        pendingVolume: Math.round((Number(r.pendingVolume) || 0) * 1000) / 1000,
         tripCodes: r.tripCodes || [],
       });
     }
