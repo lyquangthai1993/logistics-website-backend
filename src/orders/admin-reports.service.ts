@@ -2797,6 +2797,51 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     const triggeredBy = options?.triggeredBy || 'CRON';
 
+    // ── Backfill destinationRegion cho các orders chưa được phân vùng ──────────
+    // Dùng normalizeRegion() (TypeScript util) thay vì SQL CASE/WHEN để đảm bảo
+    // logic phân vùng luôn nhất quán với @BeforeInsert/@BeforeUpdate của OrderEntity.
+    // Chỉ cập nhật các orders còn NULL / rỗng / 'N/A' — không ghi đè dữ liệu đúng.
+    try {
+      const unregionedOrders = await this.dataSource.query<
+        { id: number; province: string }[]
+      >(`
+        SELECT id, province FROM "order"
+        WHERE "deletedAt" IS NULL
+          AND "province" IS NOT NULL
+          AND ("destinationRegion" IS NULL OR "destinationRegion" = '' OR "destinationRegion" = 'N/A')
+      `);
+
+      if (unregionedOrders.length > 0) {
+        // Phân nhóm theo miền để batch UPDATE thay vì N lần UPDATE riêng lẻ
+        const regionGroups = new Map<string, number[]>();
+        for (const ord of unregionedOrders) {
+          const { region } = normalizeRegion(ord.province);
+          const existing = regionGroups.get(region) ?? [];
+          existing.push(ord.id);
+          regionGroups.set(region, existing);
+        }
+
+        for (const [region, ids] of regionGroups.entries()) {
+          if (ids.length === 0) continue;
+          const idList = ids.join(',');
+          await this.dataSource.query(`
+            UPDATE "order"
+            SET "destinationRegion" = '${region}'
+            WHERE id IN (${idList})
+          `);
+        }
+
+        this.logger.debug(
+          `[REGIONAL_SNAPSHOT] Backfill destinationRegion: ${unregionedOrders.length} orders → ${regionGroups.size} nhóm miền`,
+        );
+      }
+    } catch (backfillErr) {
+      this.logger.warn(
+        `[REGIONAL_SNAPSHOT] Backfill destinationRegion thất bại (không ảnh hưởng snapshot): ${(backfillErr as Error)?.message}`,
+      );
+    }
+    // ────────────────────────────────────────────────────────────────────────────
+
     const hubFilterOrders = options?.hubId
       ? `AND o."currentHubId" = ${options.hubId}`
       : '';
@@ -2993,12 +3038,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           "updatedAt" = CURRENT_TIMESTAMP
       `);
     }
-
-    return {
-      success: true,
-      rowsProcessed: valueRows.length,
-      reportDate,
-    };
 
     return {
       success: true,
