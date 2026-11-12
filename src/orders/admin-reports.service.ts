@@ -3330,7 +3330,50 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       };
     });
 
+    // Draft orders are expected receipts, separate from trucks in transit.
+    // Use the receiving/current hub, falling back to the origin hub for drafts.
+    const draftOrders: Array<{
+      destinationRegion: string | null;
+      province: string | null;
+      destinationHub: string | null;
+      totalWeight: number;
+      totalVolume: number;
+    }> = await this.dataSource.query(
+      `SELECT o."destinationRegion", o.province, o."destinationHub",
+              o."totalWeight", o."totalVolume"
+       FROM "order" o
+       WHERE o."deletedAt" IS NULL AND o.status = 'DRAFT'
+         AND ($1::integer IS NULL OR COALESCE(o."currentHubId", o."originHubId") = $1)`,
+      [parsedHubId],
+    );
+    const draftRegions = {
+      north: { weightKg: 0, volumeCbm: 0 },
+      central: { weightKg: 0, volumeCbm: 0 },
+      south: { weightKg: 0, volumeCbm: 0 },
+      na: { weightKg: 0, volumeCbm: 0 },
+    };
+    for (const order of draftOrders) {
+      let region = order.destinationRegion;
+      if (!region || region === RegionEnum.NA) {
+        region = normalizeRegion(order.province || '').region;
+      }
+      if (region === RegionEnum.NA && order.destinationHub) {
+        region = normalizeRegion(order.destinationHub).region;
+      }
+      const key =
+        region === RegionEnum.NORTH
+          ? 'north'
+          : region === RegionEnum.CENTRAL
+            ? 'central'
+            : region === RegionEnum.SOUTH
+              ? 'south'
+              : 'na';
+      draftRegions[key].weightKg += Number(order.totalWeight) || 0;
+      draftRegions[key].volumeCbm += Number(order.totalVolume) || 0;
+    }
+
     return {
+      draftRegions,
       hub: {
         id: selectedHub ? selectedHub.id : 0,
         code: selectedHub ? selectedHub.code : 'ALL',
