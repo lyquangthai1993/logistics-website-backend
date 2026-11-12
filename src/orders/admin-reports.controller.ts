@@ -217,4 +217,52 @@ export class AdminReportsController {
       actorUser: req?.user,
     });
   }
+
+  @Get('regional-dispatch')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Báo cáo Cân Đối Tải Trọng Đội Xe Theo Miền (Super Admin) — Phân tích Tồn kho & Sắp về theo 3 Miền (Bắc, Trung, Nam)',
+  })
+  @ApiQuery({ name: 'hubId', required: false, type: String })
+  @ApiQuery({ name: 'date', required: false, type: String })
+  @ApiQuery({ name: 'fromDate', required: false, type: String })
+  @ApiQuery({ name: 'toDate', required: false, type: String })
+  @ApiQuery({ name: 'mode', required: false, enum: ['live', 'snapshot'] })
+  async getRegionalDispatchReport(
+    @Query('hubId') hubId?: string,
+    @Query('date') date?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('mode') mode?: 'live' | 'snapshot',
+  ) {
+    return this.adminReportsService.getRegionalDispatchReport({
+      hubId,
+      date,
+      fromDate,
+      toDate,
+      mode,
+    });
+  }
+
+  @Post('regional-dispatch/sync')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Kích hoạt tính toán & đồng bộ snapshot Cân Đối Tải Trọng Đội Xe Theo Miền ngay lập tức',
+  })
+  async syncRegionalDispatchSnapshot(
+    @Request() req: any,
+    @Body()
+    body?: {
+      hubId?: number;
+      date?: string;
+    },
+  ) {
+    return this.adminReportsService.calculateRegionalDispatchSnapshot({
+      hubId: body?.hubId,
+      date: body?.date,
+      triggeredBy: 'MANUAL',
+    });
+  }
 }

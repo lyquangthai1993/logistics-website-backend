@@ -24,6 +24,11 @@ export class AdminOverrideOrderDto {
   @MinLength(5, { message: 'Lý do điều chỉnh cần tối thiểu 5 ký tự' })
   auditReason: string;
 
+  @ApiPropertyOptional({ example: 'ORD-2026-9999' })
+  @IsOptional()
+  @IsString()
+  orderCode?: string;
+
   @ApiPropertyOptional({ example: 9 })
   @IsOptional()
   @IsInt()
