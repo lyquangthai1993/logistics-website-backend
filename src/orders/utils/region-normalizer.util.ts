@@ -12,6 +12,7 @@ export enum RegionEnum {
   NORTH = 'MIỀN BẮC',
   CENTRAL = 'MIỀN TRUNG',
   SOUTH = 'MIỀN NAM',
+  STORAGE = 'LƯU KHO',
   NA = 'N/A',
 }
 
@@ -449,6 +450,14 @@ export function normalizeRegion(
 
   const rawCleaned = sanitizeProvinceString(input);
   const normalizedKey = removeVietnameseAccents(rawCleaned);
+
+  if (normalizedKey === 'luu kho' || normalizedKey === 'luu tai kho') {
+    return {
+      region: RegionEnum.STORAGE,
+      provinceName: 'Lưu Kho',
+      isRecognized: true,
+    };
+  }
 
   // 1. Kiểm tra khớp chính xác trong Lookup Map
   const directMatch = LOOKUP_MAP.get(normalizedKey);

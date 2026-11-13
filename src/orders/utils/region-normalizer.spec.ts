@@ -44,4 +44,9 @@ describe('RegionNormalizer', () => {
     expect(normalizeRegion('').region).toBe(RegionEnum.NA);
     expect(normalizeRegion('Nơi Kỳ Lạ 123456').region).toBe(RegionEnum.NA);
   });
+
+  it('should classify customer-held inventory as LƯU KHO', () => {
+    expect(normalizeRegion('Lưu Kho').region).toBe(RegionEnum.STORAGE);
+    expect(normalizeRegion('LƯU TẠI KHO').region).toBe(RegionEnum.STORAGE);
+  });
 });
