@@ -3002,6 +3002,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       RegionEnum.NORTH,
       RegionEnum.CENTRAL,
       RegionEnum.SOUTH,
+      RegionEnum.STORAGE,
       RegionEnum.NA,
     ];
     const hubRegionMap = new Map<
@@ -3314,6 +3315,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       [RegionEnum.NORTH]: initRegionSummary(RegionEnum.NORTH),
       [RegionEnum.CENTRAL]: initRegionSummary(RegionEnum.CENTRAL),
       [RegionEnum.SOUTH]: initRegionSummary(RegionEnum.SOUTH),
+      [RegionEnum.STORAGE]: initRegionSummary(RegionEnum.STORAGE),
       [RegionEnum.NA]: initRegionSummary(RegionEnum.NA),
     };
 
@@ -3393,37 +3395,44 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         summaryMap[RegionEnum.NORTH].totalWeightKg +
         summaryMap[RegionEnum.CENTRAL].totalWeightKg +
         summaryMap[RegionEnum.SOUTH].totalWeightKg +
+        summaryMap[RegionEnum.STORAGE].totalWeightKg +
         summaryMap[RegionEnum.NA].totalWeightKg,
       totalWeightTons: 0,
       totalVolumeCbm:
         summaryMap[RegionEnum.NORTH].totalVolumeCbm +
         summaryMap[RegionEnum.CENTRAL].totalVolumeCbm +
         summaryMap[RegionEnum.SOUTH].totalVolumeCbm +
+        summaryMap[RegionEnum.STORAGE].totalVolumeCbm +
         summaryMap[RegionEnum.NA].totalVolumeCbm,
       onhandWeightKg:
         summaryMap[RegionEnum.NORTH].onhandWeightKg +
         summaryMap[RegionEnum.CENTRAL].onhandWeightKg +
         summaryMap[RegionEnum.SOUTH].onhandWeightKg +
+        summaryMap[RegionEnum.STORAGE].onhandWeightKg +
         summaryMap[RegionEnum.NA].onhandWeightKg,
       incomingWeightKg:
         summaryMap[RegionEnum.NORTH].incomingWeightKg +
         summaryMap[RegionEnum.CENTRAL].incomingWeightKg +
         summaryMap[RegionEnum.SOUTH].incomingWeightKg +
+        summaryMap[RegionEnum.STORAGE].incomingWeightKg +
         summaryMap[RegionEnum.NA].incomingWeightKg,
       packageCount:
         summaryMap[RegionEnum.NORTH].onhandPackageCount +
         summaryMap[RegionEnum.CENTRAL].onhandPackageCount +
         summaryMap[RegionEnum.SOUTH].onhandPackageCount +
+        summaryMap[RegionEnum.STORAGE].onhandPackageCount +
         summaryMap[RegionEnum.NA].onhandPackageCount,
       orderCount:
         summaryMap[RegionEnum.NORTH].onhandOrderCount +
         summaryMap[RegionEnum.CENTRAL].onhandOrderCount +
         summaryMap[RegionEnum.SOUTH].onhandOrderCount +
+        summaryMap[RegionEnum.STORAGE].onhandOrderCount +
         summaryMap[RegionEnum.NA].onhandOrderCount,
       incomingTripCount:
         summaryMap[RegionEnum.NORTH].incomingTripCount +
         summaryMap[RegionEnum.CENTRAL].incomingTripCount +
         summaryMap[RegionEnum.SOUTH].incomingTripCount +
+        summaryMap[RegionEnum.STORAGE].incomingTripCount +
         summaryMap[RegionEnum.NA].incomingTripCount,
     };
     grandTotals.totalWeightTons =
@@ -3632,6 +3641,12 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         orderCount: summaryMap[RegionEnum.SOUTH].draftOrderCount,
         orderCodes: [...summaryMap[RegionEnum.SOUTH].draftOrderCodes],
       },
+      storage: {
+        weightKg: summaryMap[RegionEnum.STORAGE].draftWeightKg,
+        volumeCbm: summaryMap[RegionEnum.STORAGE].draftVolumeCbm,
+        orderCount: summaryMap[RegionEnum.STORAGE].draftOrderCount,
+        orderCodes: [...summaryMap[RegionEnum.STORAGE].draftOrderCodes],
+      },
       na: {
         weightKg: summaryMap[RegionEnum.NA].draftWeightKg,
         volumeCbm: summaryMap[RegionEnum.NA].draftVolumeCbm,
@@ -3678,6 +3693,13 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           ...summaryMap[RegionEnum.SOUTH],
           onhandOrderCodes: [...summaryMap[RegionEnum.SOUTH].onhandOrderCodes],
           draftOrderCodes: [...summaryMap[RegionEnum.SOUTH].draftOrderCodes],
+        },
+        storage: {
+          ...summaryMap[RegionEnum.STORAGE],
+          onhandOrderCodes: [
+            ...summaryMap[RegionEnum.STORAGE].onhandOrderCodes,
+          ],
+          draftOrderCodes: [...summaryMap[RegionEnum.STORAGE].draftOrderCodes],
         },
         na: {
           ...summaryMap[RegionEnum.NA],
