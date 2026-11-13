@@ -163,6 +163,28 @@ export class WarehouseService {
     return null;
   }
 
+  /** Serialize every inventory mutation for an order at the database row level. */
+  private async lockOrdersForInventory(
+    manager: EntityManager,
+    orderIds: number[],
+    orderCodes: string[] = [],
+  ): Promise<void> {
+    const ids = [...new Set(orderIds.map(Number).filter((id) => id > 0))];
+    const codes = [
+      ...new Set(orderCodes.map((code) => code.trim()).filter(Boolean)),
+    ];
+    if (ids.length === 0 && codes.length === 0) return;
+
+    await manager.query(
+      `SELECT "id" FROM "order"
+       WHERE ("id" = ANY($1) OR "orderCode" = ANY($2))
+         AND "deletedAt" IS NULL
+       ORDER BY "id"
+       FOR UPDATE`,
+      [ids, codes],
+    );
+  }
+
   /** Hub-scoped status context applies to Warehouse Managers or Super Admin filtering by hubId. */
   private async resolveHubContext(
     user: UserEntity,
@@ -1507,6 +1529,12 @@ export class WarehouseService {
         );
       }
 
+      await this.lockOrdersForInventory(
+        manager,
+        [],
+        finalOrderCode ? [finalOrderCode] : [],
+      );
+
       let destinationHubName: string | null = null;
       if (dto.destinationHubId) {
         const destHub = await hubRepo.findOne({
@@ -1871,6 +1899,7 @@ export class WarehouseService {
             .filter((c): c is string => !!c && !isPlaceholderCode(c)),
         ),
       );
+      await this.lockOrdersForInventory(manager, [], providedCodes);
       const existingOrdersList =
         providedCodes.length > 0
           ? await orderRepo.find({
@@ -2641,6 +2670,12 @@ export class WarehouseService {
       const tripRepo = manager.getRepository(TripEntity);
       const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
       const hubRepo = manager.getRepository(HubEntity);
+
+      await this.lockOrdersForInventory(
+        manager,
+        rows.map((row) => Number(row.id)).filter((id) => id > 0),
+        rows.map((row) => String(row.orderCode || '').trim()).filter(Boolean),
+      );
 
       let sharedTripCode = normalizeTripCode(body?.tripCode);
       if (!sharedTripCode && tripId) {
@@ -3760,6 +3795,8 @@ export class WarehouseService {
       const txRepo = manager.getRepository(OrderInventoryTransactionEntity);
       const hubRepo = manager.getRepository(HubEntity);
 
+      await this.lockOrdersForInventory(manager, targetOrderIds);
+
       const rawOrders = await orderRepo.find({
         where: { id: In(targetOrderIds) },
       });
@@ -3767,6 +3804,12 @@ export class WarehouseService {
       if (rawOrders.length === 0) {
         throw new NotFoundException('Không tìm thấy đơn hàng nào để xuất kho');
       }
+
+      await this.lockOrdersForInventory(
+        manager,
+        [],
+        rawOrders.map((order) => order.orderCode || '').filter(Boolean),
+      );
 
       const orders: OrderEntity[] = [];
       const seenCodes = new Set<string>();
@@ -7280,6 +7323,8 @@ export class WarehouseService {
       const txTripRepo = manager.getRepository(TripEntity);
       const txInvRepo = manager.getRepository(OrderInventoryTransactionEntity);
 
+      await this.lockOrdersForInventory(manager, dto.orderIds);
+
       const orders = await txOrderRepo
         .createQueryBuilder('order')
         .leftJoinAndSelect('order.originHubEntity', 'originHubEntity')
@@ -7307,11 +7352,18 @@ export class WarehouseService {
       const updatedOrders: any[] = [];
 
       for (const order of orders) {
-        const qty =
-          Number(order.remainingQuantity) > 0
-            ? Number(order.remainingQuantity)
-            : Number(order.totalQuantity) || 1;
-
+        const hubStock = await this.ledgerService.getHubStock(
+          order.id,
+          currentHubId,
+          manager,
+        );
+        const availableQty =
+          hubStock !== null
+            ? Math.max(0, hubStock)
+            : Math.max(
+                0,
+                Number(order.remainingQuantity ?? order.totalQuantity ?? 0),
+              );
         const pendingAlloc =
           await this.ledgerService.getPendingOutboundAllocation(
             order.id,
@@ -7319,7 +7371,11 @@ export class WarehouseService {
             tripCode || undefined,
             manager,
           );
-        const effectiveAvailable = Math.max(0, qty - pendingAlloc.pendingQty);
+        const effectiveAvailable = Math.max(
+          0,
+          availableQty - pendingAlloc.pendingQty,
+        );
+        const qty = effectiveAvailable;
         if (effectiveAvailable <= 0) {
           const tripHint =
             pendingAlloc.tripCodes.length > 0
@@ -7774,6 +7830,11 @@ export class WarehouseService {
         where: { tripCode: normTripCode },
       });
 
+      await this.lockOrdersForInventory(
+        manager,
+        trips.map((trip) => Number(trip.orderId)),
+      );
+
       if (stops.length === 0 && trips.length === 0) {
         throw new NotFoundException(
           `Không tìm thấy dữ liệu chuyến xe ${normTripCode}`,
@@ -8055,6 +8116,8 @@ export class WarehouseService {
         withDeleted: true,
       });
 
+      if (tx) await this.lockOrdersForInventory(manager, [tx.orderId]);
+
       if (!tx) {
         throw new NotFoundException('Không tìm thấy giao dịch kho cần xóa.');
       }
@@ -8074,6 +8137,8 @@ export class WarehouseService {
           `Không tìm thấy đơn hàng liên kết (orderId: ${tx.orderId}).`,
         );
       }
+
+      await this.lockOrdersForInventory(manager, [], [order.orderCode.trim()]);
 
       // Soft delete the transaction line
       await txRepo.softDelete(transactionId);
@@ -8236,6 +8301,8 @@ export class WarehouseService {
         withDeleted: true,
       });
 
+      if (tx) await this.lockOrdersForInventory(manager, [tx.orderId]);
+
       if (!tx) {
         throw new NotFoundException(
           'Không tìm thấy giao dịch kho cần khôi phục.',
@@ -8257,6 +8324,8 @@ export class WarehouseService {
           `Không tìm thấy đơn hàng liên kết (orderId: ${tx.orderId}).`,
         );
       }
+
+      await this.lockOrdersForInventory(manager, [], [order.orderCode.trim()]);
 
       // Restore the transaction line
       await txRepo.restore(transactionId);
@@ -8431,6 +8500,8 @@ export class WarehouseService {
         withDeleted: true,
       });
 
+      if (tx) await this.lockOrdersForInventory(manager, [tx.orderId]);
+
       if (!tx) {
         throw new NotFoundException(
           'Không tìm thấy giao dịch kho cần điều chỉnh.',
@@ -8452,6 +8523,8 @@ export class WarehouseService {
           `Không tìm thấy đơn hàng liên kết (orderId: ${tx.orderId}).`,
         );
       }
+
+      await this.lockOrdersForInventory(manager, [], [order.orderCode.trim()]);
 
       const oldTxQuantity = Number(tx.quantity) || 0;
 

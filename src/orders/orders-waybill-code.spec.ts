@@ -18,6 +18,8 @@ import { TripEntity } from '../trips/infrastructure/persistence/relational/entit
 import { TripStopEntity } from '../trips/infrastructure/persistence/relational/entities/trip-stop.entity';
 import { OrderCodeService } from './order-code.service';
 import { OperationalLedgerService } from './operational-ledger.service';
+import { OrderActivityLogService } from './order-activity-log.service';
+import { RedisCacheService } from '../redis/redis-cache.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { DeliveryDestinationMode } from './dto/quick-create-inbound-order.dto';
@@ -51,6 +53,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
   let txRepo: ReturnType<typeof makeRepo>;
   let orderCodeService: { generateOrderCode: jest.Mock };
   let ledgerService: Record<string, jest.Mock>;
+  let manager: { getRepository: jest.Mock; query: jest.Mock };
 
   const hub = {
     id: 1,
@@ -111,6 +114,19 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       upsertTripStop: jest.fn().mockResolvedValue(undefined),
       getHubStock: jest.fn().mockResolvedValue(0),
       getInTransitQuantity: jest.fn().mockResolvedValue(0),
+      getBatchPendingInboundAllocations: jest.fn().mockResolvedValue(new Map()),
+      getPendingOutboundAllocation: jest.fn().mockResolvedValue({
+        pendingQty: 0,
+        pendingWeight: 0,
+        pendingVolume: 0,
+        tripCodes: [],
+      }),
+      getHubWeightVolumeLedger: jest.fn().mockResolvedValue({
+        inboundWeight: 0,
+        inboundVolume: 0,
+        exportedWeight: 0,
+        exportedVolume: 0,
+      }),
     };
 
     const tripStopRepo = makeRepo();
@@ -123,7 +139,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       [TripStopEntity, tripStopRepo],
       [OrderInventoryTransactionEntity, txRepo],
     ]);
-    const manager = {
+    manager = {
       getRepository: jest.fn((entity: any) => repoByEntity.get(entity)),
       query: jest.fn().mockResolvedValue([]),
     };
@@ -147,6 +163,17 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
         },
         { provide: OrderCodeService, useValue: orderCodeService },
         { provide: OperationalLedgerService, useValue: ledgerService },
+        {
+          provide: OrderActivityLogService,
+          useValue: {
+            safeLogActivity: jest.fn().mockResolvedValue(undefined),
+            logActivity: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: RedisCacheService,
+          useValue: { delByPattern: jest.fn().mockResolvedValue(undefined) },
+        },
         { provide: NotificationsService, useValue: { create: jest.fn() } },
         {
           provide: MailService,
@@ -365,6 +392,135 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
           adminUser,
         ),
       ).rejects.toThrow(UnprocessableEntityException);
+    });
+  });
+
+  describe('Inventory mutation concurrency guard', () => {
+    it('should lock the order row before reading stock for outbound confirmation', async () => {
+      const order = {
+        id: 5,
+        orderCode: 'HCM-TEST-005',
+        status: 'INBOUND',
+        originHubId: 1,
+        currentHubId: 1,
+        totalQuantity: 5,
+        inboundQuantity: 5,
+        outboundQuantity: 0,
+        remainingQuantity: 5,
+        totalWeight: 5,
+        totalVolume: 1,
+      } as any;
+      orderRepo.find.mockResolvedValue([order]);
+      orderRepo.save.mockImplementation((data: any) =>
+        Promise.resolve(Array.isArray(data) ? data : data),
+      );
+      ledgerService.getHubStock.mockResolvedValue(5);
+      ledgerService.generateTripCode.mockResolvedValue('SD-TEST-005');
+      ledgerService.generateInvoiceCode.mockResolvedValue('PXK-TEST-005');
+
+      await warehouseService.confirmOutbound(warehouseUser, {
+        orderIds: [5],
+        items: [
+          {
+            orderId: 5,
+            quantityToExport: 5,
+            deliveryMode: 'DIRECT_CUSTOMER',
+          },
+        ],
+        licensePlate: 'TEST-001',
+        driverName: 'Test Driver',
+      } as any);
+
+      expect(manager.query).toHaveBeenCalledWith(
+        expect.stringContaining('FOR UPDATE'),
+        [[5], []],
+      );
+      expect(manager.query.mock.invocationCallOrder[0]).toBeLessThan(
+        ledgerService.getHubStock.mock.invocationCallOrder[0],
+      );
+      expect(ledgerService.getHubStock).toHaveBeenCalledWith(5, 1, manager);
+    });
+
+    it('should reject outbound quantity above the ledger stock even when the order counter is stale', async () => {
+      orderRepo.find.mockResolvedValue([
+        {
+          id: 6,
+          orderCode: 'HCM-TEST-006',
+          status: 'INBOUND',
+          originHubId: 1,
+          currentHubId: 1,
+          totalQuantity: 306,
+          inboundQuantity: 306,
+          outboundQuantity: 0,
+          remainingQuantity: 306,
+        } as any,
+      ]);
+      ledgerService.getHubStock.mockResolvedValue(5);
+
+      await expect(
+        warehouseService.confirmOutbound(warehouseUser, {
+          orderIds: [6],
+          items: [
+            {
+              orderId: 6,
+              quantityToExport: 6,
+              deliveryMode: 'DIRECT_CUSTOMER',
+            },
+          ],
+        } as any),
+      ).rejects.toThrow(/vượt quá tồn kho khả dụng/i);
+
+      expect(txRepo.save).not.toHaveBeenCalled();
+      expect(tripRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('should use ledger stock, not the stale order counter, when appending stored cargo', async () => {
+      const order = {
+        id: 7,
+        orderCode: 'HCM-TEST-007',
+        status: 'INBOUND',
+        originHubId: 1,
+        currentHubId: 1,
+        totalQuantity: 100,
+        inboundQuantity: 100,
+        outboundQuantity: 0,
+        remainingQuantity: 100,
+        totalWeight: 100,
+        totalVolume: 10,
+        route: 'HCM → HẢI PHÒNG',
+      } as any;
+      const queryBuilder = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([order]),
+      };
+      (orderRepo as any).createQueryBuilder = jest
+        .fn()
+        .mockReturnValue(queryBuilder);
+      tripRepo.find.mockResolvedValue([
+        {
+          id: 70,
+          tripCode: 'SD-TEST-007',
+          originHubId: 1,
+          licensePlate: 'TEST-007',
+          driverName: 'Test Driver',
+        },
+      ]);
+      ledgerService.getHubStock.mockResolvedValue(5);
+
+      await warehouseService.appendStoredOrdersToTrip(
+        warehouseUser,
+        'SD-TEST-007',
+        { orderIds: [7], hubId: 1 } as any,
+      );
+
+      expect(ledgerService.getHubStock).toHaveBeenCalledWith(7, 1, manager);
+      expect(txRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ quantity: 5 }),
+      );
+      expect(order.outboundQuantity).toBe(5);
+      expect(order.remainingQuantity).toBe(95);
     });
   });
 });
