@@ -33,6 +33,7 @@ export function removeVietnameseAccents(str: string): string {
     .replace(/đ/g, 'd')
     .replace(/Đ/g, 'D')
     .toLowerCase()
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -48,7 +49,7 @@ export function sanitizeProvinceString(input: string): string {
     /^(thành phố|thanh pho|tp\.|tp|tỉnh|tinh|thị xã|thi xa|tx\.|tx)\s+/i,
     '',
   );
-  return cleaned.trim();
+  return cleaned.replace(/\s+/g, ' ').trim();
 }
 
 interface ProvinceDefinition {
@@ -423,8 +424,114 @@ const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
   },
 ];
 
+/**
+ * Authoritative province/region source: `danh sach tỉnh thành.xlsx`, Sheet1.
+ * The workbook labels the Mekong Delta as `MIỀN TÂY`; the report contract
+ * intentionally rolls that label into `MIỀN NAM`.
+ */
+const EXCEL_PROVINCE_REGION_ROWS: ReadonlyArray<readonly [string, string]> = [
+  ['Hà Nội', 'MIỀN BẮC'],
+  ['Vĩnh Phúc', 'MIỀN BẮC'],
+  ['Bắc Ninh', 'MIỀN BẮC'],
+  ['Quảng Ninh', 'MIỀN BẮC'],
+  ['Hải Dương', 'MIỀN BẮC'],
+  ['Hải Phòng', 'MIỀN BẮC'],
+  ['Hưng Yên', 'MIỀN BẮC'],
+  ['Thái Bình', 'MIỀN BẮC'],
+  ['Hà Nam', 'MIỀN BẮC'],
+  ['Nam Định', 'MIỀN BẮC'],
+  ['Ninh Bình', 'MIỀN BẮC'],
+  ['Hà Giang', 'MIỀN BẮC'],
+  ['Cao Bằng', 'MIỀN BẮC'],
+  ['Bắc Kạn', 'MIỀN BẮC'],
+  ['Tuyên Quang', 'MIỀN BẮC'],
+  ['Lào Cai', 'MIỀN BẮC'],
+  ['Yên Bái', 'MIỀN BẮC'],
+  ['Thái Nguyên', 'MIỀN BẮC'],
+  ['Lạng Sơn', 'MIỀN BẮC'],
+  ['Bắc Giang', 'MIỀN BẮC'],
+  ['Phú Thọ', 'MIỀN BẮC'],
+  ['Điện Biên', 'MIỀN BẮC'],
+  ['Lai Châu', 'MIỀN BẮC'],
+  ['Sơn La', 'MIỀN BẮC'],
+  ['Hoà Bình', 'MIỀN BẮC'],
+  ['Thanh Hoá', 'MIỀN TRUNG'],
+  ['Nghệ An', 'MIỀN TRUNG'],
+  ['Hà Tĩnh', 'MIỀN TRUNG'],
+  ['Quảng Bình', 'MIỀN TRUNG'],
+  ['Quảng Trị', 'MIỀN TRUNG'],
+  ['Thừa Thiên Huế', 'MIỀN TRUNG'],
+  ['Đà Nẵng', 'MIỀN TRUNG'],
+  ['Quảng Nam', 'MIỀN TRUNG'],
+  ['Quảng Ngãi', 'MIỀN TRUNG'],
+  ['Bình Định', 'MIỀN TRUNG'],
+  ['Phú Yên', 'MIỀN TRUNG'],
+  ['Khánh Hòa', 'MIỀN TRUNG'],
+  ['Ninh Thuận', 'MIỀN TRUNG'],
+  ['Bình Thuận', 'MIỀN TRUNG'],
+  ['Kon Tum', 'MIỀN TRUNG'],
+  ['Gia Lai', 'MIỀN TRUNG'],
+  ['Đắk Lắk', 'MIỀN TRUNG'],
+  ['Đắk Nông', 'MIỀN TRUNG'],
+  ['Lâm Đồng', 'MIỀN TRUNG'],
+  ['Bình Phước', 'MIỀN NAM'],
+  ['Tây Ninh', 'MIỀN NAM'],
+  ['Bình Dương', 'MIỀN NAM'],
+  ['Đồng Nai', 'MIỀN NAM'],
+  ['Bà Rịa', 'MIỀN NAM'],
+  ['hcm', 'MIỀN NAM'],
+  ['Long An', 'MIỀN TÂY'],
+  ['Tiền Giang', 'MIỀN TÂY'],
+  ['Bến Tre', 'MIỀN TÂY'],
+  ['Trà Vinh', 'MIỀN TÂY'],
+  ['Vĩnh Long', 'MIỀN TÂY'],
+  ['Đồng Tháp', 'MIỀN TÂY'],
+  ['An Giang', 'MIỀN TÂY'],
+  ['Kiên Giang', 'MIỀN TÂY'],
+  ['Cần Thơ', 'MIỀN TÂY'],
+  ['Hậu Giang', 'MIỀN TÂY'],
+  ['Sóc Trăng', 'MIỀN TÂY'],
+  ['Bạc Liêu', 'MIỀN TÂY'],
+  ['Cà Mau', 'MIỀN TÂY'],
+  ['Khánh Hoà', 'MIỀN TRUNG'],
+  ['Huế', 'MIỀN TRUNG'],
+  ['Vũng Tàu', 'MIỀN NAM'],
+  ['Đà Lạt', 'MIỀN TRUNG'],
+  ['THANH HÓA', 'MIỀN TRUNG'],
+  ['TP. Hồ Chí Minh', 'MIỀN NAM'],
+  ['Tỉnh Đồng Nai', 'MIỀN NAM'],
+  ['Tỉnh Cà Mau', 'MIỀN NAM'],
+  ['TP. Hà Nội', 'MIỀN BẮC'],
+  ['Tỉnh Tây Ninh', 'MIỀN NAM'],
+  ['TP. Huế', 'MIỀN TRUNG'],
+  ['Tỉnh Gia Lai', 'MIỀN TRUNG'],
+  ['TP. Cần Thơ', 'MIỀN NAM'],
+  ['Tỉnh Quảng Ngãi', 'MIỀN TRUNG'],
+  ['Tỉnh Khánh Hòa', 'MIỀN TRUNG'],
+  ['TP. Hải Phòng', 'MIỀN BẮC'],
+];
+
 // Map lookup tối ưu O(1) theo không dấu
 const LOOKUP_MAP = new Map<string, ProvinceDefinition>();
+
+const EXCEL_LOOKUP_MAP = new Map<string, ProvinceDefinition>();
+
+function toReportRegion(excelRegion: string): RegionEnum {
+  return excelRegion === 'MIỀN TÂY'
+    ? RegionEnum.SOUTH
+    : (excelRegion as RegionEnum);
+}
+
+for (const [provinceName, excelRegion] of EXCEL_PROVINCE_REGION_ROWS) {
+  const key = removeVietnameseAccents(sanitizeProvinceString(provinceName));
+  if (!EXCEL_LOOKUP_MAP.has(key)) {
+    EXCEL_LOOKUP_MAP.set(key, {
+      standardName: provinceName,
+      region: toReportRegion(excelRegion),
+      aliases: [],
+    });
+  }
+}
 
 for (const prov of PROVINCE_DEFINITIONS) {
   const normStandard = removeVietnameseAccents(prov.standardName);
@@ -451,15 +558,25 @@ export function normalizeRegion(
   const rawCleaned = sanitizeProvinceString(input);
   const normalizedKey = removeVietnameseAccents(rawCleaned);
 
-  if (normalizedKey === 'luu kho' || normalizedKey === 'luu tai kho') {
+  if (/^(?:luu|gui)(?: tai| vao)? kho$/.test(normalizedKey)) {
     return {
       region: RegionEnum.STORAGE,
-      provinceName: 'Lưu Kho',
+      provinceName: normalizedKey.startsWith('gui') ? 'Gửi Kho' : 'Lưu Kho',
       isRecognized: true,
     };
   }
 
-  // 1. Kiểm tra khớp chính xác trong Lookup Map
+  // 1. Excel là nguồn chuẩn; miền Tây được quy đổi thành miền Nam theo contract.
+  const excelMatch = EXCEL_LOOKUP_MAP.get(normalizedKey);
+  if (excelMatch) {
+    return {
+      region: excelMatch.region,
+      provinceName: excelMatch.standardName,
+      isRecognized: true,
+    };
+  }
+
+  // 2. Giữ alias cũ để tương thích dữ liệu lịch sử không có trong Excel.
   const directMatch = LOOKUP_MAP.get(normalizedKey);
   if (directMatch) {
     return {
@@ -469,7 +586,21 @@ export function normalizeRegion(
     };
   }
 
-  // 2. Kiểm tra chuỗi chứa (Sub-string match) nếu người dùng gõ có kèm quận/huyện
+  // 3. Kiểm tra chuỗi chứa nếu người dùng gõ kèm địa chỉ/quận/huyện.
+  const excelSubstringMatch = [...EXCEL_LOOKUP_MAP.entries()]
+    .filter(([key]) => key.length >= 3)
+    .sort(([a], [b]) => b.length - a.length)
+    .find(([key]) => normalizedKey.includes(key));
+  if (excelSubstringMatch) {
+    const [, province] = excelSubstringMatch;
+    return {
+      region: province.region,
+      provinceName: province.standardName,
+      isRecognized: true,
+    };
+  }
+
+  // 4. Alias cũ cho dữ liệu lịch sử có kèm quận/huyện.
   // Ví dụ: "Quận 1, TP.HCM", "Nha Trang, Khánh Hòa", "Bến Lức, Long An"
   for (const [key, prov] of LOOKUP_MAP.entries()) {
     if (
@@ -490,4 +621,18 @@ export function normalizeRegion(
     provinceName: input.trim(),
     isRecognized: false,
   };
+}
+
+/**
+ * Canonical value stored in `order.province` before `destinationRegion` is set.
+ * Known values become the first canonical spelling from the Excel source;
+ * unknown values still receive safe whitespace/prefix cleanup for auditability.
+ */
+export function normalizeProvinceInput(
+  input: string | null | undefined,
+): string | null {
+  if (!input || !input.trim()) return null;
+  const cleaned = sanitizeProvinceString(input);
+  const resolved = normalizeRegion(cleaned);
+  return resolved.isRecognized ? resolved.provinceName : cleaned;
 }

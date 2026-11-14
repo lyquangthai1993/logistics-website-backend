@@ -2877,49 +2877,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     const triggeredBy = options?.triggeredBy || 'CRON';
 
-    // ── Backfill destinationRegion cho các orders chưa được phân vùng ──────────
-    // Dùng normalizeRegion() (TypeScript util) thay vì SQL CASE/WHEN để đảm bảo
-    // logic phân vùng luôn nhất quán với @BeforeInsert/@BeforeUpdate của OrderEntity.
-    // Chỉ cập nhật các orders còn NULL / rỗng / 'N/A' — không ghi đè dữ liệu đúng.
-    try {
-      const unregionedOrders = await this.dataSource.query<
-        { id: number; province: string | null }[]
-      >(`
-        SELECT id, province FROM "order"
-        WHERE "deletedAt" IS NULL
-          AND ("destinationRegion" IS NULL OR "destinationRegion" = '' OR "destinationRegion" = 'N/A')
-      `);
-
-      if (unregionedOrders.length > 0) {
-        // Phân nhóm theo miền để batch UPDATE thay vì N lần UPDATE riêng lẻ
-        const regionGroups = new Map<string, number[]>();
-        for (const ord of unregionedOrders) {
-          const { region } = normalizeRegion(ord.province);
-          const existing = regionGroups.get(region) ?? [];
-          existing.push(ord.id);
-          regionGroups.set(region, existing);
-        }
-
-        for (const [region, ids] of regionGroups.entries()) {
-          if (ids.length === 0) continue;
-          const idList = ids.join(',');
-          await this.dataSource.query(`
-            UPDATE "order"
-            SET "destinationRegion" = '${region}'
-            WHERE id IN (${idList})
-          `);
-        }
-
-        this.logger.debug(
-          `[REGIONAL_SNAPSHOT] Backfill destinationRegion: ${unregionedOrders.length} orders → ${regionGroups.size} nhóm miền`,
-        );
-      }
-    } catch (backfillErr) {
-      this.logger.warn(
-        `[REGIONAL_SNAPSHOT] Backfill destinationRegion thất bại (không ảnh hưởng snapshot): ${(backfillErr as Error)?.message}`,
-      );
-    }
-
     const provinceAudit = await this.buildProvinceAudit(
       options?.hubId,
       reportDate,
@@ -2932,7 +2889,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         o.id,
         o."orderCode",
         o."province",
-        o."destinationRegion",
         o."destinationHub",
         o."remainingQuantity",
         o."totalQuantity",
@@ -2988,7 +2944,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
          AND stop."deletedAt" IS NULL
         WHERE o."deletedAt" IS NULL
       )
-      SELECT o.id, o."orderCode", o.province, o."destinationRegion",
+      SELECT o.id, o."orderCode", o.province,
              o."destinationHub", o."totalQuantity", o."totalWeight",
              o."totalVolume", contexts."hubId"
       FROM warehouse_contexts contexts
@@ -3047,7 +3003,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         o.id AS "orderId",
         o."orderCode",
         o."province",
-        o."destinationRegion",
         o."destinationHub",
         o."totalWeight",
         o."totalVolume",
@@ -3121,13 +3076,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const ord of rawStoredOrders) {
       const hId = Number(ord.currentHubId);
-      let resolvedReg = ord.destinationRegion;
-      if (!resolvedReg || resolvedReg === RegionEnum.NA) {
-        resolvedReg = normalizeRegion(ord.province).region;
-      }
-      if (resolvedReg === RegionEnum.NA && ord.destinationHub) {
-        resolvedReg = normalizeRegion(ord.destinationHub).region;
-      }
+      const resolvedReg = normalizeRegion(ord.province).region;
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -3146,13 +3095,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const ord of rawDraftOrders) {
       const hId = Number(ord.hubId);
-      let resolvedReg = ord.destinationRegion;
-      if (!resolvedReg || resolvedReg === RegionEnum.NA) {
-        resolvedReg = normalizeRegion(ord.province || '').region;
-      }
-      if (resolvedReg === RegionEnum.NA && ord.destinationHub) {
-        resolvedReg = normalizeRegion(ord.destinationHub).region;
-      }
+      const resolvedReg = normalizeRegion(ord.province || '').region;
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -3166,16 +3109,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const trip of rawIncomingTrips) {
       const hId = Number(trip.effectiveHubId);
-      let resolvedReg = trip.destinationRegion;
-      if (!resolvedReg || resolvedReg === RegionEnum.NA) {
-        resolvedReg = normalizeRegion(trip.province).region;
-      }
-      if (resolvedReg === RegionEnum.NA && trip.destinationHub) {
-        resolvedReg = normalizeRegion(trip.destinationHub).region;
-      }
-      if (resolvedReg === RegionEnum.NA && trip.destHubName) {
-        resolvedReg = normalizeRegion(trip.destHubName).region;
-      }
+      const resolvedReg = normalizeRegion(trip.province).region;
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -3638,13 +3572,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     );
 
     const onhandOrdersList = rawStoredOrdersList.map((ord: any) => {
-      let reg = ord.destinationRegion;
-      if (!reg || reg === RegionEnum.NA) {
-        reg = normalizeRegion(ord.province).region;
-      }
-      if (reg === RegionEnum.NA && ord.destinationHub) {
-        reg = normalizeRegion(ord.destinationHub).region;
-      }
+      const reg = normalizeRegion(ord.province).region;
 
       const totalQty = Number(ord.totalQuantity) || 1;
       const remainQty = Number(ord.remainingQuantity) || 0;
@@ -3670,16 +3598,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     });
 
     const incomingTripsList = rawIncomingTripsList.map((trip: any) => {
-      let reg = trip.destinationRegion;
-      if (!reg || reg === RegionEnum.NA) {
-        reg = normalizeRegion(trip.province).region;
-      }
-      if (reg === RegionEnum.NA && trip.destinationHub) {
-        reg = normalizeRegion(trip.destinationHub).region;
-      }
-      if (reg === RegionEnum.NA && trip.destinationHubName) {
-        reg = normalizeRegion(trip.destinationHubName).region;
-      }
+      const reg = normalizeRegion(trip.province).region;
 
       return {
         id: trip.id,
