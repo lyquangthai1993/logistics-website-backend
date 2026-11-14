@@ -2794,11 +2794,78 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
    * Tính toán và lưu snapshot dữ liệu cân đối tải trọng đội xe theo miền vào database.
    * Kích hoạt tự động bởi Cronjob hoặc Super Admin bấm đồng bộ thủ công.
    */
+  private async buildProvinceAudit(hubId?: number, reportDate?: string) {
+    const maxAuditOrders = 500;
+    const provinceAuditCandidates = await this.dataSource.query<
+      {
+        id: number;
+        orderCode: string;
+        province: string | null;
+      }[]
+    >(
+      `
+      SELECT o.id, o."orderCode", o."province"
+      FROM "order" o
+      WHERE o."deletedAt" IS NULL
+        AND ($2::date IS NULL OR o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh'))
+        AND (
+          $1::integer IS NULL
+          OR o."originHubId" = $1
+          OR o."currentHubId" = $1
+          OR o."destinationHubId" = $1
+          OR EXISTS (
+            SELECT 1
+            FROM "order_inventory_transaction" tx
+            WHERE tx."orderId" = o.id
+              AND tx."hubId" = $1
+              AND tx."deletedAt" IS NULL
+          )
+        )
+      ORDER BY o.id DESC
+      LIMIT ${maxAuditOrders}
+      `,
+      [hubId ?? null, reportDate ?? null],
+    );
+
+    const invalidProvinceOrders = provinceAuditCandidates
+      .map((order) => {
+        const normalized = normalizeRegion(order.province);
+        return {
+          id: order.id,
+          orderCode: order.orderCode,
+          province: order.province,
+          reason: order.province?.trim()
+            ? ('UNRECOGNIZED_PROVINCE' as const)
+            : ('MISSING_PROVINCE' as const),
+          normalizedRegion: normalized.region,
+        };
+      })
+      .filter((order) => order.normalizedRegion === RegionEnum.NA);
+
+    return {
+      scannedOrderCount: provinceAuditCandidates.length,
+      invalidOrderCount: invalidProvinceOrders.length,
+      missingProvinceCount: invalidProvinceOrders.filter(
+        (order) => order.reason === 'MISSING_PROVINCE',
+      ).length,
+      unrecognizedProvinceCount: invalidProvinceOrders.filter(
+        (order) => order.reason === 'UNRECOGNIZED_PROVINCE',
+      ).length,
+      orders: invalidProvinceOrders.map((order) => ({
+        id: order.id,
+        orderCode: order.orderCode,
+        province: order.province,
+        reason: order.reason,
+      })),
+      isTruncated: provinceAuditCandidates.length === maxAuditOrders,
+    };
+  }
+
   public async calculateRegionalDispatchSnapshot(options?: {
     hubId?: number;
     date?: string;
     triggeredBy?: 'CRON' | 'MANUAL';
-  }): Promise<{ success: boolean; rowsProcessed: number; reportDate: string }> {
+  }) {
     await this.ensureTableExists();
 
     const now = new Date();
@@ -2816,11 +2883,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     // Chỉ cập nhật các orders còn NULL / rỗng / 'N/A' — không ghi đè dữ liệu đúng.
     try {
       const unregionedOrders = await this.dataSource.query<
-        { id: number; province: string }[]
+        { id: number; province: string | null }[]
       >(`
         SELECT id, province FROM "order"
         WHERE "deletedAt" IS NULL
-          AND "province" IS NOT NULL
           AND ("destinationRegion" IS NULL OR "destinationRegion" = '' OR "destinationRegion" = 'N/A')
       `);
 
@@ -2853,6 +2919,11 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         `[REGIONAL_SNAPSHOT] Backfill destinationRegion thất bại (không ảnh hưởng snapshot): ${(backfillErr as Error)?.message}`,
       );
     }
+
+    const provinceAudit = await this.buildProvinceAudit(
+      options?.hubId,
+      reportDate,
+    );
     // ────────────────────────────────────────────────────────────────────────────
 
     const rawStoredOrders = await this.dataSource.query(
@@ -3185,6 +3256,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       success: true,
       rowsProcessed: valueRows.length,
       reportDate,
+      provinceAudit,
     };
   }
 
@@ -3239,6 +3311,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const cronConfig = await this.cronConfigRepository.findOne({
       where: { jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT' },
     });
+    let provinceAudit: Awaited<ReturnType<typeof this.buildProvinceAudit>>;
 
     // Refresh only today's live row. Historical/future range days must use their own snapshots.
     if (
@@ -3246,22 +3319,24 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       fromDate <= todayStr &&
       toDate >= todayStr
     ) {
-      await this.calculateRegionalDispatchSnapshot({
+      const snapshotResult = await this.calculateRegionalDispatchSnapshot({
         hubId: parsedHubId || undefined,
         date: todayStr,
         triggeredBy: 'MANUAL',
       });
+      provinceAudit = snapshotResult.provinceAudit;
     } else if (
       query?.mode !== 'snapshot' &&
       !query?.fromDate &&
       !query?.toDate &&
       toDate === todayStr
     ) {
-      await this.calculateRegionalDispatchSnapshot({
+      const snapshotResult = await this.calculateRegionalDispatchSnapshot({
         hubId: parsedHubId || undefined,
         date: reportDate,
         triggeredBy: 'MANUAL',
       });
+      provinceAudit = snapshotResult.provinceAudit;
     }
 
     // Truy vấn dữ liệu snapshot tổng hợp từ daily_regional_dispatch_report
@@ -3285,6 +3360,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       reportDate = rangeRows[rangeRows.length - 1].reportDate;
     }
     const reportRows = rangeRows.filter((row) => row.reportDate === reportDate);
+    provinceAudit ??= await this.buildProvinceAudit(
+      parsedHubId || undefined,
+      reportDate,
+    );
 
     // Khởi tạo cấu trúc tổng hợp cho 3 miền chính + N/A
     const initRegionSummary = (regionName: string) => ({
@@ -3716,6 +3795,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       })),
       incomingTripsList,
       onhandOrdersList,
+      provinceAudit,
     };
   }
 }
