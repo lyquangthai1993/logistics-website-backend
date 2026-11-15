@@ -61,6 +61,22 @@ export class DailyRegionalDispatchReportEntity extends AbstractBaseEntity {
   @Column({ type: 'int', nullable: false, default: 0 })
   onhandOrderCount: number;
 
+  // Draft orders visible in the warehouse view at snapshot time.
+  @Column({ type: 'float', nullable: false, default: 0 })
+  draftWeightKg: number;
+
+  @Column({ type: 'float', nullable: false, default: 0 })
+  draftVolumeCbm: number;
+
+  @Column({ type: 'int', nullable: false, default: 0 })
+  draftOrderCount: number;
+
+  @Column({ type: 'jsonb', nullable: false, default: () => "'[]'::jsonb" })
+  onhandOrderCodes: string[];
+
+  @Column({ type: 'jsonb', nullable: false, default: () => "'[]'::jsonb" })
+  draftOrderCodes: string[];
+
   // ── 2. Hàng sắp về kho (Inbound In-Transit trips) ──
   @Column({ type: 'float', nullable: false, default: 0 })
   incomingWeightKg: number;

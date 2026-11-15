@@ -226,15 +226,21 @@ export class AdminReportsController {
   })
   @ApiQuery({ name: 'hubId', required: false, type: String })
   @ApiQuery({ name: 'date', required: false, type: String })
+  @ApiQuery({ name: 'fromDate', required: false, type: String })
+  @ApiQuery({ name: 'toDate', required: false, type: String })
   @ApiQuery({ name: 'mode', required: false, enum: ['live', 'snapshot'] })
   async getRegionalDispatchReport(
     @Query('hubId') hubId?: string,
     @Query('date') date?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
     @Query('mode') mode?: 'live' | 'snapshot',
   ) {
     return this.adminReportsService.getRegionalDispatchReport({
       hubId,
       date,
+      fromDate,
+      toDate,
       mode,
     });
   }

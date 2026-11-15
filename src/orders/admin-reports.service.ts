@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   OnModuleDestroy,
@@ -17,6 +18,24 @@ import { RoleEnum } from '../roles/roles.enum';
 import { NotificationsService } from '../notifications/notifications.service';
 
 export type ReportDirection = 'OUTBOUND' | 'INBOUND' | 'ALL';
+
+export function resolveRegionalDispatchSyncDate(
+  requestedDate: string | undefined,
+  todayDate: string,
+): string {
+  if (!requestedDate || !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate.trim())) {
+    return todayDate;
+  }
+
+  const date = requestedDate.trim();
+  if (date > todayDate) {
+    throw new BadRequestException(
+      `Không thể đồng bộ báo cáo cho ngày tương lai. Ngày đồng bộ tối đa là ${todayDate}.`,
+    );
+  }
+
+  return date;
+}
 
 export interface DirectionMetrics {
   cbm: number;
@@ -190,6 +209,11 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           "onhandVolumeCbm" double precision NOT NULL DEFAULT 0,
           "onhandPackageCount" integer NOT NULL DEFAULT 0,
           "onhandOrderCount" integer NOT NULL DEFAULT 0,
+          "draftWeightKg" double precision NOT NULL DEFAULT 0,
+          "draftVolumeCbm" double precision NOT NULL DEFAULT 0,
+          "draftOrderCount" integer NOT NULL DEFAULT 0,
+          "onhandOrderCodes" jsonb NOT NULL DEFAULT '[]'::jsonb,
+          "draftOrderCodes" jsonb NOT NULL DEFAULT '[]'::jsonb,
           "incomingWeightKg" double precision NOT NULL DEFAULT 0,
           "incomingVolumeCbm" double precision NOT NULL DEFAULT 0,
           "incomingPackageCount" integer NOT NULL DEFAULT 0,
@@ -210,6 +234,14 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         CREATE INDEX IF NOT EXISTS "IDX_daily_regional_report_date" ON "daily_regional_dispatch_report" ("reportDate");
         CREATE INDEX IF NOT EXISTS "IDX_daily_regional_report_hubId" ON "daily_regional_dispatch_report" ("hubId");
         CREATE INDEX IF NOT EXISTS "IDX_daily_regional_report_region" ON "daily_regional_dispatch_report" ("region");
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE "daily_regional_dispatch_report"
+          ADD COLUMN IF NOT EXISTS "draftWeightKg" double precision NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS "draftVolumeCbm" double precision NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS "draftOrderCount" integer NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS "onhandOrderCodes" jsonb NOT NULL DEFAULT '[]'::jsonb,
+          ADD COLUMN IF NOT EXISTS "draftOrderCodes" jsonb NOT NULL DEFAULT '[]'::jsonb;
       `);
       await this.dataSource.query(`
         CREATE TABLE IF NOT EXISTS "cron_job_config" (
@@ -2781,89 +2813,212 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
    * Tính toán và lưu snapshot dữ liệu cân đối tải trọng đội xe theo miền vào database.
    * Kích hoạt tự động bởi Cronjob hoặc Super Admin bấm đồng bộ thủ công.
    */
+  private async buildProvinceAudit(hubId?: number, reportDate?: string) {
+    const maxAuditOrders = 500;
+    const provinceAuditCandidates = await this.dataSource.query<
+      {
+        id: number;
+        orderCode: string;
+        province: string | null;
+      }[]
+    >(
+      `
+      SELECT o.id, o."orderCode", o."province"
+      FROM "order" o
+      WHERE o."deletedAt" IS NULL
+        AND ($2::date IS NULL OR o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh'))
+        AND (
+          $1::integer IS NULL
+          OR o."originHubId" = $1
+          OR o."currentHubId" = $1
+          OR o."destinationHubId" = $1
+          OR EXISTS (
+            SELECT 1
+            FROM "order_inventory_transaction" tx
+            WHERE tx."orderId" = o.id
+              AND tx."hubId" = $1
+              AND tx."deletedAt" IS NULL
+          )
+        )
+      ORDER BY o.id DESC
+      LIMIT ${maxAuditOrders}
+      `,
+      [hubId ?? null, reportDate ?? null],
+    );
+
+    const invalidProvinceOrders = provinceAuditCandidates
+      .map((order) => {
+        const normalized = normalizeRegion(order.province);
+        return {
+          id: order.id,
+          orderCode: order.orderCode,
+          province: order.province,
+          reason: order.province?.trim()
+            ? ('UNRECOGNIZED_PROVINCE' as const)
+            : ('MISSING_PROVINCE' as const),
+          normalizedRegion: normalized.region,
+        };
+      })
+      .filter((order) => order.normalizedRegion === RegionEnum.NA);
+
+    return {
+      scannedOrderCount: provinceAuditCandidates.length,
+      invalidOrderCount: invalidProvinceOrders.length,
+      missingProvinceCount: invalidProvinceOrders.filter(
+        (order) => order.reason === 'MISSING_PROVINCE',
+      ).length,
+      unrecognizedProvinceCount: invalidProvinceOrders.filter(
+        (order) => order.reason === 'UNRECOGNIZED_PROVINCE',
+      ).length,
+      orders: invalidProvinceOrders.map((order) => ({
+        id: order.id,
+        orderCode: order.orderCode,
+        province: order.province,
+        reason: order.reason,
+      })),
+      isTruncated: provinceAuditCandidates.length === maxAuditOrders,
+    };
+  }
+
   public async calculateRegionalDispatchSnapshot(options?: {
     hubId?: number;
     date?: string;
     triggeredBy?: 'CRON' | 'MANUAL';
-  }): Promise<{ success: boolean; rowsProcessed: number; reportDate: string }> {
+  }) {
     await this.ensureTableExists();
 
     const now = new Date();
     const vnParts = this.getVietnamDateParts(now);
-    const reportDate =
-      options?.date && /^\d{4}-\d{2}-\d{2}$/.test(options.date.trim())
-        ? options.date.trim()
-        : `${vnParts.year}-${String(vnParts.month).padStart(2, '0')}-${String(vnParts.day).padStart(2, '0')}`;
+    const todayDate = `${vnParts.year}-${String(vnParts.month).padStart(2, '0')}-${String(vnParts.day).padStart(2, '0')}`;
+    const reportDate = resolveRegionalDispatchSyncDate(
+      options?.date,
+      todayDate,
+    );
 
     const triggeredBy = options?.triggeredBy || 'CRON';
 
-    // ── Backfill destinationRegion cho các orders chưa được phân vùng ──────────
-    // Dùng normalizeRegion() (TypeScript util) thay vì SQL CASE/WHEN để đảm bảo
-    // logic phân vùng luôn nhất quán với @BeforeInsert/@BeforeUpdate của OrderEntity.
-    // Chỉ cập nhật các orders còn NULL / rỗng / 'N/A' — không ghi đè dữ liệu đúng.
-    try {
-      const unregionedOrders = await this.dataSource.query<
-        { id: number; province: string }[]
-      >(`
-        SELECT id, province FROM "order"
-        WHERE "deletedAt" IS NULL
-          AND "province" IS NOT NULL
-          AND ("destinationRegion" IS NULL OR "destinationRegion" = '' OR "destinationRegion" = 'N/A')
-      `);
-
-      if (unregionedOrders.length > 0) {
-        // Phân nhóm theo miền để batch UPDATE thay vì N lần UPDATE riêng lẻ
-        const regionGroups = new Map<string, number[]>();
-        for (const ord of unregionedOrders) {
-          const { region } = normalizeRegion(ord.province);
-          const existing = regionGroups.get(region) ?? [];
-          existing.push(ord.id);
-          regionGroups.set(region, existing);
-        }
-
-        for (const [region, ids] of regionGroups.entries()) {
-          if (ids.length === 0) continue;
-          const idList = ids.join(',');
-          await this.dataSource.query(`
-            UPDATE "order"
-            SET "destinationRegion" = '${region}'
-            WHERE id IN (${idList})
-          `);
-        }
-
-        this.logger.debug(
-          `[REGIONAL_SNAPSHOT] Backfill destinationRegion: ${unregionedOrders.length} orders → ${regionGroups.size} nhóm miền`,
-        );
-      }
-    } catch (backfillErr) {
-      this.logger.warn(
-        `[REGIONAL_SNAPSHOT] Backfill destinationRegion thất bại (không ảnh hưởng snapshot): ${(backfillErr as Error)?.message}`,
-      );
-    }
+    const provinceAudit = await this.buildProvinceAudit(
+      options?.hubId,
+      reportDate,
+    );
     // ────────────────────────────────────────────────────────────────────────────
 
-    const hubFilterOrders = options?.hubId
-      ? `AND o."currentHubId" = ${options.hubId}`
-      : '';
-    const rawStoredOrders = await this.dataSource.query(`
+    const rawStoredOrders = await this.dataSource.query(
+      `
       SELECT 
         o.id,
         o."orderCode",
         o."province",
-        o."destinationRegion",
         o."destinationHub",
         o."remainingQuantity",
         o."totalQuantity",
         o."totalWeight",
         o."totalVolume",
-        o."currentHubId"
+        stock."hubId" AS "currentHubId",
+        stock."hubStock"
       FROM "order" o
+      JOIN LATERAL (
+        SELECT tx."hubId",
+               SUM(CASE WHEN tx.type = 'INBOUND' THEN tx.quantity
+                        WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
+                        ELSE 0 END)::int AS "hubStock"
+        FROM "order_inventory_transaction" tx
+        WHERE tx."orderId" = o.id
+          AND tx."deletedAt" IS NULL
+              AND tx."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+        GROUP BY tx."hubId"
+        HAVING SUM(CASE WHEN tx.type = 'INBOUND' THEN tx.quantity
+                        WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
+                        ELSE 0 END) > 0
+      ) stock ON TRUE
       WHERE o."deletedAt" IS NULL
-        AND o.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE')
-        AND o."remainingQuantity" > 0
-        AND o."currentHubId" IS NOT NULL
-        ${hubFilterOrders}
-    `);
+        AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+        AND NOT (
+          o.status IN ('DRAFT', 'PENDING', 'WAITING')
+          AND COALESCE(o."currentHubId", o."originHubId") = stock."hubId"
+        )
+        AND ($1::integer IS NULL OR stock."hubId" = $1)
+    `,
+      [options?.hubId ?? null, reportDate],
+    );
+
+    const rawDraftOrders = await this.dataSource.query(
+      `
+      WITH warehouse_contexts AS (
+        SELECT o.id AS "orderId", o."originHubId" AS "hubId"
+        FROM "order" o
+        WHERE o."deletedAt" IS NULL
+          AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+          AND o."originHubId" IS NOT NULL
+        UNION
+        SELECT o.id, o."currentHubId" FROM "order" o
+        WHERE o."deletedAt" IS NULL
+          AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+          AND o."currentHubId" IS NOT NULL
+        UNION
+        SELECT o.id, o."destinationHubId" FROM "order" o
+        WHERE o."deletedAt" IS NULL
+          AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+          AND o."destinationHubId" IS NOT NULL
+        UNION
+        SELECT tx."orderId", tx."hubId" FROM "order_inventory_transaction" tx
+        JOIN "order" o ON o.id = tx."orderId"
+        WHERE o."deletedAt" IS NULL
+          AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+          AND tx."deletedAt" IS NULL
+          AND tx."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+          AND tx."hubId" IS NOT NULL
+        UNION
+        SELECT o.id, stop."hubId"
+        FROM "order" o
+        JOIN "trip_stop" stop
+          ON stop."tripCode" = o."currentTripCode"
+         AND stop."deletedAt" IS NULL
+        WHERE o."deletedAt" IS NULL
+          AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+      )
+      SELECT o.id, o."orderCode", o.province,
+             o."destinationHub", o."totalQuantity", o."totalWeight",
+             o."totalVolume", contexts."hubId"
+      FROM warehouse_contexts contexts
+      JOIN "order" o ON o.id = contexts."orderId"
+      WHERE ($1::integer IS NULL OR contexts."hubId" = $1)
+        AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+        AND (
+          (o.status IN ('DRAFT', 'PENDING', 'WAITING')
+           AND COALESCE(o."currentHubId", o."originHubId") = contexts."hubId")
+          OR (o.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING')
+              AND NOT EXISTS (
+                SELECT 1 FROM "order_inventory_transaction" stock_tx
+                WHERE stock_tx."orderId" = o.id
+                  AND stock_tx."hubId" = contexts."hubId"
+                  AND stock_tx."deletedAt" IS NULL
+                  AND stock_tx."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+                GROUP BY stock_tx."orderId", stock_tx."hubId"
+                HAVING SUM(CASE WHEN stock_tx.type = 'INBOUND' THEN stock_tx.quantity
+                                WHEN stock_tx.type IN ('OUTBOUND', 'TRANSFER') THEN -stock_tx.quantity
+                                ELSE 0 END) > 0
+              ))
+          OR EXISTS (
+            SELECT 1 FROM "trip_stop" pending_stop
+            WHERE pending_stop."tripCode" = o."currentTripCode"
+              AND pending_stop."hubId" = contexts."hubId"
+              AND pending_stop.status = 'PENDING'
+              AND pending_stop."deletedAt" IS NULL
+              AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+              AND (o."destinationHubId" = pending_stop."hubId"
+                   OR o."destinationHubId" IS NULL
+                   OR NOT EXISTS (
+                     SELECT 1 FROM "trip_stop" final_stop
+                     WHERE final_stop."tripCode" = pending_stop."tripCode"
+                       AND final_stop."hubId" = o."destinationHubId"
+                       AND final_stop."deletedAt" IS NULL
+                   ))
+          )
+        )
+    `,
+      [options?.hubId ?? null, reportDate],
+    );
 
     const hubFilterTrips = options?.hubId
       ? `AND (
@@ -2871,7 +3026,8 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           OR (t.type = 'INBOUND' AND t."originHubId" = ${options.hubId})
         )`
       : '';
-    const rawIncomingTrips = await this.dataSource.query(`
+    const rawIncomingTrips = await this.dataSource.query(
+      `
       SELECT 
         t.id AS "tripId",
         t."tripCode",
@@ -2884,7 +3040,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         o.id AS "orderId",
         o."orderCode",
         o."province",
-        o."destinationRegion",
         o."destinationHub",
         o."totalWeight",
         o."totalVolume",
@@ -2894,12 +3049,16 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       LEFT JOIN "order" o ON o.id = t."orderId"
       LEFT JOIN "hub" dest ON dest.id = CASE WHEN t.type = 'TRANSFER' THEN t."destinationHubId" ELSE t."originHubId" END
       WHERE t."deletedAt" IS NULL
+        AND t."createdAt" < (($1::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+        AND (o."createdAt" IS NULL OR o."createdAt" < (($1::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh'))
         AND (
           (t.type = 'TRANSFER' AND t.status IN ('IN_TRANSIT', 'DISPATCHED') AND t."destinationHubId" IS NOT NULL)
           OR (t.type = 'INBOUND' AND t.status = 'PENDING')
         )
         ${hubFilterTrips}
-    `);
+    `,
+      [reportDate],
+    );
 
     const hubs = await this.hubRepository.find({
       where: options?.hubId ? { id: options.hubId } : {},
@@ -2910,6 +3069,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       RegionEnum.NORTH,
       RegionEnum.CENTRAL,
       RegionEnum.SOUTH,
+      RegionEnum.STORAGE,
       RegionEnum.NA,
     ];
     const hubRegionMap = new Map<
@@ -2921,6 +3081,11 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         onhandVolumeCbm: number;
         onhandPackageCount: number;
         onhandOrderCount: number;
+        draftWeightKg: number;
+        draftVolumeCbm: number;
+        draftOrderCount: number;
+        onhandOrderCodes: Set<string>;
+        draftOrderCodes: Set<string>;
         incomingWeightKg: number;
         incomingVolumeCbm: number;
         incomingPackageCount: number;
@@ -2937,6 +3102,11 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           onhandVolumeCbm: 0,
           onhandPackageCount: 0,
           onhandOrderCount: 0,
+          draftWeightKg: 0,
+          draftVolumeCbm: 0,
+          draftOrderCount: 0,
+          onhandOrderCodes: new Set(),
+          draftOrderCodes: new Set(),
           incomingWeightKg: 0,
           incomingVolumeCbm: 0,
           incomingPackageCount: 0,
@@ -2947,13 +3117,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const ord of rawStoredOrders) {
       const hId = Number(ord.currentHubId);
-      let resolvedReg = ord.destinationRegion;
-      if (!resolvedReg || resolvedReg === RegionEnum.NA) {
-        resolvedReg = normalizeRegion(ord.province).region;
-      }
-      if (resolvedReg === RegionEnum.NA && ord.destinationHub) {
-        resolvedReg = normalizeRegion(ord.destinationHub).region;
-      }
+      const resolvedReg = normalizeRegion(ord.province).region;
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -2961,27 +3125,32 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       if (!target) continue;
 
       const totalQty = Number(ord.totalQuantity) || 1;
-      const remainQty = Number(ord.remainingQuantity) || 0;
-      const ratio = totalQty > 0 ? remainQty / totalQty : 1;
+      const hubStock = Number(ord.hubStock) || 0;
+      const ratio = totalQty > 0 ? hubStock / totalQty : 1;
 
       target.onhandWeightKg += (Number(ord.totalWeight) || 0) * ratio;
       target.onhandVolumeCbm += (Number(ord.totalVolume) || 0) * ratio;
-      target.onhandPackageCount += remainQty;
-      target.onhandOrderCount += 1;
+      target.onhandPackageCount += hubStock;
+      if (ord.orderCode) target.onhandOrderCodes.add(String(ord.orderCode));
+    }
+
+    for (const ord of rawDraftOrders) {
+      const hId = Number(ord.hubId);
+      const resolvedReg = normalizeRegion(ord.province || '').region;
+
+      const target =
+        hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
+        hubRegionMap.get(`${hId}:::${RegionEnum.NA}`);
+      if (!target) continue;
+
+      target.draftWeightKg += Number(ord.totalWeight) || 0;
+      target.draftVolumeCbm += Number(ord.totalVolume) || 0;
+      if (ord.orderCode) target.draftOrderCodes.add(String(ord.orderCode));
     }
 
     for (const trip of rawIncomingTrips) {
       const hId = Number(trip.effectiveHubId);
-      let resolvedReg = trip.destinationRegion;
-      if (!resolvedReg || resolvedReg === RegionEnum.NA) {
-        resolvedReg = normalizeRegion(trip.province).region;
-      }
-      if (resolvedReg === RegionEnum.NA && trip.destinationHub) {
-        resolvedReg = normalizeRegion(trip.destinationHub).region;
-      }
-      if (resolvedReg === RegionEnum.NA && trip.destHubName) {
-        resolvedReg = normalizeRegion(trip.destHubName).region;
-      }
+      const resolvedReg = normalizeRegion(trip.province).region;
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -3001,15 +3170,27 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     const valueRows: string[] = [];
     for (const d of hubRegionMap.values()) {
+      d.onhandOrderCount = d.onhandOrderCodes.size;
+      d.draftOrderCount = d.draftOrderCodes.size;
       const onhandW = Math.round(d.onhandWeightKg * 100) / 100;
       const onhandV = Math.round(d.onhandVolumeCbm * 10) / 10;
+      const draftW = Math.round(d.draftWeightKg * 100) / 100;
+      const draftV = Math.round(d.draftVolumeCbm * 10) / 10;
+      const onhandCodesJson = JSON.stringify([...d.onhandOrderCodes]).replace(
+        /'/g,
+        "''",
+      );
+      const draftCodesJson = JSON.stringify([...d.draftOrderCodes]).replace(
+        /'/g,
+        "''",
+      );
       const incomingW = Math.round(d.incomingWeightKg * 100) / 100;
       const incomingV = Math.round(d.incomingVolumeCbm * 10) / 10;
       const totalW = Math.round((onhandW + incomingW) * 100) / 100;
       const totalV = Math.round((onhandV + incomingV) * 10) / 10;
 
       valueRows.push(
-        `('${reportDate}', ${d.hubId}, '${d.region}', ${onhandW}, ${onhandV}, ${d.onhandPackageCount}, ${d.onhandOrderCount}, ${incomingW}, ${incomingV}, ${d.incomingPackageCount}, ${d.incomingTripIds.size}, ${totalW}, ${totalV}, '${triggeredBy}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        `('${reportDate}', ${d.hubId}, '${d.region}', ${onhandW}, ${onhandV}, ${d.onhandPackageCount}, ${d.onhandOrderCount}, ${draftW}, ${draftV}, ${d.draftOrderCount}, '${onhandCodesJson}'::jsonb, '${draftCodesJson}'::jsonb, ${incomingW}, ${incomingV}, ${d.incomingPackageCount}, ${d.incomingTripIds.size}, ${totalW}, ${totalV}, '${triggeredBy}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       );
     }
 
@@ -3018,6 +3199,8 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         INSERT INTO "daily_regional_dispatch_report" (
           "reportDate", "hubId", "region",
           "onhandWeightKg", "onhandVolumeCbm", "onhandPackageCount", "onhandOrderCount",
+          "draftWeightKg", "draftVolumeCbm", "draftOrderCount",
+          "onhandOrderCodes", "draftOrderCodes",
           "incomingWeightKg", "incomingVolumeCbm", "incomingPackageCount", "incomingTripCount",
           "totalWeightKg", "totalVolumeCbm", "triggeredBy", "calculatedAt", "createdAt", "updatedAt"
         ) VALUES 
@@ -3027,6 +3210,11 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           "onhandVolumeCbm" = EXCLUDED."onhandVolumeCbm",
           "onhandPackageCount" = EXCLUDED."onhandPackageCount",
           "onhandOrderCount" = EXCLUDED."onhandOrderCount",
+          "draftWeightKg" = EXCLUDED."draftWeightKg",
+          "draftVolumeCbm" = EXCLUDED."draftVolumeCbm",
+          "draftOrderCount" = EXCLUDED."draftOrderCount",
+          "onhandOrderCodes" = EXCLUDED."onhandOrderCodes",
+          "draftOrderCodes" = EXCLUDED."draftOrderCodes",
           "incomingWeightKg" = EXCLUDED."incomingWeightKg",
           "incomingVolumeCbm" = EXCLUDED."incomingVolumeCbm",
           "incomingPackageCount" = EXCLUDED."incomingPackageCount",
@@ -3043,6 +3231,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       success: true,
       rowsProcessed: valueRows.length,
       reportDate,
+      provinceAudit,
     };
   }
 
@@ -3053,6 +3242,8 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
   public async getRegionalDispatchReport(query: {
     hubId?: string;
     date?: string;
+    fromDate?: string;
+    toDate?: string;
     mode?: 'live' | 'snapshot';
   }) {
     await this.ensureTableExists();
@@ -3060,10 +3251,21 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const now = new Date();
     const vnParts = this.getVietnamDateParts(now);
     const todayStr = `${vnParts.year}-${String(vnParts.month).padStart(2, '0')}-${String(vnParts.day).padStart(2, '0')}`;
-    const reportDate =
-      query?.date && /^\d{4}-\d{2}-\d{2}$/.test(query.date.trim())
-        ? query.date.trim()
-        : todayStr;
+    const legacyDate = this.sanitizeDateParam(query?.date, todayStr);
+    let fromDate = this.sanitizeDateParam(
+      query?.fromDate,
+      query?.toDate
+        ? this.sanitizeDateParam(query.toDate, legacyDate)
+        : legacyDate,
+    );
+    let toDate = this.sanitizeDateParam(
+      query?.toDate,
+      query?.fromDate ? fromDate : legacyDate,
+    );
+    if (fromDate > toDate) [fromDate, toDate] = [toDate, fromDate];
+    const maxToDate = this.addDays(fromDate, 365);
+    if (toDate > maxToDate) toDate = maxToDate;
+    let reportDate = toDate;
 
     const parsedHubId =
       query?.hubId && query.hubId !== 'ALL' ? Number(query.hubId) : null;
@@ -3084,25 +3286,68 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const cronConfig = await this.cronConfigRepository.findOne({
       where: { jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT' },
     });
+    let provinceAudit: Awaited<ReturnType<typeof this.buildProvinceAudit>>;
 
-    // Luôn tính toán cập nhật dữ liệu mới nhất (Live-first with Snapshot persist)
-    await this.calculateRegionalDispatchSnapshot({
-      hubId: parsedHubId || undefined,
-      date: reportDate,
-      triggeredBy: 'MANUAL',
-    });
+    // Refresh only today's live row. Historical/future range days must use their own snapshots.
+    if (
+      query?.mode !== 'snapshot' &&
+      fromDate <= todayStr &&
+      toDate >= todayStr
+    ) {
+      const snapshotResult = await this.calculateRegionalDispatchSnapshot({
+        hubId: parsedHubId || undefined,
+        date: todayStr,
+        triggeredBy: 'MANUAL',
+      });
+      provinceAudit = snapshotResult.provinceAudit;
+    } else if (
+      query?.mode !== 'snapshot' &&
+      !query?.fromDate &&
+      !query?.toDate &&
+      toDate === todayStr
+    ) {
+      const snapshotResult = await this.calculateRegionalDispatchSnapshot({
+        hubId: parsedHubId || undefined,
+        date: reportDate,
+        triggeredBy: 'MANUAL',
+      });
+      provinceAudit = snapshotResult.provinceAudit;
+    }
 
     // Truy vấn dữ liệu snapshot tổng hợp từ daily_regional_dispatch_report
     const queryBuilder = this.regionalReportRepository
       .createQueryBuilder('r')
       .leftJoinAndSelect('r.hub', 'hub')
-      .where('r.reportDate = :reportDate', { reportDate });
+      .where('r.reportDate >= :fromDate AND r.reportDate <= :toDate', {
+        fromDate,
+        toDate,
+      });
 
     if (parsedHubId) {
       queryBuilder.andWhere('r.hubId = :hubId', { hubId: parsedHubId });
     }
 
-    const reportRows = await queryBuilder.getMany();
+    const rangeRows = await queryBuilder
+      .orderBy('r.reportDate', 'ASC')
+      .addOrderBy('r.hubId', 'ASC')
+      .getMany();
+    // `live` must never expose a stale future snapshot created from today's
+    // inventory. Snapshot mode remains an explicit historical/raw read.
+    const visibleRangeRows =
+      query?.mode === 'snapshot'
+        ? rangeRows
+        : rangeRows.filter((row) => row.reportDate <= todayStr);
+    const isFutureOnlyRange = fromDate > todayStr;
+    if (visibleRangeRows.length > 0) {
+      reportDate = visibleRangeRows[visibleRangeRows.length - 1].reportDate;
+    }
+    // A range query is a sum of every snapshot day in the range. `reportDate`
+    // remains the last available day only as the display/latest-close marker.
+    const reportRows = visibleRangeRows;
+    provinceAudit ??= await this.buildProvinceAudit(
+      parsedHubId || undefined,
+      reportDate,
+    );
 
     // Khởi tạo cấu trúc tổng hợp cho 3 miền chính + N/A
     const initRegionSummary = (regionName: string) => ({
@@ -3112,6 +3357,11 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       onhandVolumeCbm: 0,
       onhandPackageCount: 0,
       onhandOrderCount: 0,
+      draftWeightKg: 0,
+      draftVolumeCbm: 0,
+      draftOrderCount: 0,
+      onhandOrderCodes: new Set<string>(),
+      draftOrderCodes: new Set<string>(),
       incomingWeightKg: 0,
       incomingWeightTons: 0,
       incomingVolumeCbm: 0,
@@ -3128,6 +3378,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       [RegionEnum.NORTH]: initRegionSummary(RegionEnum.NORTH),
       [RegionEnum.CENTRAL]: initRegionSummary(RegionEnum.CENTRAL),
       [RegionEnum.SOUTH]: initRegionSummary(RegionEnum.SOUTH),
+      [RegionEnum.STORAGE]: initRegionSummary(RegionEnum.STORAGE),
       [RegionEnum.NA]: initRegionSummary(RegionEnum.NA),
     };
 
@@ -3137,6 +3388,15 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       target.onhandVolumeCbm += Number(row.onhandVolumeCbm) || 0;
       target.onhandPackageCount += Number(row.onhandPackageCount) || 0;
       target.onhandOrderCount += Number(row.onhandOrderCount) || 0;
+      target.draftWeightKg += Number(row.draftWeightKg) || 0;
+      target.draftVolumeCbm += Number(row.draftVolumeCbm) || 0;
+      target.draftOrderCount += Number(row.draftOrderCount) || 0;
+      for (const code of row.onhandOrderCodes || []) {
+        target.onhandOrderCodes.add(String(code));
+      }
+      for (const code of row.draftOrderCodes || []) {
+        target.draftOrderCodes.add(String(code));
+      }
 
       target.incomingWeightKg += Number(row.incomingWeightKg) || 0;
       target.incomingVolumeCbm += Number(row.incomingVolumeCbm) || 0;
@@ -3158,6 +3418,8 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       item.onhandWeightTons =
         Math.round((item.onhandWeightKg / 1000) * 100) / 100;
       item.onhandVolumeCbm = Math.round(item.onhandVolumeCbm * 10) / 10;
+      item.draftWeightKg = Math.round(item.draftWeightKg * 100) / 100;
+      item.draftVolumeCbm = Math.round(item.draftVolumeCbm * 10) / 10;
 
       item.incomingWeightKg = Math.round(item.incomingWeightKg * 100) / 100;
       item.incomingWeightTons =
@@ -3196,43 +3458,83 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         summaryMap[RegionEnum.NORTH].totalWeightKg +
         summaryMap[RegionEnum.CENTRAL].totalWeightKg +
         summaryMap[RegionEnum.SOUTH].totalWeightKg +
+        summaryMap[RegionEnum.STORAGE].totalWeightKg +
         summaryMap[RegionEnum.NA].totalWeightKg,
       totalWeightTons: 0,
       totalVolumeCbm:
         summaryMap[RegionEnum.NORTH].totalVolumeCbm +
         summaryMap[RegionEnum.CENTRAL].totalVolumeCbm +
         summaryMap[RegionEnum.SOUTH].totalVolumeCbm +
+        summaryMap[RegionEnum.STORAGE].totalVolumeCbm +
         summaryMap[RegionEnum.NA].totalVolumeCbm,
       onhandWeightKg:
         summaryMap[RegionEnum.NORTH].onhandWeightKg +
         summaryMap[RegionEnum.CENTRAL].onhandWeightKg +
         summaryMap[RegionEnum.SOUTH].onhandWeightKg +
+        summaryMap[RegionEnum.STORAGE].onhandWeightKg +
         summaryMap[RegionEnum.NA].onhandWeightKg,
       incomingWeightKg:
         summaryMap[RegionEnum.NORTH].incomingWeightKg +
         summaryMap[RegionEnum.CENTRAL].incomingWeightKg +
         summaryMap[RegionEnum.SOUTH].incomingWeightKg +
+        summaryMap[RegionEnum.STORAGE].incomingWeightKg +
         summaryMap[RegionEnum.NA].incomingWeightKg,
       packageCount:
         summaryMap[RegionEnum.NORTH].onhandPackageCount +
         summaryMap[RegionEnum.CENTRAL].onhandPackageCount +
         summaryMap[RegionEnum.SOUTH].onhandPackageCount +
+        summaryMap[RegionEnum.STORAGE].onhandPackageCount +
         summaryMap[RegionEnum.NA].onhandPackageCount,
       orderCount:
         summaryMap[RegionEnum.NORTH].onhandOrderCount +
         summaryMap[RegionEnum.CENTRAL].onhandOrderCount +
         summaryMap[RegionEnum.SOUTH].onhandOrderCount +
+        summaryMap[RegionEnum.STORAGE].onhandOrderCount +
         summaryMap[RegionEnum.NA].onhandOrderCount,
       incomingTripCount:
         summaryMap[RegionEnum.NORTH].incomingTripCount +
         summaryMap[RegionEnum.CENTRAL].incomingTripCount +
         summaryMap[RegionEnum.SOUTH].incomingTripCount +
+        summaryMap[RegionEnum.STORAGE].incomingTripCount +
         summaryMap[RegionEnum.NA].incomingTripCount,
     };
     grandTotals.totalWeightTons =
       Math.round((grandTotals.totalWeightKg / 1000) * 100) / 100;
     grandTotals.totalVolumeCbm =
       Math.round(grandTotals.totalVolumeCbm * 10) / 10;
+
+    const rowsByDate = new Map<string, DailyRegionalDispatchReportEntity[]>();
+    for (const row of visibleRangeRows) {
+      const rows = rowsByDate.get(row.reportDate) || [];
+      rows.push(row);
+      rowsByDate.set(row.reportDate, rows);
+    }
+    const dailySeries = this.enumerateDates(fromDate, toDate).map((date) => {
+      const rows = rowsByDate.get(date) || [];
+      const sum = (key: keyof DailyRegionalDispatchReportEntity) =>
+        rows.reduce((total, row) => total + (Number(row[key]) || 0), 0);
+      const onhandWeightKg = sum('onhandWeightKg');
+      const onhandVolumeCbm = sum('onhandVolumeCbm');
+      const draftWeightKg = sum('draftWeightKg');
+      const draftVolumeCbm = sum('draftVolumeCbm');
+      const incomingWeightKg = sum('incomingWeightKg');
+      const incomingVolumeCbm = sum('incomingVolumeCbm');
+      return {
+        reportDate: date,
+        hasSnapshot: rows.length > 0,
+        onhandWeightKg,
+        onhandVolumeCbm,
+        onhandOrderCount: sum('onhandOrderCount'),
+        draftWeightKg,
+        draftVolumeCbm,
+        draftOrderCount: sum('draftOrderCount'),
+        incomingWeightKg,
+        incomingVolumeCbm,
+        incomingTripCount: sum('incomingTripCount'),
+        totalWeightKg: onhandWeightKg + draftWeightKg + incomingWeightKg,
+        totalVolumeCbm: onhandVolumeCbm + draftVolumeCbm + incomingVolumeCbm,
+      };
+    });
 
     // Chi tiết danh sách chuyến xe đang chạy về kho
     const hubFilterSql = parsedHubId
@@ -3277,142 +3579,140 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     `);
 
     // Chi tiết danh sách đơn hàng đang tồn tại kho
-    const storedHubFilterSql = parsedHubId
-      ? `AND o."currentHubId" = ${parsedHubId}`
-      : '';
-    const rawStoredOrdersList = await this.dataSource.query(`
+    const rawStoredOrdersList = await this.dataSource.query(
+      `
       SELECT 
         o.id,
         o."orderCode",
         o."province",
         o."destinationRegion",
         o."destinationHub",
-        o."remainingQuantity",
+        stock."hubStock" AS "remainingQuantity",
         o."totalQuantity",
         o."totalWeight",
         o."totalVolume",
         o."goodsDescription",
         o."notes",
-        o."currentHubId",
+        stock."hubId" AS "currentHubId",
         h.name AS "currentHubName"
       FROM "order" o
-      LEFT JOIN "hub" h ON h.id = o."currentHubId"
+      JOIN LATERAL (
+        SELECT tx."hubId",
+               SUM(CASE WHEN tx.type = 'INBOUND' THEN tx.quantity
+                        WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
+                        ELSE 0 END)::int AS "hubStock"
+        FROM "order_inventory_transaction" tx
+        WHERE tx."orderId" = o.id AND tx."deletedAt" IS NULL
+        GROUP BY tx."hubId"
+        HAVING SUM(CASE WHEN tx.type = 'INBOUND' THEN tx.quantity
+                        WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
+                        ELSE 0 END) > 0
+      ) stock ON TRUE
+      LEFT JOIN "hub" h ON h.id = stock."hubId"
       WHERE o."deletedAt" IS NULL
-        AND o.status IN ('INBOUND', 'STORED', 'LUU_KHO', 'IN_WAREHOUSE')
-        AND o."remainingQuantity" > 0
-        ${storedHubFilterSql}
+        AND NOT (
+          o.status IN ('DRAFT', 'PENDING', 'WAITING')
+          AND COALESCE(o."currentHubId", o."originHubId") = stock."hubId"
+        )
+        AND ($1::integer IS NULL OR stock."hubId" = $1)
       ORDER BY o."createdAt" DESC
       LIMIT 150
-    `);
-
-    const onhandOrdersList = rawStoredOrdersList.map((ord: any) => {
-      let reg = ord.destinationRegion;
-      if (!reg || reg === RegionEnum.NA) {
-        reg = normalizeRegion(ord.province).region;
-      }
-      if (reg === RegionEnum.NA && ord.destinationHub) {
-        reg = normalizeRegion(ord.destinationHub).region;
-      }
-
-      const totalQty = Number(ord.totalQuantity) || 1;
-      const remainQty = Number(ord.remainingQuantity) || 0;
-      const ratio = totalQty > 0 ? remainQty / totalQty : 1;
-      const wKg =
-        Math.round((Number(ord.totalWeight) || 0) * ratio * 100) / 100;
-      const vCbm = Math.round((Number(ord.totalVolume) || 0) * ratio * 10) / 10;
-
-      return {
-        id: ord.id,
-        orderCode: ord.orderCode,
-        province: ord.province || 'Chưa nhập',
-        region: reg,
-        remainingQuantity: remainQty,
-        totalQuantity: totalQty,
-        weightKg: wKg,
-        weightTons: Math.round((wKg / 1000) * 100) / 100,
-        volumeCbm: vCbm,
-        goodsDescription: ord.goodsDescription,
-        currentHubId: ord.currentHubId,
-        currentHubName: ord.currentHubName || 'Kho hiện tại',
-      };
-    });
-
-    const incomingTripsList = rawIncomingTripsList.map((trip: any) => {
-      let reg = trip.destinationRegion;
-      if (!reg || reg === RegionEnum.NA) {
-        reg = normalizeRegion(trip.province).region;
-      }
-      if (reg === RegionEnum.NA && trip.destinationHub) {
-        reg = normalizeRegion(trip.destinationHub).region;
-      }
-      if (reg === RegionEnum.NA && trip.destinationHubName) {
-        reg = normalizeRegion(trip.destinationHubName).region;
-      }
-
-      return {
-        id: trip.id,
-        tripCode: trip.tripCode,
-        licensePlate: trip.licensePlate || 'Chưa gán xe',
-        driverName: trip.driverName || 'Chưa gán tài xế',
-        status: trip.status,
-        originHubName: trip.originHubName || 'Kho gửi',
-        destinationHubName: trip.destinationHubName || 'Kho đích',
-        weightKg: Number(trip.weightAllocated) || 0,
-        weightTons:
-          Math.round(((Number(trip.weightAllocated) || 0) / 1000) * 100) / 100,
-        volumeCbm: Number(trip.volumeAllocated) || 0,
-        packageCount: Number(trip.quantityAllocated) || 0,
-        orderCode: trip.orderCode,
-        province: trip.province || '',
-        region: reg,
-        estimatedDeliveryDate: trip.estimatedDeliveryDate,
-      };
-    });
-
-    // Draft orders are expected receipts, separate from trucks in transit.
-    // Use the receiving/current hub, falling back to the origin hub for drafts.
-    const draftOrders: Array<{
-      destinationRegion: string | null;
-      province: string | null;
-      destinationHub: string | null;
-      totalWeight: number;
-      totalVolume: number;
-    }> = await this.dataSource.query(
-      `SELECT o."destinationRegion", o.province, o."destinationHub",
-              o."totalWeight", o."totalVolume"
-       FROM "order" o
-       WHERE o."deletedAt" IS NULL AND o.status = 'DRAFT'
-         AND ($1::integer IS NULL OR COALESCE(o."currentHubId", o."originHubId") = $1)`,
+    `,
       [parsedHubId],
     );
+
+    const onhandOrdersList = isFutureOnlyRange
+      ? []
+      : rawStoredOrdersList.map((ord: any) => {
+          const reg = normalizeRegion(ord.province).region;
+
+          const totalQty = Number(ord.totalQuantity) || 1;
+          const remainQty = Number(ord.remainingQuantity) || 0;
+          const ratio = totalQty > 0 ? remainQty / totalQty : 1;
+          const wKg =
+            Math.round((Number(ord.totalWeight) || 0) * ratio * 100) / 100;
+          const vCbm =
+            Math.round((Number(ord.totalVolume) || 0) * ratio * 10) / 10;
+
+          return {
+            id: ord.id,
+            orderCode: ord.orderCode,
+            province: ord.province || 'Chưa nhập',
+            region: reg,
+            remainingQuantity: remainQty,
+            totalQuantity: totalQty,
+            weightKg: wKg,
+            weightTons: Math.round((wKg / 1000) * 100) / 100,
+            volumeCbm: vCbm,
+            goodsDescription: ord.goodsDescription,
+            currentHubId: ord.currentHubId,
+            currentHubName: ord.currentHubName || 'Kho hiện tại',
+          };
+        });
+
+    const incomingTripsList = isFutureOnlyRange
+      ? []
+      : rawIncomingTripsList.map((trip: any) => {
+          const reg = normalizeRegion(trip.province).region;
+
+          return {
+            id: trip.id,
+            tripCode: trip.tripCode,
+            licensePlate: trip.licensePlate || 'Chưa gán xe',
+            driverName: trip.driverName || 'Chưa gán tài xế',
+            status: trip.status,
+            originHubName: trip.originHubName || 'Kho gửi',
+            destinationHubName: trip.destinationHubName || 'Kho đích',
+            weightKg: Number(trip.weightAllocated) || 0,
+            weightTons:
+              Math.round(((Number(trip.weightAllocated) || 0) / 1000) * 100) /
+              100,
+            volumeCbm: Number(trip.volumeAllocated) || 0,
+            packageCount: Number(trip.quantityAllocated) || 0,
+            orderCode: trip.orderCode,
+            province: trip.province || '',
+            region: reg,
+            estimatedDeliveryDate: trip.estimatedDeliveryDate,
+          };
+        });
+
     const draftRegions = {
-      north: { weightKg: 0, volumeCbm: 0 },
-      central: { weightKg: 0, volumeCbm: 0 },
-      south: { weightKg: 0, volumeCbm: 0 },
-      na: { weightKg: 0, volumeCbm: 0 },
+      north: {
+        weightKg: summaryMap[RegionEnum.NORTH].draftWeightKg,
+        volumeCbm: summaryMap[RegionEnum.NORTH].draftVolumeCbm,
+        orderCount: summaryMap[RegionEnum.NORTH].draftOrderCount,
+        orderCodes: [...summaryMap[RegionEnum.NORTH].draftOrderCodes],
+      },
+      central: {
+        weightKg: summaryMap[RegionEnum.CENTRAL].draftWeightKg,
+        volumeCbm: summaryMap[RegionEnum.CENTRAL].draftVolumeCbm,
+        orderCount: summaryMap[RegionEnum.CENTRAL].draftOrderCount,
+        orderCodes: [...summaryMap[RegionEnum.CENTRAL].draftOrderCodes],
+      },
+      south: {
+        weightKg: summaryMap[RegionEnum.SOUTH].draftWeightKg,
+        volumeCbm: summaryMap[RegionEnum.SOUTH].draftVolumeCbm,
+        orderCount: summaryMap[RegionEnum.SOUTH].draftOrderCount,
+        orderCodes: [...summaryMap[RegionEnum.SOUTH].draftOrderCodes],
+      },
+      storage: {
+        weightKg: summaryMap[RegionEnum.STORAGE].draftWeightKg,
+        volumeCbm: summaryMap[RegionEnum.STORAGE].draftVolumeCbm,
+        orderCount: summaryMap[RegionEnum.STORAGE].draftOrderCount,
+        orderCodes: [...summaryMap[RegionEnum.STORAGE].draftOrderCodes],
+      },
+      na: {
+        weightKg: summaryMap[RegionEnum.NA].draftWeightKg,
+        volumeCbm: summaryMap[RegionEnum.NA].draftVolumeCbm,
+        orderCount: summaryMap[RegionEnum.NA].draftOrderCount,
+        orderCodes: [...summaryMap[RegionEnum.NA].draftOrderCodes],
+      },
     };
-    for (const order of draftOrders) {
-      let region = order.destinationRegion;
-      if (!region || region === RegionEnum.NA) {
-        region = normalizeRegion(order.province || '').region;
-      }
-      if (region === RegionEnum.NA && order.destinationHub) {
-        region = normalizeRegion(order.destinationHub).region;
-      }
-      const key =
-        region === RegionEnum.NORTH
-          ? 'north'
-          : region === RegionEnum.CENTRAL
-            ? 'central'
-            : region === RegionEnum.SOUTH
-              ? 'south'
-              : 'na';
-      draftRegions[key].weightKg += Number(order.totalWeight) || 0;
-      draftRegions[key].volumeCbm += Number(order.totalVolume) || 0;
-    }
 
     return {
       draftRegions,
+      range: { fromDate, toDate },
+      dailySeries,
       hub: {
         id: selectedHub ? selectedHub.id : 0,
         code: selectedHub ? selectedHub.code : 'ALL',
@@ -3431,10 +3731,35 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         lastRunStatus: cronConfig?.lastRunStatus || 'IDLE',
       },
       regions: {
-        north: summaryMap[RegionEnum.NORTH],
-        central: summaryMap[RegionEnum.CENTRAL],
-        south: summaryMap[RegionEnum.SOUTH],
-        na: summaryMap[RegionEnum.NA],
+        north: {
+          ...summaryMap[RegionEnum.NORTH],
+          onhandOrderCodes: [...summaryMap[RegionEnum.NORTH].onhandOrderCodes],
+          draftOrderCodes: [...summaryMap[RegionEnum.NORTH].draftOrderCodes],
+        },
+        central: {
+          ...summaryMap[RegionEnum.CENTRAL],
+          onhandOrderCodes: [
+            ...summaryMap[RegionEnum.CENTRAL].onhandOrderCodes,
+          ],
+          draftOrderCodes: [...summaryMap[RegionEnum.CENTRAL].draftOrderCodes],
+        },
+        south: {
+          ...summaryMap[RegionEnum.SOUTH],
+          onhandOrderCodes: [...summaryMap[RegionEnum.SOUTH].onhandOrderCodes],
+          draftOrderCodes: [...summaryMap[RegionEnum.SOUTH].draftOrderCodes],
+        },
+        storage: {
+          ...summaryMap[RegionEnum.STORAGE],
+          onhandOrderCodes: [
+            ...summaryMap[RegionEnum.STORAGE].onhandOrderCodes,
+          ],
+          draftOrderCodes: [...summaryMap[RegionEnum.STORAGE].draftOrderCodes],
+        },
+        na: {
+          ...summaryMap[RegionEnum.NA],
+          onhandOrderCodes: [...summaryMap[RegionEnum.NA].onhandOrderCodes],
+          draftOrderCodes: [...summaryMap[RegionEnum.NA].draftOrderCodes],
+        },
       },
       totals: grandTotals,
       hubsList: allHubs.map((h) => ({
@@ -3445,6 +3770,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       })),
       incomingTripsList,
       onhandOrdersList,
+      provinceAudit,
     };
   }
 }
