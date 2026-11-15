@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   OnModuleDestroy,
@@ -17,6 +18,24 @@ import { RoleEnum } from '../roles/roles.enum';
 import { NotificationsService } from '../notifications/notifications.service';
 
 export type ReportDirection = 'OUTBOUND' | 'INBOUND' | 'ALL';
+
+export function resolveRegionalDispatchSyncDate(
+  requestedDate: string | undefined,
+  todayDate: string,
+): string {
+  if (!requestedDate || !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate.trim())) {
+    return todayDate;
+  }
+
+  const date = requestedDate.trim();
+  if (date > todayDate) {
+    throw new BadRequestException(
+      `Không thể đồng bộ báo cáo cho ngày tương lai. Ngày đồng bộ tối đa là ${todayDate}.`,
+    );
+  }
+
+  return date;
+}
 
 export interface DirectionMetrics {
   cbm: number;
@@ -2870,10 +2889,11 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     const now = new Date();
     const vnParts = this.getVietnamDateParts(now);
-    const reportDate =
-      options?.date && /^\d{4}-\d{2}-\d{2}$/.test(options.date.trim())
-        ? options.date.trim()
-        : `${vnParts.year}-${String(vnParts.month).padStart(2, '0')}-${String(vnParts.day).padStart(2, '0')}`;
+    const todayDate = `${vnParts.year}-${String(vnParts.month).padStart(2, '0')}-${String(vnParts.day).padStart(2, '0')}`;
+    const reportDate = resolveRegionalDispatchSyncDate(
+      options?.date,
+      todayDate,
+    );
 
     const triggeredBy = options?.triggeredBy || 'CRON';
 
@@ -2905,19 +2925,21 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         FROM "order_inventory_transaction" tx
         WHERE tx."orderId" = o.id
           AND tx."deletedAt" IS NULL
+              AND tx."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
         GROUP BY tx."hubId"
         HAVING SUM(CASE WHEN tx.type = 'INBOUND' THEN tx.quantity
                         WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
                         ELSE 0 END) > 0
       ) stock ON TRUE
       WHERE o."deletedAt" IS NULL
+        AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
         AND NOT (
           o.status IN ('DRAFT', 'PENDING', 'WAITING')
           AND COALESCE(o."currentHubId", o."originHubId") = stock."hubId"
         )
         AND ($1::integer IS NULL OR stock."hubId" = $1)
     `,
-      [options?.hubId ?? null],
+      [options?.hubId ?? null, reportDate],
     );
 
     const rawDraftOrders = await this.dataSource.query(
@@ -2925,17 +2947,27 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       WITH warehouse_contexts AS (
         SELECT o.id AS "orderId", o."originHubId" AS "hubId"
         FROM "order" o
-        WHERE o."deletedAt" IS NULL AND o."originHubId" IS NOT NULL
+        WHERE o."deletedAt" IS NULL
+          AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+          AND o."originHubId" IS NOT NULL
         UNION
         SELECT o.id, o."currentHubId" FROM "order" o
-        WHERE o."deletedAt" IS NULL AND o."currentHubId" IS NOT NULL
+        WHERE o."deletedAt" IS NULL
+          AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+          AND o."currentHubId" IS NOT NULL
         UNION
         SELECT o.id, o."destinationHubId" FROM "order" o
-        WHERE o."deletedAt" IS NULL AND o."destinationHubId" IS NOT NULL
+        WHERE o."deletedAt" IS NULL
+          AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+          AND o."destinationHubId" IS NOT NULL
         UNION
         SELECT tx."orderId", tx."hubId" FROM "order_inventory_transaction" tx
         JOIN "order" o ON o.id = tx."orderId"
-        WHERE o."deletedAt" IS NULL AND tx."deletedAt" IS NULL AND tx."hubId" IS NOT NULL
+        WHERE o."deletedAt" IS NULL
+          AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+          AND tx."deletedAt" IS NULL
+          AND tx."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+          AND tx."hubId" IS NOT NULL
         UNION
         SELECT o.id, stop."hubId"
         FROM "order" o
@@ -2943,6 +2975,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           ON stop."tripCode" = o."currentTripCode"
          AND stop."deletedAt" IS NULL
         WHERE o."deletedAt" IS NULL
+          AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
       )
       SELECT o.id, o."orderCode", o.province,
              o."destinationHub", o."totalQuantity", o."totalWeight",
@@ -2950,6 +2983,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       FROM warehouse_contexts contexts
       JOIN "order" o ON o.id = contexts."orderId"
       WHERE ($1::integer IS NULL OR contexts."hubId" = $1)
+        AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
         AND (
           (o.status IN ('DRAFT', 'PENDING', 'WAITING')
            AND COALESCE(o."currentHubId", o."originHubId") = contexts."hubId")
@@ -2959,6 +2993,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
                 WHERE stock_tx."orderId" = o.id
                   AND stock_tx."hubId" = contexts."hubId"
                   AND stock_tx."deletedAt" IS NULL
+                  AND stock_tx."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
                 GROUP BY stock_tx."orderId", stock_tx."hubId"
                 HAVING SUM(CASE WHEN stock_tx.type = 'INBOUND' THEN stock_tx.quantity
                                 WHEN stock_tx.type IN ('OUTBOUND', 'TRANSFER') THEN -stock_tx.quantity
@@ -2970,6 +3005,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
               AND pending_stop."hubId" = contexts."hubId"
               AND pending_stop.status = 'PENDING'
               AND pending_stop."deletedAt" IS NULL
+              AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
               AND (o."destinationHubId" = pending_stop."hubId"
                    OR o."destinationHubId" IS NULL
                    OR NOT EXISTS (
@@ -2981,7 +3017,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           )
         )
     `,
-      [options?.hubId ?? null],
+      [options?.hubId ?? null, reportDate],
     );
 
     const hubFilterTrips = options?.hubId
@@ -2990,7 +3026,8 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           OR (t.type = 'INBOUND' AND t."originHubId" = ${options.hubId})
         )`
       : '';
-    const rawIncomingTrips = await this.dataSource.query(`
+    const rawIncomingTrips = await this.dataSource.query(
+      `
       SELECT 
         t.id AS "tripId",
         t."tripCode",
@@ -3012,12 +3049,16 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       LEFT JOIN "order" o ON o.id = t."orderId"
       LEFT JOIN "hub" dest ON dest.id = CASE WHEN t.type = 'TRANSFER' THEN t."destinationHubId" ELSE t."originHubId" END
       WHERE t."deletedAt" IS NULL
+        AND t."createdAt" < (($1::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+        AND (o."createdAt" IS NULL OR o."createdAt" < (($1::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh'))
         AND (
           (t.type = 'TRANSFER' AND t.status IN ('IN_TRANSIT', 'DISPATCHED') AND t."destinationHubId" IS NOT NULL)
           OR (t.type = 'INBOUND' AND t.status = 'PENDING')
         )
         ${hubFilterTrips}
-    `);
+    `,
+      [reportDate],
+    );
 
     const hubs = await this.hubRepository.find({
       where: options?.hubId ? { id: options.hubId } : {},
@@ -3290,10 +3331,19 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       .orderBy('r.reportDate', 'ASC')
       .addOrderBy('r.hubId', 'ASC')
       .getMany();
-    if (rangeRows.length > 0) {
-      reportDate = rangeRows[rangeRows.length - 1].reportDate;
+    // `live` must never expose a stale future snapshot created from today's
+    // inventory. Snapshot mode remains an explicit historical/raw read.
+    const visibleRangeRows =
+      query?.mode === 'snapshot'
+        ? rangeRows
+        : rangeRows.filter((row) => row.reportDate <= todayStr);
+    const isFutureOnlyRange = fromDate > todayStr;
+    if (visibleRangeRows.length > 0) {
+      reportDate = visibleRangeRows[visibleRangeRows.length - 1].reportDate;
     }
-    const reportRows = rangeRows.filter((row) => row.reportDate === reportDate);
+    // A range query is a sum of every snapshot day in the range. `reportDate`
+    // remains the last available day only as the display/latest-close marker.
+    const reportRows = visibleRangeRows;
     provinceAudit ??= await this.buildProvinceAudit(
       parsedHubId || undefined,
       reportDate,
@@ -3454,7 +3504,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       Math.round(grandTotals.totalVolumeCbm * 10) / 10;
 
     const rowsByDate = new Map<string, DailyRegionalDispatchReportEntity[]>();
-    for (const row of rangeRows) {
+    for (const row of visibleRangeRows) {
       const rows = rowsByDate.get(row.reportDate) || [];
       rows.push(row);
       rowsByDate.set(row.reportDate, rows);
@@ -3571,54 +3621,60 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       [parsedHubId],
     );
 
-    const onhandOrdersList = rawStoredOrdersList.map((ord: any) => {
-      const reg = normalizeRegion(ord.province).region;
+    const onhandOrdersList = isFutureOnlyRange
+      ? []
+      : rawStoredOrdersList.map((ord: any) => {
+          const reg = normalizeRegion(ord.province).region;
 
-      const totalQty = Number(ord.totalQuantity) || 1;
-      const remainQty = Number(ord.remainingQuantity) || 0;
-      const ratio = totalQty > 0 ? remainQty / totalQty : 1;
-      const wKg =
-        Math.round((Number(ord.totalWeight) || 0) * ratio * 100) / 100;
-      const vCbm = Math.round((Number(ord.totalVolume) || 0) * ratio * 10) / 10;
+          const totalQty = Number(ord.totalQuantity) || 1;
+          const remainQty = Number(ord.remainingQuantity) || 0;
+          const ratio = totalQty > 0 ? remainQty / totalQty : 1;
+          const wKg =
+            Math.round((Number(ord.totalWeight) || 0) * ratio * 100) / 100;
+          const vCbm =
+            Math.round((Number(ord.totalVolume) || 0) * ratio * 10) / 10;
 
-      return {
-        id: ord.id,
-        orderCode: ord.orderCode,
-        province: ord.province || 'Chưa nhập',
-        region: reg,
-        remainingQuantity: remainQty,
-        totalQuantity: totalQty,
-        weightKg: wKg,
-        weightTons: Math.round((wKg / 1000) * 100) / 100,
-        volumeCbm: vCbm,
-        goodsDescription: ord.goodsDescription,
-        currentHubId: ord.currentHubId,
-        currentHubName: ord.currentHubName || 'Kho hiện tại',
-      };
-    });
+          return {
+            id: ord.id,
+            orderCode: ord.orderCode,
+            province: ord.province || 'Chưa nhập',
+            region: reg,
+            remainingQuantity: remainQty,
+            totalQuantity: totalQty,
+            weightKg: wKg,
+            weightTons: Math.round((wKg / 1000) * 100) / 100,
+            volumeCbm: vCbm,
+            goodsDescription: ord.goodsDescription,
+            currentHubId: ord.currentHubId,
+            currentHubName: ord.currentHubName || 'Kho hiện tại',
+          };
+        });
 
-    const incomingTripsList = rawIncomingTripsList.map((trip: any) => {
-      const reg = normalizeRegion(trip.province).region;
+    const incomingTripsList = isFutureOnlyRange
+      ? []
+      : rawIncomingTripsList.map((trip: any) => {
+          const reg = normalizeRegion(trip.province).region;
 
-      return {
-        id: trip.id,
-        tripCode: trip.tripCode,
-        licensePlate: trip.licensePlate || 'Chưa gán xe',
-        driverName: trip.driverName || 'Chưa gán tài xế',
-        status: trip.status,
-        originHubName: trip.originHubName || 'Kho gửi',
-        destinationHubName: trip.destinationHubName || 'Kho đích',
-        weightKg: Number(trip.weightAllocated) || 0,
-        weightTons:
-          Math.round(((Number(trip.weightAllocated) || 0) / 1000) * 100) / 100,
-        volumeCbm: Number(trip.volumeAllocated) || 0,
-        packageCount: Number(trip.quantityAllocated) || 0,
-        orderCode: trip.orderCode,
-        province: trip.province || '',
-        region: reg,
-        estimatedDeliveryDate: trip.estimatedDeliveryDate,
-      };
-    });
+          return {
+            id: trip.id,
+            tripCode: trip.tripCode,
+            licensePlate: trip.licensePlate || 'Chưa gán xe',
+            driverName: trip.driverName || 'Chưa gán tài xế',
+            status: trip.status,
+            originHubName: trip.originHubName || 'Kho gửi',
+            destinationHubName: trip.destinationHubName || 'Kho đích',
+            weightKg: Number(trip.weightAllocated) || 0,
+            weightTons:
+              Math.round(((Number(trip.weightAllocated) || 0) / 1000) * 100) /
+              100,
+            volumeCbm: Number(trip.volumeAllocated) || 0,
+            packageCount: Number(trip.quantityAllocated) || 0,
+            orderCode: trip.orderCode,
+            province: trip.province || '',
+            region: reg,
+            estimatedDeliveryDate: trip.estimatedDeliveryDate,
+          };
+        });
 
     const draftRegions = {
       north: {
