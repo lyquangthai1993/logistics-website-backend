@@ -3805,6 +3805,17 @@ export class WarehouseService {
         throw new NotFoundException('Không tìm thấy đơn hàng nào để xuất kho');
       }
 
+      if (!dto.items?.length) {
+        const missingProvince = rawOrders.find(
+          (order) => !order.province || !order.province.trim(),
+        );
+        if (missingProvince) {
+          throw new BadRequestException(
+            `Đơn ${missingProvince.orderCode}: Tỉnh/Thành phố không được để trống`,
+          );
+        }
+      }
+
       await this.lockOrdersForInventory(
         manager,
         [],
