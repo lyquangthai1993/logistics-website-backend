@@ -1,10 +1,19 @@
 import {
-  normalizeProvinceInput,
   normalizeRegion,
+  PROVINCE_DEFINITIONS,
+  normalizeProvinceInput,
   RegionEnum,
 } from './region-normalizer.util';
 
 describe('RegionNormalizer', () => {
+  it('should provide 63 unique canonical province references', () => {
+    expect(PROVINCE_DEFINITIONS).toHaveLength(63);
+    expect(
+      new Set(PROVINCE_DEFINITIONS.map((province) => province.standardName))
+        .size,
+    ).toBe(63);
+  });
+
   it('should map Northern provinces to MIỀN BẮC', () => {
     expect(normalizeRegion('Hà Nội').region).toBe(RegionEnum.NORTH);
     expect(normalizeRegion('TP. Hà Nội').region).toBe(RegionEnum.NORTH);
@@ -35,8 +44,14 @@ describe('RegionNormalizer', () => {
     // Tây Nam Bộ (Miền Tây gộp vào Miền Nam)
     expect(normalizeRegion('Cần Thơ').region).toBe(RegionEnum.SOUTH);
     expect(normalizeRegion('TP. Cần Thơ').region).toBe(RegionEnum.SOUTH);
+    expect(normalizeRegion('Tỉnh Cần Thơ').provinceName).toBe('Cần Thơ');
     expect(normalizeRegion('Cà Mau').region).toBe(RegionEnum.SOUTH);
     expect(normalizeRegion('Tỉnh Cà Mau').region).toBe(RegionEnum.SOUTH);
+    expect(normalizeRegion('Tỉnh Cà Mau').provinceName).toBe('Cà Mau');
+    expect(normalizeRegion('Huế').provinceName).toBe('Thừa Thiên Huế');
+    expect(normalizeRegion('Bà Rịa Vũng Tàu').provinceName).toBe(
+      'Bà Rịa - Vũng Tàu',
+    );
     expect(normalizeRegion('Long An').region).toBe(RegionEnum.SOUTH);
     expect(normalizeRegion('Tiền Giang').region).toBe(RegionEnum.SOUTH);
     expect(normalizeRegion('An Giang').region).toBe(RegionEnum.SOUTH);

@@ -52,13 +52,13 @@ export function sanitizeProvinceString(input: string): string {
   return cleaned.replace(/\s+/g, ' ').trim();
 }
 
-interface ProvinceDefinition {
+export interface ProvinceDefinition {
   standardName: string;
   region: RegionEnum;
   aliases: string[];
 }
 
-const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
+export const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
   // ==========================================
   // 1. MIỀN BẮC (25 TỈNH/THÀNH)
   // ==========================================
@@ -215,7 +215,14 @@ const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
   {
     standardName: 'Thừa Thiên Huế',
     region: RegionEnum.CENTRAL,
-    aliases: ['thua thien hue', 'thua thien - hue', 'hue', 'tth'],
+    aliases: [
+      'thua thien hue',
+      'thua thien - hue',
+      'hue',
+      'Huế',
+      'TP. Huế',
+      'tth',
+    ],
   },
   {
     standardName: 'Đà Nẵng',
@@ -340,8 +347,11 @@ const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
     aliases: [
       'ba ria - vung tau',
       'ba ria vung tau',
+      'Bà Rịa Vũng Tàu',
       'ba ria',
+      'Bà Rịa',
       'vung tau',
+      'Vũng Tàu',
       'brvt',
       'vt',
     ],
@@ -400,7 +410,7 @@ const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
   {
     standardName: 'Cần Thơ',
     region: RegionEnum.SOUTH,
-    aliases: ['can tho', 'ct'],
+    aliases: ['can tho', 'TP. Cần Thơ', 'Tỉnh Cần Thơ', 'ct'],
   },
   {
     standardName: 'Hậu Giang',
@@ -420,7 +430,7 @@ const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
   {
     standardName: 'Cà Mau',
     region: RegionEnum.SOUTH,
-    aliases: ['ca mau', 'cm'],
+    aliases: ['ca mau', 'Tỉnh Cà Mau', 'cm'],
   },
 ];
 
