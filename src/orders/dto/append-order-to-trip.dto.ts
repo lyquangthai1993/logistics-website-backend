@@ -9,6 +9,7 @@ import {
   IsString,
   Min,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { DeliveryDestinationMode } from './quick-create-inbound-order.dto';
 
 export enum AppendOrderMode {
@@ -95,13 +96,14 @@ export class AppendOrderToTripDto {
   @IsString()
   deliveryAddress?: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     example: 'Đà Nẵng',
-    description: 'Tỉnh/Thành phố nhận hàng của khách',
+    description: 'Tỉnh/Thành phố nhận hàng của khách (bắt buộc)',
   })
-  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsNotEmpty({ message: 'Tỉnh/Thành phố không được để trống' })
   @IsString()
-  province?: string;
+  province: string;
 
   @ApiPropertyOptional({
     example: 2,
