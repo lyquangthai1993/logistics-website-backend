@@ -14,6 +14,7 @@ import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 import { TripEntity } from '../../../../../trips/infrastructure/persistence/relational/entities/trip.entity';
 import { HubEntity } from '../../../../../hubs/infrastructure/persistence/relational/entities/hub.entity';
 import {
+  normalizeProvinceInput,
   normalizeRegion,
   RegionEnum,
 } from '../../../../utils/region-normalizer.util';
@@ -150,8 +151,10 @@ export class OrderEntity extends AbstractBaseEntity {
       this.currentTripCode = this.currentTripCode.slice(0, 50);
     }
     if (this.province) {
+      this.province = normalizeProvinceInput(this.province);
       this.destinationRegion = normalizeRegion(this.province).region;
     } else {
+      this.province = null;
       this.destinationRegion = RegionEnum.NA;
     }
   }
