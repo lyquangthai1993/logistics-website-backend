@@ -532,22 +532,23 @@ function toReportRegion(excelRegion: string): RegionEnum {
     : (excelRegion as RegionEnum);
 }
 
-for (const [provinceName, excelRegion] of EXCEL_PROVINCE_REGION_ROWS) {
-  const key = removeVietnameseAccents(sanitizeProvinceString(provinceName));
-  if (!EXCEL_LOOKUP_MAP.has(key)) {
-    EXCEL_LOOKUP_MAP.set(key, {
-      standardName: provinceName,
-      region: toReportRegion(excelRegion),
-      aliases: [],
-    });
-  }
-}
-
 for (const prov of PROVINCE_DEFINITIONS) {
   const normStandard = removeVietnameseAccents(prov.standardName);
   LOOKUP_MAP.set(normStandard, prov);
   for (const alias of prov.aliases) {
     LOOKUP_MAP.set(removeVietnameseAccents(alias), prov);
+  }
+}
+
+for (const [provinceName, excelRegion] of EXCEL_PROVINCE_REGION_ROWS) {
+  const key = removeVietnameseAccents(sanitizeProvinceString(provinceName));
+  if (!EXCEL_LOOKUP_MAP.has(key)) {
+    const canonical = LOOKUP_MAP.get(key);
+    EXCEL_LOOKUP_MAP.set(key, {
+      standardName: canonical?.standardName ?? provinceName,
+      region: toReportRegion(excelRegion),
+      aliases: [],
+    });
   }
 }
 
