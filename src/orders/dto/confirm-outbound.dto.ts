@@ -73,7 +73,10 @@ export class OutboundItemDto {
   @IsString()
   accompanyingDocs?: string;
 
-  @ApiProperty({ example: 'Hà Nội', description: 'Tỉnh/Thành phố nhận hàng (bắt buộc)' })
+  @ApiProperty({
+    example: 'Hà Nội',
+    description: 'Tỉnh/Thành phố nhận hàng (bắt buộc)',
+  })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsNotEmpty({ message: 'Tỉnh/Thành phố không được để trống' })
   @IsString()
