@@ -11,7 +11,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 
 export enum DeliveryDestinationMode {
   DIRECT_CUSTOMER = 'DIRECT_CUSTOMER',
@@ -72,13 +72,14 @@ export class InboundOrderItemDto {
   @IsString()
   deliveryAddress?: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     example: 'TP.HCM',
-    description: 'Tỉnh/Thành phố nhận hàng (nhập tự do)',
+    description: 'Tỉnh/Thành phố nhận hàng (bắt buộc)',
   })
-  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsNotEmpty({ message: 'Tỉnh/Thành phố không được để trống' })
   @IsString()
-  province?: string;
+  province: string;
 
   @ApiPropertyOptional({ example: 2, description: 'ID Hub đích' })
   @IsOptional()

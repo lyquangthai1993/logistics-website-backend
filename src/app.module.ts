@@ -37,6 +37,7 @@ import { RedisCacheModule } from './redis/redis-cache.module';
 import { MongooseConfigService } from './database/mongoose-config.service';
 import { DatabaseConfig } from './database/config/database-config.type';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ProvincesModule } from './provinces/provinces.module';
 import { AppThrottlerGuard } from './common/guards/app-throttler.guard';
 import { APP_GUARD } from '@nestjs/core';
 
@@ -150,6 +151,7 @@ const infrastructureDatabaseModule = (databaseConfig() as DatabaseConfig)
     OrdersModule,
     TripsModule,
     NotificationsModule,
+    ProvincesModule,
     RedisCacheModule,
     ThrottlerModule.forRoot([
       {

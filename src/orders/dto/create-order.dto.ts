@@ -9,6 +9,7 @@ import {
   IsString,
   Min,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateOrderDto {
   @ApiPropertyOptional({
@@ -99,13 +100,14 @@ export class CreateOrderDto {
   @IsString()
   notes?: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     example: 'TP.HCM',
-    description: 'Tỉnh/Thành phố nhận hàng (nhập tự do)',
+    description: 'Tỉnh/Thành phố nhận hàng (bắt buộc)',
   })
-  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsNotEmpty({ message: 'Tỉnh/Thành phố không được để trống' })
   @IsString()
-  province?: string;
+  province: string;
 
   @ApiPropertyOptional({
     example: '1 BCT',
