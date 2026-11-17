@@ -16,6 +16,9 @@ export enum RegionEnum {
   NA = 'N/A',
 }
 
+/** Canonical province sentinel used only by the regional report. */
+export const CONSIGNMENT_STORAGE_PROVINCE = 'Ký Gửi Kho';
+
 export interface RegionResolveResult {
   region: RegionEnum;
   provinceName: string;
@@ -558,10 +561,20 @@ export function normalizeRegion(
   const rawCleaned = sanitizeProvinceString(input);
   const normalizedKey = removeVietnameseAccents(rawCleaned);
 
-  if (/^(?:luu|gui)(?: tai| vao)? kho$/.test(normalizedKey)) {
+  const isConsignmentStorageProvince = [
+    'luu kho',
+    'luu tai kho',
+    'luu vao kho',
+    'gui kho',
+    'gui tai kho',
+    'gui vao kho',
+    'ky gui kho',
+  ].includes(normalizedKey);
+
+  if (isConsignmentStorageProvince) {
     return {
       region: RegionEnum.STORAGE,
-      provinceName: normalizedKey.startsWith('gui') ? 'Gửi Kho' : 'Lưu Kho',
+      provinceName: CONSIGNMENT_STORAGE_PROVINCE,
       isRecognized: true,
     };
   }
