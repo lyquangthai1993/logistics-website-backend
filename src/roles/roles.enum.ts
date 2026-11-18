@@ -3,4 +3,5 @@ export enum RoleEnum {
   'DISPATCHER' = 2,
   'FLEET_MANAGER' = 3,
   'WAREHOUSE_MANAGER' = 4,
+  'REPORT_VIEWER' = 5,
 }

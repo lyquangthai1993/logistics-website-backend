@@ -19,6 +19,9 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import { Roles } from '../../../../roles/roles.decorator';
+import { RoleEnum } from '../../../../roles/roles.enum';
+import { RolesGuard } from '../../../../roles/roles.guard';
 import { FilesLocalService } from './files.service';
 import { FileResponseDto } from './dto/file-response.dto';
 import type {
@@ -38,7 +41,13 @@ export class FilesLocalController {
     type: FileResponseDto,
   })
   @ApiBearerAuth()
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+    RoleEnum.WAREHOUSE_MANAGER,
+  )
   @Post('upload')
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -60,6 +69,14 @@ export class FilesLocalController {
     return this.filesService.create(file, req.user?.id);
   }
 
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+    RoleEnum.WAREHOUSE_MANAGER,
+  )
   @Get(':path')
   @ApiExcludeEndpoint()
   download(@Param('path') path: string, @Response() response: ExpressResponse) {

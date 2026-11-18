@@ -238,8 +238,14 @@ export class AuthController {
   @SerializeOptions({
     groups: ['me'],
   })
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+    RoleEnum.WAREHOUSE_MANAGER,
+  )
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Patch('me')
-  @UseGuards(AuthGuard('jwt'))
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({
     type: User,
@@ -252,8 +258,14 @@ export class AuthController {
   }
 
   @ApiBearerAuth()
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+    RoleEnum.WAREHOUSE_MANAGER,
+  )
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Delete('me')
-  @UseGuards(AuthGuard('jwt'))
   @HttpCode(HttpStatus.NO_CONTENT)
   public async delete(
     @Request() request: RequestWithUser<JwtPayloadType>,
