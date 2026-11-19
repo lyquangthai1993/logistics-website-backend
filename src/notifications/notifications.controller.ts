@@ -19,17 +19,17 @@ import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
 import { SilentResponse } from '../common/decorators/silent-response.decorator';
 import { Roles } from '../roles/roles.decorator';
-import { RoleEnum } from '../roles/roles.enum';
+import { RoleCode } from '../roles/roles.enum';
 import { RolesGuard } from '../roles/roles.guard';
 
 @ApiTags('Notifications')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Roles(
-  RoleEnum.SUPER_ADMIN,
-  RoleEnum.DISPATCHER,
-  RoleEnum.FLEET_MANAGER,
-  RoleEnum.WAREHOUSE_MANAGER,
+  RoleCode.SUPER_ADMIN,
+  RoleCode.DISPATCHER,
+  RoleCode.FLEET_MANAGER,
+  RoleCode.WAREHOUSE_MANAGER,
 )
 @Throttle({
   default: {

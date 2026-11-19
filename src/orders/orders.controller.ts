@@ -22,7 +22,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { Roles } from '../roles/roles.decorator';
-import { RoleEnum } from '../roles/roles.enum';
+import { RoleCode } from '../roles/roles.enum';
 import { RolesGuard } from '../roles/roles.guard';
 import {
   OrdersService,
@@ -54,7 +54,7 @@ export class OrdersController {
   @ApiCreatedResponse({
     type: OrderEntity,
   })
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.DISPATCHER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.DISPATCHER)
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(
@@ -124,7 +124,7 @@ export class OrdersController {
       },
     },
   })
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.DISPATCHER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.DISPATCHER)
   @Get('generate-code')
   @HttpCode(HttpStatus.OK)
   generateCode(
@@ -133,7 +133,7 @@ export class OrdersController {
     return this.ordersService.generateOrderCode(prefix);
   }
 
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.DISPATCHER, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.DISPATCHER, RoleCode.WAREHOUSE_MANAGER)
   @Post('refresh-metrics')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -197,7 +197,7 @@ export class OrdersController {
   }
 
   @ApiOkResponse({ type: OrderEntity })
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @Patch(':id/admin-override')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -217,7 +217,7 @@ export class OrdersController {
   @ApiOkResponse({
     type: OrderEntity,
   })
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.DISPATCHER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.DISPATCHER)
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
   @ApiParam({
@@ -235,7 +235,7 @@ export class OrdersController {
   @ApiOkResponse({
     type: OrderEntity,
   })
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.DISPATCHER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.DISPATCHER)
   @Patch(':id/submit')
   @HttpCode(HttpStatus.OK)
   @ApiParam({
@@ -250,7 +250,7 @@ export class OrdersController {
   @ApiOkResponse({
     type: OrderEntity,
   })
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.FLEET_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.FLEET_MANAGER)
   @Patch(':id/no-vehicle')
   @HttpCode(HttpStatus.OK)
   @ApiParam({
@@ -266,7 +266,7 @@ export class OrdersController {
   }
 
   @Delete(':id')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.DISPATCHER, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.DISPATCHER, RoleCode.WAREHOUSE_MANAGER)
   @ApiParam({
     name: 'id',
     type: Number,
@@ -278,10 +278,10 @@ export class OrdersController {
   }
   @Get('code/:orderCode/activity-logs')
   @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.WAREHOUSE_MANAGER,
-    RoleEnum.DISPATCHER,
-    RoleEnum.FLEET_MANAGER,
+    RoleCode.SUPER_ADMIN,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
   )
   @ApiOperation({
     summary: 'Lấy lịch sử thao tác của người dùng trên đơn hàng',
@@ -291,7 +291,7 @@ export class OrdersController {
   }
 
   @Post('code/:orderCode/reconcile')
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @ApiOperation({
     summary: 'Tái đồng bộ số lượng tồn kho theo sổ cái giao dịch thực tế',
   })

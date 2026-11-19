@@ -16,7 +16,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { Roles } from '../../../../roles/roles.decorator';
-import { RoleEnum } from '../../../../roles/roles.enum';
+import { RoleCode } from '../../../../roles/roles.enum';
 import { RolesGuard } from '../../../../roles/roles.guard';
 import { FilesS3Service } from './files.service';
 import { FileResponseDto } from './dto/file-response.dto';
@@ -36,10 +36,10 @@ export class FilesS3Controller {
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.DISPATCHER,
-    RoleEnum.FLEET_MANAGER,
-    RoleEnum.WAREHOUSE_MANAGER,
+    RoleCode.SUPER_ADMIN,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
+    RoleCode.WAREHOUSE_MANAGER,
   )
   @Post('upload')
   @ApiConsumes('multipart/form-data')

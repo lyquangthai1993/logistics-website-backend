@@ -20,7 +20,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { Roles } from '../roles/roles.decorator';
-import { RoleEnum } from '../roles/roles.enum';
+import { RoleCode } from '../roles/roles.enum';
 import { RolesGuard } from '../roles/roles.guard';
 import { HubsService, PaginatedResult } from './hubs.service';
 import { CreateHubDto } from './dto/create-hub.dto';
@@ -38,7 +38,7 @@ import { HubEntity } from './infrastructure/persistence/relational/entities/hub.
 export class HubsController {
   constructor(private readonly hubsService: HubsService) {}
 
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @ApiCreatedResponse({
     type: HubEntity,
   })
@@ -69,11 +69,11 @@ export class HubsController {
     },
   })
   @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.DISPATCHER,
-    RoleEnum.FLEET_MANAGER,
-    RoleEnum.WAREHOUSE_MANAGER,
-    RoleEnum.REPORT_VIEWER,
+    RoleCode.SUPER_ADMIN,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.REPORT_VIEWER,
   )
   @Get()
   @HttpCode(HttpStatus.OK)
@@ -87,11 +87,11 @@ export class HubsController {
       'Danh sách gọn nhẹ các chi nhánh kho đang hoạt động (dùng cho dropdown/select)',
   })
   @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.DISPATCHER,
-    RoleEnum.FLEET_MANAGER,
-    RoleEnum.WAREHOUSE_MANAGER,
-    RoleEnum.REPORT_VIEWER,
+    RoleCode.SUPER_ADMIN,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.REPORT_VIEWER,
   )
   @Get('active')
   @HttpCode(HttpStatus.OK)
@@ -103,11 +103,11 @@ export class HubsController {
     type: HubEntity,
   })
   @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.DISPATCHER,
-    RoleEnum.FLEET_MANAGER,
-    RoleEnum.WAREHOUSE_MANAGER,
-    RoleEnum.REPORT_VIEWER,
+    RoleCode.SUPER_ADMIN,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.REPORT_VIEWER,
   )
   @ApiParam({
     name: 'id',
@@ -120,7 +120,7 @@ export class HubsController {
     return this.hubsService.findOne(+id);
   }
 
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @ApiOkResponse({
     type: HubEntity,
   })
@@ -138,7 +138,7 @@ export class HubsController {
     return this.hubsService.update(+id, updateHubDto);
   }
 
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @ApiOkResponse({
     type: HubEntity,
   })
@@ -153,7 +153,7 @@ export class HubsController {
     return this.hubsService.toggleActive(+id);
   }
 
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @ApiParam({
     name: 'id',
     type: Number,

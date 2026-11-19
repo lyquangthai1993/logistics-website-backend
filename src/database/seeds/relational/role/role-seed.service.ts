@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RoleEntity } from '../../../../roles/infrastructure/persistence/relational/entities/role.entity';
-import { RoleEnum } from '../../../../roles/roles.enum';
+import { RoleCode, RoleEnum } from '../../../../roles/roles.enum';
 
 @Injectable()
 export class RoleSeedService {
@@ -14,12 +14,14 @@ export class RoleSeedService {
   async run() {
     const roles: Array<{
       id: number;
+      roleCode: RoleCode;
       name: string;
       displayName: string;
       description: string;
     }> = [
       {
         id: RoleEnum.SUPER_ADMIN,
+        roleCode: RoleCode.SUPER_ADMIN,
         name: 'Super Admin',
         displayName: 'Quản trị viên cấp cao',
         description:
@@ -27,6 +29,7 @@ export class RoleSeedService {
       },
       {
         id: RoleEnum.DISPATCHER,
+        roleCode: RoleCode.DISPATCHER,
         name: 'Dispatcher',
         displayName: 'Điều phối viên',
         description:
@@ -34,6 +37,7 @@ export class RoleSeedService {
       },
       {
         id: RoleEnum.FLEET_MANAGER,
+        roleCode: RoleCode.FLEET_MANAGER,
         name: 'Fleet Manager',
         displayName: 'Quản lý đội xe',
         description:
@@ -41,6 +45,7 @@ export class RoleSeedService {
       },
       {
         id: RoleEnum.WAREHOUSE_MANAGER,
+        roleCode: RoleCode.WAREHOUSE_MANAGER,
         name: 'Warehouse Manager',
         displayName: 'Quản lý kho',
         description:
@@ -48,6 +53,7 @@ export class RoleSeedService {
       },
       {
         id: RoleEnum.REPORT_VIEWER,
+        roleCode: RoleCode.REPORT_VIEWER,
         name: 'Report Viewer',
         displayName: 'Chỉ xem báo cáo',
         description:
@@ -65,6 +71,7 @@ export class RoleSeedService {
       } else {
         await this.repository.save({
           ...existing,
+          roleCode: roleData.roleCode,
           name: roleData.name,
           displayName: roleData.displayName,
           description: roleData.description,

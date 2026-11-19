@@ -16,7 +16,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../roles/roles.guard';
 import { Roles } from '../roles/roles.decorator';
-import { RoleEnum } from '../roles/roles.enum';
+import { RoleCode } from '../roles/roles.enum';
 import { MailService } from './mail.service';
 import { TestSendEmailDto } from './dto/test-send-email.dto';
 
@@ -49,7 +49,7 @@ export class MailController {
     return this.mailService.getQueueStatus();
   }
 
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @Post('queue-clean')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -74,7 +74,7 @@ export class MailController {
     return this.mailService.cleanQueue();
   }
 
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.DISPATCHER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.DISPATCHER)
   @Post('test-send')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

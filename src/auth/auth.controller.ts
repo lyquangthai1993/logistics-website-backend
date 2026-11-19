@@ -38,7 +38,7 @@ import type { RequestWithUser } from '../utils/types/request-with-user.type';
 import type { JwtPayloadType } from './strategies/types/jwt-payload.type';
 import type { JwtRefreshPayloadType } from './strategies/types/jwt-refresh-payload.type';
 import { Roles } from '../roles/roles.decorator';
-import { RoleEnum } from '../roles/roles.enum';
+import { RoleCode } from '../roles/roles.enum';
 import { RolesGuard } from '../roles/roles.guard';
 
 const REFRESH_COOKIE_OPTIONS = {
@@ -84,7 +84,7 @@ export class AuthController {
   @SerializeOptions({
     groups: ['me', 'admin'],
   })
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Post('login-as/:userId')
   @ApiParam({
@@ -110,7 +110,7 @@ export class AuthController {
   @SerializeOptions({
     groups: ['me', 'admin'],
   })
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Post('login-as')
   @ApiOkResponse({
@@ -239,10 +239,10 @@ export class AuthController {
     groups: ['me'],
   })
   @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.DISPATCHER,
-    RoleEnum.FLEET_MANAGER,
-    RoleEnum.WAREHOUSE_MANAGER,
+    RoleCode.SUPER_ADMIN,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
+    RoleCode.WAREHOUSE_MANAGER,
   )
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Patch('me')
@@ -259,10 +259,10 @@ export class AuthController {
 
   @ApiBearerAuth()
   @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.DISPATCHER,
-    RoleEnum.FLEET_MANAGER,
-    RoleEnum.WAREHOUSE_MANAGER,
+    RoleCode.SUPER_ADMIN,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
+    RoleCode.WAREHOUSE_MANAGER,
   )
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Delete('me')
