@@ -68,6 +68,13 @@ export class HubsController {
       },
     },
   })
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+    RoleEnum.WAREHOUSE_MANAGER,
+    RoleEnum.REPORT_VIEWER,
+  )
   @Get()
   @HttpCode(HttpStatus.OK)
   findAll(@Query() query: QueryHubDto): Promise<PaginatedResult<HubEntity>> {
@@ -79,6 +86,13 @@ export class HubsController {
     description:
       'Danh sách gọn nhẹ các chi nhánh kho đang hoạt động (dùng cho dropdown/select)',
   })
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+    RoleEnum.WAREHOUSE_MANAGER,
+    RoleEnum.REPORT_VIEWER,
+  )
   @Get('active')
   @HttpCode(HttpStatus.OK)
   findActive(@Query('level') level?: number): Promise<HubEntity[]> {
@@ -88,6 +102,13 @@ export class HubsController {
   @ApiOkResponse({
     type: HubEntity,
   })
+  @Roles(
+    RoleEnum.SUPER_ADMIN,
+    RoleEnum.DISPATCHER,
+    RoleEnum.FLEET_MANAGER,
+    RoleEnum.WAREHOUSE_MANAGER,
+    RoleEnum.REPORT_VIEWER,
+  )
   @ApiParam({
     name: 'id',
     type: Number,

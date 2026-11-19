@@ -2,6 +2,7 @@ import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { JwtPayloadType } from '../auth/strategies/types/jwt-payload.type';
 import type { RequestWithUser } from '../utils/types/request-with-user.type';
+import { RoleEnum } from './roles.enum';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -12,6 +13,17 @@ export class RolesGuard implements CanActivate {
       (number | string)[] | undefined
     >('roles', [context.getClass(), context.getHandler()]);
     if (!roles?.length) {
+      const request = context
+        .switchToHttp()
+        .getRequest<RequestWithUser<JwtPayloadType | undefined>>();
+
+      // REPORT_VIEWER is opt-in: routes must explicitly list the role.
+      // This prevents an unannotated authenticated route from becoming a
+      // data-access path simply because it has no role metadata.
+      if (String(request.user?.role?.id) === String(RoleEnum.REPORT_VIEWER)) {
+        return false;
+      }
+
       return true;
     }
     const request = context

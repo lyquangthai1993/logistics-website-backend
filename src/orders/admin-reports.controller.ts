@@ -31,7 +31,7 @@ import { AdminReportsService } from './admin-reports.service';
 @ApiTags('Admin Reports')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), RolesGuard)
-@Roles(RoleEnum.SUPER_ADMIN)
+@Roles(RoleEnum.SUPER_ADMIN, RoleEnum.REPORT_VIEWER)
 @Controller({
   path: 'admin/reports',
   version: '1',
@@ -71,6 +71,7 @@ export class AdminReportsController {
   }
 
   @Post('operational/sync')
+  @Roles(RoleEnum.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -135,6 +136,7 @@ export class AdminReportsController {
   }
 
   @Get('cronjobs')
+  @Roles(RoleEnum.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -148,6 +150,7 @@ export class AdminReportsController {
   }
 
   @Patch('cronjobs/config')
+  @Roles(RoleEnum.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -169,6 +172,7 @@ export class AdminReportsController {
   }
 
   @Post('cronjobs/rerun')
+  @Roles(RoleEnum.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -246,6 +250,7 @@ export class AdminReportsController {
   }
 
   @Post('regional-dispatch/sync')
+  @Roles(RoleEnum.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:

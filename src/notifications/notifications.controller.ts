@@ -18,10 +18,19 @@ import { QueryNotificationDto } from './dto/query-notification.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
 import { SilentResponse } from '../common/decorators/silent-response.decorator';
+import { Roles } from '../roles/roles.decorator';
+import { RoleEnum } from '../roles/roles.enum';
+import { RolesGuard } from '../roles/roles.guard';
 
 @ApiTags('Notifications')
 @ApiBearerAuth()
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(AuthGuard('jwt'), RolesGuard)
+@Roles(
+  RoleEnum.SUPER_ADMIN,
+  RoleEnum.DISPATCHER,
+  RoleEnum.FLEET_MANAGER,
+  RoleEnum.WAREHOUSE_MANAGER,
+)
 @Throttle({
   default: {
     limit: process.env.NODE_ENV === 'development' ? 1000 : 300,

@@ -46,6 +46,13 @@ export class RoleSeedService {
         description:
           'Điều hành hoạt động kho bãi bao gồm quản lý hàng tồn kho, xử lý hàng hóa nhập/xuất kho và tối ưu hóa không gian lưu trữ.',
       },
+      {
+        id: RoleEnum.REPORT_VIEWER,
+        name: 'Report Viewer',
+        displayName: 'Chỉ xem báo cáo',
+        description:
+          'Chỉ được xem các báo cáo vận hành và chi tiết chuyến xe; không được thao tác nghiệp vụ hoặc quản trị hệ thống.',
+      },
     ];
 
     for (const roleData of roles) {
