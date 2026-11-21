@@ -18,7 +18,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Roles } from '../roles/roles.decorator';
-import { RoleEnum } from '../roles/roles.enum';
+import { RoleCode } from '../roles/roles.enum';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../roles/roles.guard';
 import { DriversService } from './drivers.service';
@@ -27,7 +27,7 @@ import { UpdateDriverDto } from './dto/update-driver.dto';
 import { DriverEntity } from './infrastructure/persistence/relational/entities/driver.entity';
 
 @ApiBearerAuth()
-@Roles(RoleEnum.SUPER_ADMIN, RoleEnum.FLEET_MANAGER)
+@Roles(RoleCode.SUPER_ADMIN, RoleCode.FLEET_MANAGER)
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @ApiTags('Drivers')
 @Controller({

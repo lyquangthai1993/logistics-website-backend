@@ -8,6 +8,9 @@ export class RoleEntity extends EntityRelationalHelper {
   @PrimaryColumn()
   id: number;
 
+  @Column({ name: 'role_code', unique: true, type: 'varchar', length: 50 })
+  roleCode: string;
+
   @Column()
   name?: string;
 

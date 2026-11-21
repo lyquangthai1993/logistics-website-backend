@@ -24,7 +24,7 @@ import { JwtPayloadType } from './strategies/types/jwt-payload.type';
 import { UsersService } from '../users/users.service';
 import { AllConfigType } from '../config/config.type';
 import { MailService } from '../mail/mail.service';
-import { RoleEnum } from '../roles/roles.enum';
+import { resolveRoleCode, RoleCode, RoleEnum } from '../roles/roles.enum';
 import { Session } from '../session/domain/session';
 import { SessionService } from '../session/session.service';
 import { StatusEnum } from '../statuses/statuses.enum';
@@ -102,12 +102,7 @@ export class AuthService {
     adminJwtPayload: JwtPayloadType,
     targetUserId: User['id'],
   ): Promise<LoginResponseDto> {
-    const adminRoleId =
-      typeof adminJwtPayload?.role === 'object'
-        ? Number(adminJwtPayload.role?.id)
-        : Number(adminJwtPayload?.role);
-
-    if (adminRoleId !== RoleEnum.SUPER_ADMIN) {
+    if (resolveRoleCode(adminJwtPayload?.role) !== RoleCode.SUPER_ADMIN) {
       throw new ForbiddenException({
         status: HttpStatus.FORBIDDEN,
         message: 'Chỉ Super Admin mới có quyền đóng vai tài khoản người dùng.',

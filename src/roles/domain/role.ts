@@ -19,6 +19,13 @@ export class Role {
   @Allow()
   @ApiProperty({
     type: String,
+    example: 'REPORT_VIEWER',
+  })
+  roleCode?: string;
+
+  @Allow()
+  @ApiProperty({
+    type: String,
     example: 'admin',
   })
   name?: string;

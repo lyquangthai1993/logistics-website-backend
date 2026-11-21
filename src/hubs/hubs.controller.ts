@@ -20,7 +20,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { Roles } from '../roles/roles.decorator';
-import { RoleEnum } from '../roles/roles.enum';
+import { RoleCode } from '../roles/roles.enum';
 import { RolesGuard } from '../roles/roles.guard';
 import { HubsService, PaginatedResult } from './hubs.service';
 import { CreateHubDto } from './dto/create-hub.dto';
@@ -38,7 +38,7 @@ import { HubEntity } from './infrastructure/persistence/relational/entities/hub.
 export class HubsController {
   constructor(private readonly hubsService: HubsService) {}
 
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @ApiCreatedResponse({
     type: HubEntity,
   })
@@ -68,6 +68,13 @@ export class HubsController {
       },
     },
   })
+  @Roles(
+    RoleCode.SUPER_ADMIN,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.REPORT_VIEWER,
+  )
   @Get()
   @HttpCode(HttpStatus.OK)
   findAll(@Query() query: QueryHubDto): Promise<PaginatedResult<HubEntity>> {
@@ -79,6 +86,13 @@ export class HubsController {
     description:
       'Danh sách gọn nhẹ các chi nhánh kho đang hoạt động (dùng cho dropdown/select)',
   })
+  @Roles(
+    RoleCode.SUPER_ADMIN,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.REPORT_VIEWER,
+  )
   @Get('active')
   @HttpCode(HttpStatus.OK)
   findActive(@Query('level') level?: number): Promise<HubEntity[]> {
@@ -88,6 +102,13 @@ export class HubsController {
   @ApiOkResponse({
     type: HubEntity,
   })
+  @Roles(
+    RoleCode.SUPER_ADMIN,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.REPORT_VIEWER,
+  )
   @ApiParam({
     name: 'id',
     type: Number,
@@ -99,7 +120,7 @@ export class HubsController {
     return this.hubsService.findOne(+id);
   }
 
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @ApiOkResponse({
     type: HubEntity,
   })
@@ -117,7 +138,7 @@ export class HubsController {
     return this.hubsService.update(+id, updateHubDto);
   }
 
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @ApiOkResponse({
     type: HubEntity,
   })
@@ -132,7 +153,7 @@ export class HubsController {
     return this.hubsService.toggleActive(+id);
   }
 
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @ApiParam({
     name: 'id',
     type: Number,

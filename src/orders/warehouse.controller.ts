@@ -23,7 +23,7 @@ import {
 } from '@nestjs/swagger';
 import { RolesGuard } from '../roles/roles.guard';
 import { Roles } from '../roles/roles.decorator';
-import { RoleEnum } from '../roles/roles.enum';
+import { RoleCode } from '../roles/roles.enum';
 import { WarehouseService } from './warehouse.service';
 import {
   QuickCreateInboundOrderDto,
@@ -48,10 +48,10 @@ export class WarehouseController {
 
   @Get('orders')
   @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.WAREHOUSE_MANAGER,
-    RoleEnum.DISPATCHER,
-    RoleEnum.FLEET_MANAGER,
+    RoleCode.SUPER_ADMIN,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
   )
   @ApiOperation({
     summary:
@@ -111,7 +111,7 @@ export class WarehouseController {
   }
 
   @Get('kpi')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @ApiOperation({
     summary:
       'Lấy chỉ số KPI tổng quan kho (Chờ nhập, Lưu kho, Chờ xuất, Đã xuất)',
@@ -136,7 +136,7 @@ export class WarehouseController {
   }
 
   @Get('outbound-trips')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @ApiOperation({
     summary:
       'Bảng chuyến xe xuất kho (SD...) của kho hiện tại: Chờ xử lý (nháp) / Đã xử lý, lọc phụ Xuất khách / Luân chuyển',
@@ -181,7 +181,7 @@ export class WarehouseController {
   }
 
   @Get('inbound-trips')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @ApiOperation({
     summary:
       'Danh sách chuyến xe dừng tại kho hiện tại với trạng thái theo kho (Chờ xử lý / Đã xử lý / Đã xóa) và phân loại nguồn',
@@ -225,10 +225,10 @@ export class WarehouseController {
 
   @Get('trips/:tripCode/manifest')
   @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.WAREHOUSE_MANAGER,
-    RoleEnum.DISPATCHER,
-    RoleEnum.FLEET_MANAGER,
+    RoleCode.SUPER_ADMIN,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
   )
   @ApiOperation({
     summary:
@@ -250,10 +250,10 @@ export class WarehouseController {
 
   @Get('trips/:tripCode/history')
   @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.WAREHOUSE_MANAGER,
-    RoleEnum.DISPATCHER,
-    RoleEnum.FLEET_MANAGER,
+    RoleCode.SUPER_ADMIN,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
   )
   @ApiOperation({
     summary:
@@ -268,7 +268,7 @@ export class WarehouseController {
   }
 
   @Post('trips/:tripCode/append-order')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary:
@@ -284,7 +284,7 @@ export class WarehouseController {
   }
 
   @Get('trips/:tripCode/available-outbound-orders')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -310,7 +310,7 @@ export class WarehouseController {
   }
 
   @Post('trips/:tripCode/append-stored-orders')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -330,7 +330,7 @@ export class WarehouseController {
   }
 
   @Patch('trips/:tripCode/orders/:orderId/destination')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -353,7 +353,7 @@ export class WarehouseController {
   }
 
   @Post('trips/:tripCode/transit-step')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -369,7 +369,7 @@ export class WarehouseController {
   }
 
   @Post('inbound/quick-create')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Tạo nhanh dòng hàng nhập kho từ khách hàng',
@@ -382,7 +382,7 @@ export class WarehouseController {
   }
 
   @Post('inbound/batch-create')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary:
@@ -396,7 +396,7 @@ export class WarehouseController {
   }
 
   @Get('inbound/receipt-data')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -416,7 +416,7 @@ export class WarehouseController {
   }
 
   @Post('inbound/confirm')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -429,7 +429,7 @@ export class WarehouseController {
   }
 
   @Post('outbound/confirm')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -442,7 +442,7 @@ export class WarehouseController {
   }
 
   @Post('outbound/draft')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -456,7 +456,7 @@ export class WarehouseController {
   }
 
   @Delete('outbound/drafts/:tripCode')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Hủy chuyến nháp xuất kho (chỉ chuyến chưa xuất)' })
   @ApiParam({ name: 'tripCode', type: String, example: 'SD32' })
@@ -468,7 +468,7 @@ export class WarehouseController {
   }
 
   @Delete('inbound/drafts/:tripCode')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.WAREHOUSE_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.WAREHOUSE_MANAGER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Hủy chuyến nháp nhập kho (chỉ chuyến Chờ xử lý)' })
   @ApiParam({ name: 'tripCode', type: String, example: 'SD49' })
@@ -480,7 +480,7 @@ export class WarehouseController {
   }
 
   @Post('trips/:tripCode/rollback')
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -504,10 +504,10 @@ export class WarehouseController {
 
   @Get('orders/:orderCode/transactions')
   @Roles(
-    RoleEnum.SUPER_ADMIN,
-    RoleEnum.WAREHOUSE_MANAGER,
-    RoleEnum.DISPATCHER,
-    RoleEnum.FLEET_MANAGER,
+    RoleCode.SUPER_ADMIN,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
   )
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -522,7 +522,7 @@ export class WarehouseController {
   }
 
   @Patch('transactions/:id/quantity')
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -543,7 +543,7 @@ export class WarehouseController {
   }
 
   @Patch('transactions/:id')
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -564,7 +564,7 @@ export class WarehouseController {
   }
 
   @Delete('transactions/:id')
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -584,7 +584,7 @@ export class WarehouseController {
   }
 
   @Post('transactions/:id/restore')
-  @Roles(RoleEnum.SUPER_ADMIN)
+  @Roles(RoleCode.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:

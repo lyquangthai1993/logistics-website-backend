@@ -21,7 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { Roles } from '../roles/roles.decorator';
-import { RoleEnum } from '../roles/roles.enum';
+import { RoleCode } from '../roles/roles.enum';
 import { RolesGuard } from '../roles/roles.guard';
 import {
   TripsService,
@@ -48,7 +48,7 @@ export class TripsController {
   @ApiCreatedResponse({
     type: TripEntity,
   })
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.FLEET_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.FLEET_MANAGER)
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(
@@ -62,7 +62,7 @@ export class TripsController {
   @ApiCreatedResponse({
     type: [TripEntity],
   })
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.FLEET_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.FLEET_MANAGER)
   @Post('split')
   @HttpCode(HttpStatus.CREATED)
   createSplit(
@@ -139,7 +139,7 @@ export class TripsController {
   @ApiOkResponse({
     type: TripEntity,
   })
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.FLEET_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.FLEET_MANAGER)
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
   @ApiParam({
@@ -157,7 +157,7 @@ export class TripsController {
   @ApiOkResponse({
     type: TripEntity,
   })
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.FLEET_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.FLEET_MANAGER)
   @Patch(':id/confirm')
   @HttpCode(HttpStatus.OK)
   @ApiParam({
@@ -170,7 +170,7 @@ export class TripsController {
   }
 
   @Delete(':id')
-  @Roles(RoleEnum.SUPER_ADMIN, RoleEnum.FLEET_MANAGER)
+  @Roles(RoleCode.SUPER_ADMIN, RoleCode.FLEET_MANAGER)
   @ApiParam({
     name: 'id',
     type: Number,

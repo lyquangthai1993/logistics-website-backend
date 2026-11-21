@@ -9,7 +9,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { DailyHubOperationalReportEntity } from './infrastructure/persistence/relational/entities/daily-hub-operational-report.entity';
 import { DailyRegionalDispatchReportEntity } from './infrastructure/persistence/relational/entities/daily-regional-dispatch-report.entity';
-import { normalizeRegion, RegionEnum } from './utils/region-normalizer.util';
+import {
+  CONSIGNMENT_STORAGE_PROVINCE,
+  normalizeRegion,
+  RegionEnum,
+} from './utils/region-normalizer.util';
 import { CronJobConfigEntity } from './infrastructure/persistence/relational/entities/cron-job-config.entity';
 import { CronJobExecutionLogEntity } from './infrastructure/persistence/relational/entities/cron-job-execution-log.entity';
 import { HubEntity } from '../hubs/infrastructure/persistence/relational/entities/hub.entity';
@@ -2961,9 +2965,13 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const onhandTons = (params.onhandWeightKg / 1000).toFixed(2);
     const incomingTons = (params.incomingWeightKg / 1000).toFixed(2);
     const totalTons = (params.totalWeightKg / 1000).toFixed(2);
+    const displayRegionName =
+      params.regionName === RegionEnum.STORAGE
+        ? CONSIGNMENT_STORAGE_PROVINCE
+        : params.regionName;
 
     return [
-      `[THÔNG BÁO TẢI HÀNG ${params.regionName.toUpperCase()} - ${params.hubName.toUpperCase()}]`,
+      `[THÔNG BÁO TẢI HÀNG ${displayRegionName.toUpperCase()} - ${params.hubName.toUpperCase()}]`,
       `- Hàng sẵn tại kho: ${onhandTons} Tấn (${params.onhandPackageCount} kiện • ${params.onhandVolumeCbm.toFixed(1)} m³)`,
       `- Hàng đang về thêm: ${incomingTons} Tấn (${params.incomingTripCount} xe đang về)`,
       `👉 TỔNG TẢI DỰ KIẾN: ${totalTons} TẤN (${params.totalVolumeCbm.toFixed(1)} m³)`,
@@ -3575,6 +3583,98 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
       target.totalWeightKg += Number(row.totalWeightKg) || 0;
       target.totalVolumeCbm += Number(row.totalVolumeCbm) || 0;
+    }
+
+    // A range report can merge snapshots from multiple days. A waybill that
+    // was a draft earlier in the range must not remain in the current draft
+    // list after it has been dispatched. Reconcile the code list against the
+    // current order lifecycle before returning draft details/counters.
+    const snapshotDraftCodes = [
+      ...new Set(
+        Object.values(summaryMap).flatMap((summary) => [
+          ...summary.draftOrderCodes,
+        ]),
+      ),
+    ];
+    if (snapshotDraftCodes.length > 0) {
+      const currentDraftRows = (await this.dataSource.query(
+        `
+          SELECT o."orderCode"
+          FROM "order" o
+          WHERE o."deletedAt" IS NULL
+            AND o."orderCode" = ANY($1::text[])
+            AND o.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING')
+        `,
+        [snapshotDraftCodes],
+      )) as Array<{ orderCode: string }>;
+      const currentDraftCodes = new Set(
+        currentDraftRows.map((row) => String(row.orderCode)),
+      );
+
+      for (const summary of Object.values(summaryMap)) {
+        summary.draftOrderCodes = new Set(
+          [...summary.draftOrderCodes].filter((code) =>
+            currentDraftCodes.has(code),
+          ),
+        );
+        summary.draftOrderCount = summary.draftOrderCodes.size;
+      }
+    }
+
+    // Snapshot code lists are historical. Reconcile them with the live
+    // inventory ledger so an order exported after the snapshot (for example a
+    // consignment with zero remaining quantity) is not shown as currently
+    // stored in the report details.
+    const snapshotOnhandCodes = [
+      ...new Set(
+        Object.values(summaryMap).flatMap((summary) => [
+          ...summary.onhandOrderCodes,
+        ]),
+      ),
+    ];
+    if (snapshotOnhandCodes.length > 0) {
+      const currentOnhandRows = (await this.dataSource.query(
+        `
+          SELECT DISTINCT o."orderCode", o."province"
+          FROM "order" o
+          JOIN LATERAL (
+            SELECT tx."hubId",
+                   SUM(CASE WHEN tx.type = 'INBOUND' THEN tx.quantity
+                            WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
+                            ELSE 0 END) AS "hubStock"
+            FROM "order_inventory_transaction" tx
+            WHERE tx."orderId" = o.id AND tx."deletedAt" IS NULL
+            GROUP BY tx."hubId"
+            HAVING SUM(CASE WHEN tx.type = 'INBOUND' THEN tx.quantity
+                            WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
+                            ELSE 0 END) > 0
+          ) stock ON TRUE
+          WHERE o."deletedAt" IS NULL
+            AND o."orderCode" = ANY($1::text[])
+            AND COALESCE(o."remainingQuantity", 0) > 0
+            AND NOT (
+              o.status IN ('DRAFT', 'PENDING', 'WAITING')
+              AND COALESCE(o."currentHubId", o."originHubId") = stock."hubId"
+            )
+            AND ($2::integer IS NULL OR stock."hubId" = $2)
+        `,
+        [snapshotOnhandCodes, parsedHubId || null],
+      )) as Array<{ orderCode: string; province: string | null }>;
+      const currentOnhandRegions = new Map(
+        currentOnhandRows.map((row) => [
+          String(row.orderCode),
+          normalizeRegion(row.province).region,
+        ]),
+      );
+
+      for (const summary of Object.values(summaryMap)) {
+        summary.onhandOrderCodes = new Set(
+          [...summary.onhandOrderCodes].filter(
+            (code) => currentOnhandRegions.get(code) === summary.region,
+          ),
+        );
+        summary.onhandOrderCount = summary.onhandOrderCodes.size;
+      }
     }
 
     const hubDisplayName = selectedHub

@@ -75,12 +75,21 @@ describe('RegionNormalizer', () => {
     expect(normalizeRegion('Nơi Kỳ Lạ 123456').region).toBe(RegionEnum.NA);
   });
 
-  it('should classify customer-held inventory as LƯU KHO', () => {
-    expect(normalizeRegion('Lưu Kho').region).toBe(RegionEnum.STORAGE);
-    expect(normalizeRegion('LƯU TẠI KHO').region).toBe(RegionEnum.STORAGE);
-    expect(normalizeRegion('GỬI KHO').region).toBe(RegionEnum.STORAGE);
-    expect(normalizeRegion('gui tai kho').region).toBe(RegionEnum.STORAGE);
-    expect(normalizeRegion('Gửi vào kho').region).toBe(RegionEnum.STORAGE);
+  it('should classify customer-held inventory as storage, never as N/A', () => {
+    for (const input of [
+      'Lưu Kho',
+      'LƯU TẠI KHO',
+      'GỬI KHO',
+      'gui tai kho',
+      'Gửi vào kho',
+      'Ký Gửi Kho',
+    ]) {
+      const result = normalizeRegion(input);
+      expect(result.region).toBe(RegionEnum.STORAGE);
+      expect(result.region).not.toBe(RegionEnum.NA);
+      expect(result.isRecognized).toBe(true);
+    }
+    expect(normalizeRegion('Ký Gửi Kho').provinceName).toBe('Gửi kho');
   });
 
   it('should canonicalize province input before persistence', () => {
@@ -89,7 +98,8 @@ describe('RegionNormalizer', () => {
       'TP. Hồ Chí Minh',
     );
     expect(normalizeProvinceInput('  GỬI   KHO ')).toBe('Gửi kho');
-    expect(normalizeProvinceInput('  LƯU   KHO ')).toBe('Lưu kho');
+    expect(normalizeProvinceInput('  KỲ   GỬI   KHO ')).toBe('Gửi kho');
+    expect(normalizeProvinceInput('  LƯU   KHO ')).toBe('Gửi kho');
     expect(normalizeProvinceInput('  dữ liệu lạ  ')).toBe('dữ liệu lạ');
   });
 });
