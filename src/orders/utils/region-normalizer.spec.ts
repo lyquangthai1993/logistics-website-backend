@@ -88,8 +88,8 @@ describe('RegionNormalizer', () => {
     expect(normalizeProvinceInput(' TP.   Hồ Chí Minh ')).toBe(
       'TP. Hồ Chí Minh',
     );
-    expect(normalizeProvinceInput('  GỬI   KHO ')).toBe('Gửi Kho');
-    expect(normalizeProvinceInput('  LƯU   KHO ')).toBe('Lưu Kho');
+    expect(normalizeProvinceInput('  GỬI   KHO ')).toBe('Gửi kho');
+    expect(normalizeProvinceInput('  LƯU   KHO ')).toBe('Lưu kho');
     expect(normalizeProvinceInput('  dữ liệu lạ  ')).toBe('dữ liệu lạ');
   });
 });

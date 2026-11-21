@@ -85,6 +85,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
     deliveryMode: DeliveryDestinationMode.DIRECT_CUSTOMER,
     deliveryAddress: '123 Cầu Giấy, Hà Nội',
     licensePlate: '29C-123.45',
+    province: 'Gửi kho',
   };
 
   beforeEach(async () => {
@@ -278,6 +279,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
           totalVolume: 3,
           destinationHubId: 2,
           notes: 'Bốc thêm dọc đường tại Đà Nẵng',
+          province: 'Gửi kho',
         },
       );
 
@@ -323,6 +325,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       destinationHubId: 2,
       originHub: 'Hà Nội',
       destinationHub: 'Hồ Chí Minh',
+      currentHubId: 1,
       remainingQuantity: 20,
       isExternalVehicleNeeded: false,
     };
@@ -357,7 +360,11 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       await expect(
         ordersService.adminOverride(
           5,
-          { auditReason: 'Khách báo sai số kiện', totalQuantity: 18 } as any,
+          {
+            auditReason: 'Khách báo sai số kiện',
+            warehouseHubId: 1,
+            totalQuantity: 18,
+          } as any,
           warehouseUser,
         ),
       ).rejects.toThrow(ForbiddenException);
@@ -367,7 +374,11 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       orderRepo.findOne.mockResolvedValue({ ...lockedOrder });
       const saved = await ordersService.adminOverride(
         5,
-        { auditReason: 'Khách báo sai số kiện', totalQuantity: 18 } as any,
+        {
+          auditReason: 'Khách báo sai số kiện',
+          warehouseHubId: 1,
+          totalQuantity: 18,
+        } as any,
         adminUser,
       );
 
@@ -388,7 +399,11 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       await expect(
         ordersService.adminOverride(
           5,
-          { auditReason: 'Không đổi gì cả', totalQuantity: 20 } as any,
+          {
+            auditReason: 'Không đổi gì cả',
+            warehouseHubId: 1,
+            totalQuantity: 20,
+          } as any,
           adminUser,
         ),
       ).rejects.toThrow(UnprocessableEntityException);

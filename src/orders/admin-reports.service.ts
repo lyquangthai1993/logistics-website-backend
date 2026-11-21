@@ -17,7 +17,7 @@ import { UserEntity } from '../users/infrastructure/persistence/relational/entit
 import { RoleEnum } from '../roles/roles.enum';
 import { NotificationsService } from '../notifications/notifications.service';
 
-export type ReportDirection = 'OUTBOUND' | 'INBOUND' | 'ALL';
+export type ReportDirection = 'OUTBOUND' | 'INBOUND' | 'STORAGE' | 'ALL';
 
 export function resolveRegionalDispatchSyncDate(
   requestedDate: string | undefined,
@@ -59,6 +59,7 @@ export interface DailyReportPoint extends DirectionMetrics {
   triggeredBy: string;
   inbound: DirectionMetrics;
   outbound: DirectionMetrics;
+  storage: DirectionMetrics;
 }
 
 export interface MonthlyReportPoint extends DirectionMetrics {
@@ -68,6 +69,18 @@ export interface MonthlyReportPoint extends DirectionMetrics {
   monthLabel: string;
   inbound: DirectionMetrics;
   outbound: DirectionMetrics;
+  storage: DirectionMetrics;
+}
+
+export interface HubBreakdownPoint extends DirectionMetrics {
+  hubId: number;
+  code: string | null;
+  name: string;
+  city: string | null;
+  level: number;
+  inbound: DirectionMetrics;
+  outbound: DirectionMetrics;
+  storage: DirectionMetrics;
 }
 
 export interface ConfirmedTripReportItem {
@@ -968,6 +981,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
   private pickDirectionMetrics(
     inbound: DirectionMetrics,
     outbound: DirectionMetrics,
+    storage: DirectionMetrics,
     direction: ReportDirection,
   ): DirectionMetrics {
     if (direction === 'INBOUND') {
@@ -975,6 +989,9 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     }
     if (direction === 'OUTBOUND') {
       return { ...outbound };
+    }
+    if (direction === 'STORAGE') {
+      return { ...storage };
     }
     const weightKg =
       Math.round((inbound.weightKg + outbound.weightKg) * 100) / 100;
@@ -1029,7 +1046,9 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     const rawDir = String(query?.direction || 'INBOUND').toUpperCase();
     const direction: ReportDirection =
-      rawDir === 'OUTBOUND' || rawDir === 'ALL' ? rawDir : 'INBOUND';
+      rawDir === 'OUTBOUND' || rawDir === 'STORAGE' || rawDir === 'ALL'
+        ? rawDir
+        : 'INBOUND';
 
     const hubId =
       query?.hubId && String(query.hubId).toUpperCase() !== 'ALL'
@@ -1114,6 +1133,88 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       dailyMap.set(row.reportDate, row);
     }
 
+    const storageStartWindow =
+      this.getReportWindow(overallQueryStart).windowStart;
+    const storageEndWindow = this.getReportWindow(toDate).windowEnd;
+    const storageParams: any[] = [
+      storageStartWindow.toISOString(),
+      storageEndWindow.toISOString(),
+    ];
+    let storageHubSql = '';
+    if (hubId) {
+      storageParams.push(hubId);
+      storageHubSql = `AND COALESCE(tx."hubId", o."originHubId", o."currentHubId") = $${storageParams.length}`;
+    }
+    const storageRows: Array<{
+      reportDate: string;
+      hubId: number;
+      volumeCbm: number;
+      weightKg: number;
+      packageCount: number;
+      tripCount: number;
+      orderCount: number;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        TO_CHAR(tx."createdAt" + INTERVAL '1 hour', 'YYYY-MM-DD') AS "reportDate",
+        COALESCE(tx."hubId", o."originHubId", o."currentHubId")::int AS "hubId",
+        COALESCE(SUM(CASE
+          WHEN COALESCE(tx."volume", 0) > 0 THEN tx."volume"::float
+          WHEN COALESCE(o."totalQuantity", 0) > 0 THEN o."totalVolume"::float * tx."quantity"::float / o."totalQuantity"::float
+          ELSE 0
+        END), 0)::float AS "volumeCbm",
+        COALESCE(SUM(CASE
+          WHEN COALESCE(tx."weight", 0) > 0 THEN tx."weight"::float
+          WHEN COALESCE(o."totalQuantity", 0) > 0 THEN o."totalWeight"::float * tx."quantity"::float / o."totalQuantity"::float
+          ELSE 0
+        END), 0)::float AS "weightKg",
+        COALESCE(SUM(tx."quantity"), 0)::int AS "packageCount",
+        COUNT(DISTINCT COALESCE(NULLIF(tx."tripCode", ''), NULLIF(tx."invoiceCode", ''), tx.id::text))::int AS "tripCount",
+        COUNT(DISTINCT tx."orderId")::int AS "orderCount"
+      FROM "order_inventory_transaction" tx
+      INNER JOIN "order" o ON o.id = tx."orderId" AND o."deletedAt" IS NULL
+      WHERE tx."deletedAt" IS NULL
+        AND tx."type" = 'INBOUND'
+        AND UPPER(TRIM(COALESCE(o."province", ''))) IN ('GỬI KHO', 'GUI KHO', 'LƯU KHO', 'LUU KHO')
+        AND tx."createdAt" >= $1
+        AND tx."createdAt" < $2
+        AND COALESCE(tx."hubId", o."originHubId", o."currentHubId") IS NOT NULL
+        ${storageHubSql}
+      GROUP BY "reportDate", "hubId"
+      ORDER BY "reportDate" ASC
+      `,
+      storageParams,
+    );
+    const storageDailyMap = new Map<string, DirectionMetrics>();
+    const storageHubMap = new Map<number, DirectionMetrics>();
+    const storageMonthlyMap = new Map<string, DirectionMetrics>();
+    const addStorageMetric = (
+      target: Map<any, DirectionMetrics>,
+      key: any,
+      row: (typeof storageRows)[number],
+    ) => {
+      const current = target.get(key) ?? {
+        cbm: 0,
+        weightKg: 0,
+        weightTons: 0,
+        tripCount: 0,
+        orderCount: 0,
+        packageCount: 0,
+      };
+      current.cbm += Number(row.volumeCbm) || 0;
+      current.weightKg += Number(row.weightKg) || 0;
+      current.tripCount += Number(row.tripCount) || 0;
+      current.orderCount += Number(row.orderCount) || 0;
+      current.packageCount += Number(row.packageCount) || 0;
+      current.weightTons = current.weightKg / 1000;
+      target.set(key, current);
+    };
+    for (const row of storageRows) {
+      addStorageMetric(storageDailyMap, row.reportDate, row);
+      addStorageMetric(storageHubMap, Number(row.hubId), row);
+      addStorageMetric(storageMonthlyMap, row.reportDate.slice(0, 7), row);
+    }
+
     // 2. Build Slide 2: Daily series across [fromDate, toDate]
     const rangeDates = this.enumerateDates(fromDate, toDate);
     const sameMonthInRange = fromDate.slice(0, 7) === toDate.slice(0, 7);
@@ -1143,7 +1244,20 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         packageCount: Number(dbRow?.outboundPackageCount) || 0,
       };
 
-      const chosen = this.pickDirectionMetrics(inbound, outbound, direction);
+      const storage = storageDailyMap.get(d) ?? {
+        cbm: 0,
+        weightKg: 0,
+        weightTons: 0,
+        tripCount: 0,
+        orderCount: 0,
+        packageCount: 0,
+      };
+      const chosen = this.pickDirectionMetrics(
+        inbound,
+        outbound,
+        storage,
+        direction,
+      );
       const [yStr, mStr, dStr] = d.split('-');
       const dayOfMonth = Number(dStr);
 
@@ -1161,6 +1275,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         ...chosen,
         inbound,
         outbound,
+        storage,
       };
     });
 
@@ -1204,9 +1319,28 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       ),
     };
 
+    const totalStorage: DirectionMetrics = {
+      cbm:
+        Math.round(dailySeries.reduce((s, x) => s + x.storage.cbm, 0) * 10) /
+        10,
+      weightKg:
+        Math.round(
+          dailySeries.reduce((s, x) => s + x.storage.weightKg, 0) * 100,
+        ) / 100,
+      weightTons:
+        Math.round(
+          (dailySeries.reduce((s, x) => s + x.storage.weightKg, 0) / 1000) *
+            100,
+        ) / 100,
+      tripCount: dailySeries.reduce((s, x) => s + x.storage.tripCount, 0),
+      orderCount: dailySeries.reduce((s, x) => s + x.storage.orderCount, 0),
+      packageCount: dailySeries.reduce((s, x) => s + x.storage.packageCount, 0),
+    };
+
     const chosenTotal = this.pickDirectionMetrics(
       totalInbound,
       totalOutbound,
+      totalStorage,
       direction,
     );
 
@@ -1328,7 +1462,20 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         packageCount: Number(mr?.outboundPackageCount) || 0,
       };
 
-      const chosen = this.pickDirectionMetrics(inbound, outbound, direction);
+      const storage = storageMonthlyMap.get(mk) ?? {
+        cbm: 0,
+        weightKg: 0,
+        weightTons: 0,
+        tripCount: 0,
+        orderCount: 0,
+        packageCount: 0,
+      };
+      const chosen = this.pickDirectionMetrics(
+        inbound,
+        outbound,
+        storage,
+        direction,
+      );
       return {
         monthKey: mk,
         year: y,
@@ -1337,6 +1484,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         ...chosen,
         inbound,
         outbound,
+        storage,
       };
     });
 
@@ -1405,7 +1553,20 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         orderCount: Number(hr?.outboundOrderCount) || 0,
         packageCount: Number(hr?.outboundPackageCount) || 0,
       };
-      const chosen = this.pickDirectionMetrics(inbound, outbound, direction);
+      const storage = storageHubMap.get(h.id) ?? {
+        cbm: 0,
+        weightKg: 0,
+        weightTons: 0,
+        tripCount: 0,
+        orderCount: 0,
+        packageCount: 0,
+      };
+      const chosen = this.pickDirectionMetrics(
+        inbound,
+        outbound,
+        storage,
+        direction,
+      );
       return {
         hubId: h.id,
         code: h.code,
@@ -1415,6 +1576,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         ...chosen,
         inbound,
         outbound,
+        storage,
       };
     });
 
@@ -3265,6 +3427,12 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     if (fromDate > toDate) [fromDate, toDate] = [toDate, fromDate];
     const maxToDate = this.addDays(fromDate, 365);
     if (toDate > maxToDate) toDate = maxToDate;
+    // Live "Tình hình hàng hóa" is a current ledger scan, never a sum of the
+    // report date range selected by the operational report screen.
+    if (query?.mode === 'live') {
+      fromDate = todayStr;
+      toDate = todayStr;
+    }
     let reportDate = toDate;
 
     const parsedHubId =
@@ -3286,7 +3454,9 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const cronConfig = await this.cronConfigRepository.findOne({
       where: { jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT' },
     });
-    let provinceAudit: Awaited<ReturnType<typeof this.buildProvinceAudit>>;
+    let provinceAudit: Awaited<
+      ReturnType<AdminReportsService['buildProvinceAudit']>
+    >;
 
     // Refresh only today's live row. Historical/future range days must use their own snapshots.
     if (

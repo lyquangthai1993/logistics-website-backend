@@ -572,7 +572,7 @@ export function normalizeRegion(
   if (/^(?:luu|gui)(?: tai| vao)? kho$/.test(normalizedKey)) {
     return {
       region: RegionEnum.STORAGE,
-      provinceName: normalizedKey.startsWith('gui') ? 'Gửi Kho' : 'Lưu Kho',
+      provinceName: normalizedKey.startsWith('gui') ? 'Gửi kho' : 'Lưu kho',
       isRecognized: true,
     };
   }
