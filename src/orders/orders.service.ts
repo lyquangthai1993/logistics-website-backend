@@ -4,7 +4,6 @@ import {
   NotFoundException,
   UnprocessableEntityException,
   ForbiddenException,
-  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -616,6 +615,26 @@ export class OrdersService {
         throw new NotFoundException('Không tìm thấy đơn hàng cần điều chỉnh.');
       }
 
+      const storedStatuses = new Set([
+        'INBOUND',
+        'STORED',
+        'LUU_KHO',
+        'IN_WAREHOUSE',
+      ]);
+      if (!storedStatuses.has(String(order.status).toUpperCase())) {
+        throw new ForbiddenException(
+          'Chỉ đơn hàng ở trạng thái Lưu kho mới được điều chỉnh.',
+        );
+      }
+      if (
+        !dto.warehouseHubId ||
+        Number(order.currentHubId) !== Number(dto.warehouseHubId)
+      ) {
+        throw new ForbiddenException(
+          'Vui lòng chọn đúng một kho cụ thể đang giữ đơn hàng; không hỗ trợ bộ lọc Tất cả kho.',
+        );
+      }
+
       const currentVals = {
         totalQuantity: order.totalQuantity,
         totalWeight: order.totalWeight,
@@ -623,6 +642,12 @@ export class OrdersService {
         goodsDescription: order.goodsDescription,
         originHubId: order.originHubId,
         destinationHubId: order.destinationHubId,
+        route: order.route,
+        province: order.province,
+        notes: order.notes,
+        accompanyingDocs: order.accompanyingDocs,
+        externalNote: order.externalNote,
+        isExternalVehicleNeeded: order.isExternalVehicleNeeded,
       };
 
       const LABELS: Record<string, string> = {
@@ -632,6 +657,12 @@ export class OrdersService {
         goodsDescription: 'Mô tả hàng',
         originHubId: 'Kho gửi',
         destinationHubId: 'Kho nhận',
+        route: 'Tuyến giao nhận',
+        province: 'Tỉnh / TP',
+        notes: 'Ghi chú',
+        accompanyingDocs: 'Chứng từ',
+        externalNote: 'Ghi chú xe ngoài',
+        isExternalVehicleNeeded: 'Dùng xe ngoài',
       };
       const changes: string[] = [];
 
@@ -640,13 +671,28 @@ export class OrdersService {
           | 'totalQuantity'
           | 'totalWeight'
           | 'totalVolume'
-          | 'goodsDescription',
+          | 'goodsDescription'
+          | 'route'
+          | 'province'
+          | 'notes'
+          | 'accompanyingDocs'
+          | 'externalNote'
+          | 'isExternalVehicleNeeded',
       ) => {
         const next = dto[field];
         if (next === undefined || next === null) return;
         const prev = order[field];
-        const nextVal = typeof next === 'string' ? next.trim() : Number(next);
-        if (nextVal === '' || nextVal === prev) return;
+        const nextVal =
+          typeof next === 'string'
+            ? next.trim()
+            : typeof next === 'boolean'
+              ? next
+              : Number(next);
+        if (
+          (typeof nextVal === 'number' && Number.isNaN(nextVal)) ||
+          nextVal === prev
+        )
+          return;
         changes.push(`${LABELS[field]}: ${prev ?? '—'} → ${nextVal}`);
         (order as any)[field] = nextVal;
       };
@@ -654,20 +700,12 @@ export class OrdersService {
       applyScalar('totalWeight');
       applyScalar('totalVolume');
       applyScalar('goodsDescription');
-
-      if (dto.orderCode && dto.orderCode.trim() !== order.orderCode) {
-        const candidateCode = dto.orderCode.trim().toUpperCase();
-        const duplicate = await orderRepo.findOne({
-          where: { orderCode: candidateCode },
-        });
-        if (duplicate && duplicate.id !== order.id) {
-          throw new ConflictException(
-            `Mã vận đơn ${candidateCode} đã tồn tại trong hệ thống.`,
-          );
-        }
-        changes.push(`Mã vận đơn: ${order.orderCode} → ${candidateCode}`);
-        order.orderCode = candidateCode;
-      }
+      applyScalar('route');
+      applyScalar('province');
+      applyScalar('notes');
+      applyScalar('accompanyingDocs');
+      applyScalar('externalNote');
+      applyScalar('isExternalVehicleNeeded');
 
       const applyHub = async (
         idField: 'originHubId' | 'destinationHubId',

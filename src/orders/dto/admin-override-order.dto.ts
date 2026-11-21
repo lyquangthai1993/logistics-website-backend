@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -24,10 +25,14 @@ export class AdminOverrideOrderDto {
   @MinLength(5, { message: 'Lý do điều chỉnh cần tối thiểu 5 ký tự' })
   auditReason: string;
 
-  @ApiPropertyOptional({ example: 'ORD-2026-9999' })
-  @IsOptional()
-  @IsString()
-  orderCode?: string;
+  @ApiProperty({
+    example: 3,
+    description:
+      'Kho đang được chọn trên màn hình Đơn hàng kho; không được là ALL',
+  })
+  @IsInt()
+  @IsPositive()
+  warehouseHubId: number;
 
   @ApiPropertyOptional({ example: 9 })
   @IsOptional()
@@ -51,6 +56,36 @@ export class AdminOverrideOrderDto {
   @IsOptional()
   @IsString()
   goodsDescription?: string;
+
+  @ApiPropertyOptional({ example: 'Kho Hà Nội → Kho Đà Nẵng' })
+  @IsOptional()
+  @IsString()
+  route?: string;
+
+  @ApiPropertyOptional({ example: 'Gửi kho' })
+  @IsOptional()
+  @IsString()
+  province?: string;
+
+  @ApiPropertyOptional({ example: 'Ghi chú đã cập nhật' })
+  @IsOptional()
+  @IsString()
+  notes?: string;
+
+  @ApiPropertyOptional({ example: 'Biên bản bàn giao số 12' })
+  @IsOptional()
+  @IsString()
+  accompanyingDocs?: string;
+
+  @ApiPropertyOptional({ example: 'Xe ngoài cập nhật' })
+  @IsOptional()
+  @IsString()
+  externalNote?: string;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  isExternalVehicleNeeded?: boolean;
 
   @ApiPropertyOptional({ example: 1 })
   @IsOptional()

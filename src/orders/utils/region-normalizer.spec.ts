@@ -89,7 +89,7 @@ describe('RegionNormalizer', () => {
       expect(result.region).not.toBe(RegionEnum.NA);
       expect(result.isRecognized).toBe(true);
     }
-    expect(normalizeRegion('Ký Gửi Kho').provinceName).toBe('Ký Gửi Kho');
+    expect(normalizeRegion('Ký Gửi Kho').provinceName).toBe('Gửi kho');
   });
 
   it('should canonicalize province input before persistence', () => {
@@ -97,9 +97,9 @@ describe('RegionNormalizer', () => {
     expect(normalizeProvinceInput(' TP.   Hồ Chí Minh ')).toBe(
       'TP. Hồ Chí Minh',
     );
-    expect(normalizeProvinceInput('  GỬI   KHO ')).toBe('Ký Gửi Kho');
-    expect(normalizeProvinceInput('  KỲ   GỬI   KHO ')).toBe('Ký Gửi Kho');
-    expect(normalizeProvinceInput('  LƯU   KHO ')).toBe('Ký Gửi Kho');
+    expect(normalizeProvinceInput('  GỬI   KHO ')).toBe('Gửi kho');
+    expect(normalizeProvinceInput('  KỲ   GỬI   KHO ')).toBe('Gửi kho');
+    expect(normalizeProvinceInput('  LƯU   KHO ')).toBe('Gửi kho');
     expect(normalizeProvinceInput('  dữ liệu lạ  ')).toBe('dữ liệu lạ');
   });
 });

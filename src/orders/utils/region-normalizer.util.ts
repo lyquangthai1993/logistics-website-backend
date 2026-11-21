@@ -17,7 +17,7 @@ export enum RegionEnum {
 }
 
 /** Canonical province sentinel used only by the regional report. */
-export const CONSIGNMENT_STORAGE_PROVINCE = 'Ký Gửi Kho';
+export const CONSIGNMENT_STORAGE_PROVINCE = 'Gửi kho';
 
 export interface RegionResolveResult {
   region: RegionEnum;
