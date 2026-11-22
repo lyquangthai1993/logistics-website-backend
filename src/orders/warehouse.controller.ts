@@ -46,6 +46,33 @@ import { ConfirmOutboundDto } from './dto/confirm-outbound.dto';
 export class WarehouseController {
   constructor(private readonly warehouseService: WarehouseService) {}
 
+  @Get('orders/summary')
+  @Roles(
+    RoleCode.SUPER_ADMIN,
+    RoleCode.WAREHOUSE_MANAGER,
+    RoleCode.DISPATCHER,
+    RoleCode.FLEET_MANAGER,
+  )
+  @ApiOperation({
+    summary:
+      'Lấy tổng số lượng, khối lượng và CBM từ snapshot tổng hợp theo từng Hub',
+  })
+  @ApiQuery({
+    name: 'hubId',
+    required: false,
+    type: Number,
+    description: 'Lọc snapshot theo Kho/Hub cụ thể (dành cho Super Admin)',
+  })
+  async getOrdersSummary(
+    @Request() req: any,
+    @Query('hubId') hubId?: string | number,
+  ) {
+    return this.warehouseService.getHubOrderSummary(
+      req.user,
+      hubId ? Number(hubId) : undefined,
+    );
+  }
+
   @Get('orders')
   @Roles(
     RoleCode.SUPER_ADMIN,

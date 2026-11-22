@@ -20,6 +20,7 @@ import { HubEntity } from '../hubs/infrastructure/persistence/relational/entitie
 import { UserEntity } from '../users/infrastructure/persistence/relational/entities/user.entity';
 import { RoleEnum } from '../roles/roles.enum';
 import { NotificationsService } from '../notifications/notifications.service';
+import { WarehouseService } from './warehouse.service';
 
 export type ReportDirection = 'OUTBOUND' | 'INBOUND' | 'STORAGE' | 'ALL';
 
@@ -125,6 +126,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
   private lastCronProcessedDate: string | null = null;
   private lastCronRunAt: Date | null = null;
   private isRunningCron = false;
+  private isRunningHubSummaryCron = false;
   private tableEnsured = false;
   private defaultConfigsSeeded = false;
   private cachedActiveHubs: { hubs: HubEntity[]; expiresAt: number } | null =
@@ -146,6 +148,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly notificationsService: NotificationsService,
+    private readonly warehouseService: WarehouseService,
   ) {}
 
   onModuleInit(): void {
@@ -261,6 +264,30 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           ADD COLUMN IF NOT EXISTS "draftOrderCodes" jsonb NOT NULL DEFAULT '[]'::jsonb;
       `);
       await this.dataSource.query(`
+        CREATE TABLE IF NOT EXISTS "warehouse_hub_order_summary" (
+          "id" SERIAL NOT NULL,
+          "hubId" integer NOT NULL,
+          "totalQuantity" integer NOT NULL DEFAULT 0,
+          "totalWeightKg" double precision NOT NULL DEFAULT 0,
+          "totalVolumeCbm" double precision NOT NULL DEFAULT 0,
+          "orderCount" integer NOT NULL DEFAULT 0,
+          "triggeredBy" character varying(30) NOT NULL DEFAULT 'CRON',
+          "calculatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "createdAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "deletedAt" TIMESTAMP,
+          CONSTRAINT "PK_warehouse_hub_order_summary_id" PRIMARY KEY ("id"),
+          CONSTRAINT "UQ_warehouse_hub_order_summary_hubId" UNIQUE ("hubId"),
+          CONSTRAINT "FK_warehouse_hub_order_summary_hub" FOREIGN KEY ("hubId") REFERENCES "hub"("id") ON DELETE CASCADE
+        );
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS "IDX_warehouse_hub_order_summary_hubId"
+        ON "warehouse_hub_order_summary" ("hubId");
+        CREATE INDEX IF NOT EXISTS "IDX_warehouse_hub_order_summary_calculatedAt"
+        ON "warehouse_hub_order_summary" ("calculatedAt");
+      `);
+      await this.dataSource.query(`
         CREATE TABLE IF NOT EXISTS "cron_job_config" (
           "id" SERIAL NOT NULL,
           "jobKey" character varying(80) NOT NULL,
@@ -338,6 +365,15 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
             true,
             '08:00',
             18,
+            false
+          ),
+          (
+            'WAREHOUSE_HUB_ORDER_TOTALS',
+            'Snapshot Tổng đơn hàng theo từng Hub',
+            'Cứ mỗi 5 phút quét tuần tự từng Hub và lưu tổng số lượng, khối lượng kg, CBM để màn hình Đơn hàng kho đọc nhanh mà không quét toàn bộ dữ liệu mỗi lần tải',
+            true,
+            '00:00',
+            0,
             false
           )
         ON CONFLICT ("jobKey") DO NOTHING;
@@ -486,6 +522,16 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         cutoffHour: 18,
         notifySuperAdmins: true,
       },
+      {
+        jobKey: 'WAREHOUSE_HUB_ORDER_TOTALS',
+        name: 'Snapshot Tổng đơn hàng theo từng Hub',
+        description:
+          'Cứ mỗi 5 phút quét tuần tự từng Hub và lưu tổng số lượng, khối lượng kg, CBM để màn hình Đơn hàng kho đọc nhanh mà không quét toàn bộ dữ liệu mỗi lần tải',
+        isEnabled: true,
+        cronTime: '00:00',
+        cutoffHour: 0,
+        notifySuperAdmins: false,
+      },
     ];
 
     if (!this.defaultConfigsSeeded) {
@@ -625,6 +671,61 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
               }),
             );
           }
+        }
+      }
+
+      // ── 3. Snapshot totals for the warehouse orders screen every 5 minutes ──
+      const hubSummaryConfig = await this.cronConfigRepository.findOne({
+        where: { jobKey: 'WAREHOUSE_HUB_ORDER_TOTALS' },
+      });
+      const nowMs = Date.now();
+      const lastHubSummaryRunMs = hubSummaryConfig?.lastRunAt
+        ? new Date(hubSummaryConfig.lastRunAt).getTime()
+        : 0;
+      if (
+        hubSummaryConfig?.isEnabled &&
+        vn.minute % 5 === 0 &&
+        !this.isRunningCron &&
+        !this.isRunningHubSummaryCron &&
+        nowMs - lastHubSummaryRunMs >= 4 * 60 * 1000
+      ) {
+        this.isRunningHubSummaryCron = true;
+        const startedAt = new Date();
+        hubSummaryConfig.lastRunAt = startedAt;
+        hubSummaryConfig.lastRunStatus = 'RUNNING';
+        await this.cronConfigRepository.save(hubSummaryConfig);
+        try {
+          const refreshedHubCount =
+            await this.warehouseService.refreshAllHubOrderSummaries('CRON');
+          const finishedAt = new Date();
+          hubSummaryConfig.lastRunAt = finishedAt;
+          hubSummaryConfig.lastRunStatus = 'SUCCESS';
+          await this.cronConfigRepository.save(hubSummaryConfig);
+          await this.cronLogRepository.save(
+            this.cronLogRepository.create({
+              jobKey: 'WAREHOUSE_HUB_ORDER_TOTALS',
+              targetDate: `${vn.year}-${String(vn.month).padStart(2, '0')}-${String(vn.day).padStart(2, '0')}`,
+              targetEndDate: `${vn.year}-${String(vn.month).padStart(2, '0')}-${String(vn.day).padStart(2, '0')}`,
+              windowLabel: `Snapshot tổng đơn hàng theo Hub lúc ${finishedAt.toISOString()}`,
+              triggeredBy: 'CRON_SCHEDULED',
+              status: 'SUCCESS',
+              upsertedHubRows: refreshedHubCount,
+              startedAt,
+              finishedAt,
+              durationMs: finishedAt.getTime() - startedAt.getTime(),
+            }),
+          );
+          this.logger.log(
+            `[WAREHOUSE HUB TOTALS CRON] Đã cập nhật ${refreshedHubCount} Hub`,
+          );
+        } catch (err) {
+          hubSummaryConfig.lastRunStatus = 'FAILED';
+          await this.cronConfigRepository.save(hubSummaryConfig);
+          this.logger.error(
+            `[WAREHOUSE HUB TOTALS CRON] Lỗi: ${(err as Error)?.message}`,
+          );
+        } finally {
+          this.isRunningHubSummaryCron = false;
         }
       }
     } catch (err) {

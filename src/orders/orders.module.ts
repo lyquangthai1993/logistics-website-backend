@@ -18,6 +18,7 @@ import { DailyHubOperationalReportEntity } from './infrastructure/persistence/re
 import { DailyRegionalDispatchReportEntity } from './infrastructure/persistence/relational/entities/daily-regional-dispatch-report.entity';
 import { CronJobConfigEntity } from './infrastructure/persistence/relational/entities/cron-job-config.entity';
 import { CronJobExecutionLogEntity } from './infrastructure/persistence/relational/entities/cron-job-execution-log.entity';
+import { WarehouseHubOrderSummaryEntity } from './infrastructure/persistence/relational/entities/warehouse-hub-order-summary.entity';
 import { OrderActivityLogService } from './order-activity-log.service';
 import { WarehouseController } from './warehouse.controller';
 import { WarehouseService } from './warehouse.service';
@@ -40,6 +41,7 @@ import { AdminReportsService } from './admin-reports.service';
       DailyRegionalDispatchReportEntity,
       CronJobConfigEntity,
       CronJobExecutionLogEntity,
+      WarehouseHubOrderSummaryEntity,
     ]),
     NotificationsModule,
     MailModule,
