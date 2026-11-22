@@ -1184,7 +1184,9 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         AND tx."createdAt" < $2
         AND COALESCE(tx."hubId", o."originHubId", o."currentHubId") IS NOT NULL
         ${storageHubSql}
-      GROUP BY "reportDate", "hubId"
+      GROUP BY
+        TO_CHAR(tx."createdAt" + INTERVAL '1 hour', 'YYYY-MM-DD'),
+        COALESCE(tx."hubId", o."originHubId", o."currentHubId")
       ORDER BY "reportDate" ASC
       `,
       storageParams,
