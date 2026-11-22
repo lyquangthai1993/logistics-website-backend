@@ -25,6 +25,7 @@ import { WarehouseService } from './warehouse.service';
 import { OperationalLedgerService } from './operational-ledger.service';
 import { AdminReportsController } from './admin-reports.controller';
 import { AdminReportsService } from './admin-reports.service';
+import { ProvincesModule } from '../provinces/provinces.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { AdminReportsService } from './admin-reports.service';
     ]),
     NotificationsModule,
     MailModule,
+    ProvincesModule,
   ],
   controllers: [OrdersController, WarehouseController, AdminReportsController],
   providers: [
