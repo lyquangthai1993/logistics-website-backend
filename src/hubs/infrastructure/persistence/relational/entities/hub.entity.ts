@@ -13,6 +13,8 @@ import { VehicleEntity } from '../../../../../vehicles/infrastructure/persistenc
   name: 'hub',
 })
 export class HubEntity extends AbstractBaseEntity {
+  static readonly REGIONS = ['MIỀN BẮC', 'MIỀN TRUNG', 'MIỀN NAM'] as const;
+
   @PrimaryGeneratedColumn()
   id: number;
 
@@ -29,6 +31,10 @@ export class HubEntity extends AbstractBaseEntity {
 
   @Column({ type: String, nullable: false })
   city: string;
+
+  @Index()
+  @Column({ type: String, length: 20, nullable: true })
+  region: (typeof HubEntity.REGIONS)[number] | null;
 
   @Column({ type: String, nullable: true })
   address: string | null;
