@@ -51,6 +51,37 @@ export interface DirectionMetrics {
   packageCount: number;
 }
 
+const REPORT_REGIONS = [
+  RegionEnum.NORTH,
+  RegionEnum.CENTRAL,
+  RegionEnum.SOUTH,
+  RegionEnum.NA,
+] as const;
+
+function resolveHubReportRegion(hub?: Pick<HubEntity, 'region' | 'city'> | null): RegionEnum {
+  const configured = hub?.region as RegionEnum | null | undefined;
+  if (configured && REPORT_REGIONS.includes(configured as (typeof REPORT_REGIONS)[number])) {
+    return configured;
+  }
+
+  const derived = normalizeRegion(hub?.city).region;
+  return REPORT_REGIONS.includes(derived as (typeof REPORT_REGIONS)[number])
+    ? derived
+    : RegionEnum.NA;
+}
+
+function resolveReportRegion(
+  province: string | null | undefined,
+  hubId: number | null | undefined,
+  hubRegions: Map<number, RegionEnum>,
+): RegionEnum {
+  const resolved = normalizeRegion(province).region;
+  if (resolved === RegionEnum.STORAGE) {
+    return hubRegions.get(Number(hubId)) ?? RegionEnum.NA;
+  }
+  return resolved;
+}
+
 export interface DailyReportPoint extends DirectionMetrics {
   reportDate: string;
   dayOfMonth: number;
@@ -3335,14 +3366,17 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     const hubs = await this.hubRepository.find({
       where: options?.hubId ? { id: options.hubId } : {},
-      select: ['id'],
+      select: ['id', 'city', 'region'],
     });
+
+    const hubRegions = new Map(
+      hubs.map((hub) => [hub.id, resolveHubReportRegion(hub)]),
+    );
 
     const targetRegions = [
       RegionEnum.NORTH,
       RegionEnum.CENTRAL,
       RegionEnum.SOUTH,
-      RegionEnum.STORAGE,
       RegionEnum.NA,
     ];
     const hubRegionMap = new Map<
@@ -3390,7 +3424,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const ord of rawStoredOrders) {
       const hId = Number(ord.currentHubId);
-      const resolvedReg = normalizeRegion(ord.province).region;
+      const resolvedReg = resolveReportRegion(ord.province, hId, hubRegions);
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -3409,7 +3443,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const ord of rawDraftOrders) {
       const hId = Number(ord.hubId);
-      const resolvedReg = normalizeRegion(ord.province || '').region;
+      const resolvedReg = resolveReportRegion(ord.province || '', hId, hubRegions);
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -3423,7 +3457,11 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const trip of rawIncomingTrips) {
       const hId = Number(trip.effectiveHubId);
-      const resolvedReg = normalizeRegion(trip.province).region;
+      const resolvedReg = resolveReportRegion(
+        trip.province,
+        hId,
+        hubRegions,
+      );
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -3560,6 +3598,9 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const allHubs = await this.hubRepository.find({
       order: { level: 'ASC', name: 'ASC' },
     });
+    const hubRegions = new Map(
+      allHubs.map((hub) => [hub.id, resolveHubReportRegion(hub)]),
+    );
 
     // Lấy cấu hình và thời điểm chạy gần nhất của Cronjob
     const cronConfig = await this.cronConfigRepository.findOne({
@@ -3659,12 +3700,15 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       [RegionEnum.NORTH]: initRegionSummary(RegionEnum.NORTH),
       [RegionEnum.CENTRAL]: initRegionSummary(RegionEnum.CENTRAL),
       [RegionEnum.SOUTH]: initRegionSummary(RegionEnum.SOUTH),
-      [RegionEnum.STORAGE]: initRegionSummary(RegionEnum.STORAGE),
       [RegionEnum.NA]: initRegionSummary(RegionEnum.NA),
     };
 
     for (const row of reportRows) {
-      const target = summaryMap[row.region] || summaryMap[RegionEnum.NA];
+      const rowRegion =
+        row.region === RegionEnum.STORAGE
+          ? hubRegions.get(Number(row.hubId)) || RegionEnum.NA
+          : row.region;
+      const target = summaryMap[rowRegion] || summaryMap[RegionEnum.NA];
       target.onhandWeightKg += Number(row.onhandWeightKg) || 0;
       target.onhandVolumeCbm += Number(row.onhandVolumeCbm) || 0;
       target.onhandPackageCount += Number(row.onhandPackageCount) || 0;
@@ -3738,7 +3782,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     if (snapshotOnhandCodes.length > 0) {
       const currentOnhandRows = (await this.dataSource.query(
         `
-          SELECT DISTINCT o."orderCode", o."province"
+          SELECT DISTINCT o."orderCode", o."province", stock."hubId"
           FROM "order" o
           JOIN LATERAL (
             SELECT tx."hubId",
@@ -3762,11 +3806,15 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
             AND ($2::integer IS NULL OR stock."hubId" = $2)
         `,
         [snapshotOnhandCodes, parsedHubId || null],
-      )) as Array<{ orderCode: string; province: string | null }>;
+      )) as Array<{
+        orderCode: string;
+        province: string | null;
+        hubId: number;
+      }>;
       const currentOnhandRegions = new Map(
         currentOnhandRows.map((row) => [
           String(row.orderCode),
-          normalizeRegion(row.province).region,
+          resolveReportRegion(row.province, row.hubId, hubRegions),
         ]),
       );
 
@@ -3831,44 +3879,37 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         summaryMap[RegionEnum.NORTH].totalWeightKg +
         summaryMap[RegionEnum.CENTRAL].totalWeightKg +
         summaryMap[RegionEnum.SOUTH].totalWeightKg +
-        summaryMap[RegionEnum.STORAGE].totalWeightKg +
         summaryMap[RegionEnum.NA].totalWeightKg,
       totalWeightTons: 0,
       totalVolumeCbm:
         summaryMap[RegionEnum.NORTH].totalVolumeCbm +
         summaryMap[RegionEnum.CENTRAL].totalVolumeCbm +
         summaryMap[RegionEnum.SOUTH].totalVolumeCbm +
-        summaryMap[RegionEnum.STORAGE].totalVolumeCbm +
         summaryMap[RegionEnum.NA].totalVolumeCbm,
       onhandWeightKg:
         summaryMap[RegionEnum.NORTH].onhandWeightKg +
         summaryMap[RegionEnum.CENTRAL].onhandWeightKg +
         summaryMap[RegionEnum.SOUTH].onhandWeightKg +
-        summaryMap[RegionEnum.STORAGE].onhandWeightKg +
         summaryMap[RegionEnum.NA].onhandWeightKg,
       incomingWeightKg:
         summaryMap[RegionEnum.NORTH].incomingWeightKg +
         summaryMap[RegionEnum.CENTRAL].incomingWeightKg +
         summaryMap[RegionEnum.SOUTH].incomingWeightKg +
-        summaryMap[RegionEnum.STORAGE].incomingWeightKg +
         summaryMap[RegionEnum.NA].incomingWeightKg,
       packageCount:
         summaryMap[RegionEnum.NORTH].onhandPackageCount +
         summaryMap[RegionEnum.CENTRAL].onhandPackageCount +
         summaryMap[RegionEnum.SOUTH].onhandPackageCount +
-        summaryMap[RegionEnum.STORAGE].onhandPackageCount +
         summaryMap[RegionEnum.NA].onhandPackageCount,
       orderCount:
         summaryMap[RegionEnum.NORTH].onhandOrderCount +
         summaryMap[RegionEnum.CENTRAL].onhandOrderCount +
         summaryMap[RegionEnum.SOUTH].onhandOrderCount +
-        summaryMap[RegionEnum.STORAGE].onhandOrderCount +
         summaryMap[RegionEnum.NA].onhandOrderCount,
       incomingTripCount:
         summaryMap[RegionEnum.NORTH].incomingTripCount +
         summaryMap[RegionEnum.CENTRAL].incomingTripCount +
         summaryMap[RegionEnum.SOUTH].incomingTripCount +
-        summaryMap[RegionEnum.STORAGE].incomingTripCount +
         summaryMap[RegionEnum.NA].incomingTripCount,
     };
     grandTotals.totalWeightTons =
@@ -3997,7 +4038,11 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const onhandOrdersList = isFutureOnlyRange
       ? []
       : rawStoredOrdersList.map((ord: any) => {
-          const reg = normalizeRegion(ord.province).region;
+          const reg = resolveReportRegion(
+            ord.province,
+            Number(ord.currentHubId),
+            hubRegions,
+          );
 
           const totalQty = Number(ord.totalQuantity) || 1;
           const remainQty = Number(ord.remainingQuantity) || 0;
@@ -4026,7 +4071,15 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const incomingTripsList = isFutureOnlyRange
       ? []
       : rawIncomingTripsList.map((trip: any) => {
-          const reg = normalizeRegion(trip.province).region;
+          const effectiveHubId =
+            trip.tripType === 'TRANSFER'
+              ? Number(trip.destinationHubId)
+              : Number(trip.originHubId);
+          const reg = resolveReportRegion(
+            trip.province,
+            effectiveHubId,
+            hubRegions,
+          );
 
           return {
             id: trip.id,
@@ -4067,12 +4120,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         volumeCbm: summaryMap[RegionEnum.SOUTH].draftVolumeCbm,
         orderCount: summaryMap[RegionEnum.SOUTH].draftOrderCount,
         orderCodes: [...summaryMap[RegionEnum.SOUTH].draftOrderCodes],
-      },
-      storage: {
-        weightKg: summaryMap[RegionEnum.STORAGE].draftWeightKg,
-        volumeCbm: summaryMap[RegionEnum.STORAGE].draftVolumeCbm,
-        orderCount: summaryMap[RegionEnum.STORAGE].draftOrderCount,
-        orderCodes: [...summaryMap[RegionEnum.STORAGE].draftOrderCodes],
       },
       na: {
         weightKg: summaryMap[RegionEnum.NA].draftWeightKg,
@@ -4120,13 +4167,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           ...summaryMap[RegionEnum.SOUTH],
           onhandOrderCodes: [...summaryMap[RegionEnum.SOUTH].onhandOrderCodes],
           draftOrderCodes: [...summaryMap[RegionEnum.SOUTH].draftOrderCodes],
-        },
-        storage: {
-          ...summaryMap[RegionEnum.STORAGE],
-          onhandOrderCodes: [
-            ...summaryMap[RegionEnum.STORAGE].onhandOrderCodes,
-          ],
-          draftOrderCodes: [...summaryMap[RegionEnum.STORAGE].draftOrderCodes],
         },
         na: {
           ...summaryMap[RegionEnum.NA],
