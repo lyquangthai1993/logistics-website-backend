@@ -54,6 +54,7 @@ import {
 } from './dto/update-trip-order-destination.dto';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { WarehouseHubOrderSummaryEntity } from './infrastructure/persistence/relational/entities/warehouse-hub-order-summary.entity';
+import { ProvinceReferenceService } from '../provinces/province-reference.service';
 
 export interface WarehouseOrdersResult {
   data: Array<
@@ -137,6 +138,7 @@ export class WarehouseService {
     private readonly redisCacheService: RedisCacheService,
     @InjectRepository(WarehouseHubOrderSummaryEntity)
     private readonly hubOrderSummaryRepository: Repository<WarehouseHubOrderSummaryEntity>,
+    private readonly provinceReferenceService: ProvinceReferenceService,
   ) {}
 
   /**
@@ -515,6 +517,9 @@ export class WarehouseService {
       .filter((n) => Number.isInteger(n) && n > 0);
     const groupByOrderCode =
       query?.groupBy === 'orderCode' || flowUpper === 'OUTBOUND_LOOKUP';
+    const provinceRegionLookup = isExport
+      ? await this.provinceReferenceService.getRegionLookup()
+      : undefined;
     const waitingOrStored = sqlList([...WAITING_STATUSES, ...STORED_STATUSES]);
     const storedOrDispatched = sqlList([
       ...STORED_STATUSES,
@@ -685,6 +690,7 @@ export class WarehouseService {
         skip,
         userHubId,
         useHubContext,
+        provinceRegionLookup,
         counts: { allCount, storedCount, draftCount, dispatchedCount },
       });
     }
@@ -720,6 +726,8 @@ export class WarehouseService {
       data,
       userHubId,
       useHubContext,
+      undefined,
+      provinceRegionLookup,
     );
 
     return {
@@ -747,6 +755,7 @@ export class WarehouseService {
     userHubId: number | null,
     useHubContext: boolean,
     precomputedHubView?: Map<number, any>,
+    provinceRegionLookup?: Map<string, string>,
   ): Promise<any[]> {
     const hubView =
       precomputedHubView ??
@@ -966,6 +975,24 @@ export class WarehouseService {
         deliveryAddr ||
         item.province ||
         '';
+      const destinationRegion =
+        (provinceRegionLookup &&
+          [
+            item.province,
+            (item as unknown as { destinationProvince?: string })
+              .destinationProvince,
+            item.destinationHubEntity?.city,
+            deliveryAddr,
+          ]
+            .map((candidate) =>
+              this.provinceReferenceService.resolveRegion(
+                candidate,
+                provinceRegionLookup,
+              ),
+            )
+            .find(Boolean)) ||
+        item.destinationRegion ||
+        'N/A';
 
       const round3Metric = (n: number) => Math.round(n * 1000) / 1000;
       const activeHubTxs = hubTxs.filter((t) => !t.deletedAt);
@@ -1046,6 +1073,7 @@ export class WarehouseService {
           '',
         destinationHub: originalDestination,
         originalDestination,
+        destinationRegion,
         outboundDestination,
         /** Status seen from the viewer's hub (falls back to global status). */
         hubStatus: effectiveStatus,
@@ -1095,6 +1123,7 @@ export class WarehouseService {
     skip: number;
     userHubId: number | null;
     useHubContext: boolean;
+    provinceRegionLookup?: Map<string, string>;
     counts: {
       allCount: number;
       storedCount: number;
@@ -1136,6 +1165,8 @@ export class WarehouseService {
       members,
       ctx.userHubId,
       ctx.useHubContext,
+      undefined,
+      ctx.provinceRegionLookup,
     );
 
     const byCode = new Map<string, any[]>();
