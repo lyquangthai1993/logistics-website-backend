@@ -3620,6 +3620,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     // Refresh only today's live row. Historical/future range days must use their own snapshots.
     if (
+      query?.mode !== 'live' &&
       query?.mode !== 'snapshot' &&
       fromDate <= todayStr &&
       toDate >= todayStr
@@ -3631,6 +3632,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       });
       provinceAudit = snapshotResult.provinceAudit;
     } else if (
+      query?.mode !== 'live' &&
       query?.mode !== 'snapshot' &&
       !query?.fromDate &&
       !query?.toDate &&
@@ -3700,6 +3702,8 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       totalWeightKg: 0,
       totalWeightTons: 0,
       totalVolumeCbm: 0,
+      totalPackageCount: 0,
+      totalOrderCount: 0,
       recommendedVehicle: 'Chưa có hàng',
       quickSnippet: '',
     });
@@ -3711,46 +3715,107 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       [RegionEnum.NA]: initRegionSummary(RegionEnum.NA),
     };
 
-    for (const row of reportRows) {
-      const rowRegion =
-        row.region === RegionEnum.STORAGE
-          ? hubRegions.get(Number(row.hubId)) || RegionEnum.NA
-          : row.region;
-      const target = summaryMap[rowRegion] || summaryMap[RegionEnum.NA];
-      target.onhandWeightKg += Number(row.onhandWeightKg) || 0;
-      target.onhandVolumeCbm += Number(row.onhandVolumeCbm) || 0;
-      target.onhandPackageCount += Number(row.onhandPackageCount) || 0;
-      target.onhandOrderCount += Number(row.onhandOrderCount) || 0;
-      target.draftWeightKg += Number(row.draftWeightKg) || 0;
-      target.draftVolumeCbm += Number(row.draftVolumeCbm) || 0;
-      target.draftOrderCount += Number(row.draftOrderCount) || 0;
-      for (const code of row.onhandOrderCodes || []) {
-        target.onhandOrderCodes.add(String(code));
-      }
-      for (const code of row.draftOrderCodes || []) {
-        target.draftOrderCodes.add(String(code));
-      }
+    if (query?.mode !== 'live') {
+      for (const row of reportRows) {
+        const rowRegion =
+          row.region === RegionEnum.STORAGE
+            ? hubRegions.get(Number(row.hubId)) || RegionEnum.NA
+            : row.region;
+        const target = summaryMap[rowRegion] || summaryMap[RegionEnum.NA];
+        target.onhandWeightKg += Number(row.onhandWeightKg) || 0;
+        target.onhandVolumeCbm += Number(row.onhandVolumeCbm) || 0;
+        target.onhandPackageCount += Number(row.onhandPackageCount) || 0;
+        target.onhandOrderCount += Number(row.onhandOrderCount) || 0;
+        target.draftWeightKg += Number(row.draftWeightKg) || 0;
+        target.draftVolumeCbm += Number(row.draftVolumeCbm) || 0;
+        target.draftOrderCount += Number(row.draftOrderCount) || 0;
+        for (const code of row.onhandOrderCodes || []) {
+          target.onhandOrderCodes.add(String(code));
+        }
+        for (const code of row.draftOrderCodes || []) {
+          target.draftOrderCodes.add(String(code));
+        }
 
-      target.incomingWeightKg += Number(row.incomingWeightKg) || 0;
-      target.incomingVolumeCbm += Number(row.incomingVolumeCbm) || 0;
-      target.incomingPackageCount += Number(row.incomingPackageCount) || 0;
-      target.incomingTripCount += Number(row.incomingTripCount) || 0;
+        target.incomingWeightKg += Number(row.incomingWeightKg) || 0;
+        target.incomingVolumeCbm += Number(row.incomingVolumeCbm) || 0;
+        target.incomingPackageCount += Number(row.incomingPackageCount) || 0;
+        target.incomingTripCount += Number(row.incomingTripCount) || 0;
 
-      target.totalWeightKg += Number(row.totalWeightKg) || 0;
-      target.totalVolumeCbm += Number(row.totalVolumeCbm) || 0;
+        target.totalWeightKg += Number(row.totalWeightKg) || 0;
+        target.totalVolumeCbm += Number(row.totalVolumeCbm) || 0;
+      }
+    }
+
+    // The live warehouse situation must use the exact same per-Hub status
+    // snapshot as the Warehouse Orders screen. Historical report mode keeps
+    // the existing daily regional report behavior below.
+    if (query?.mode === 'live') {
+      const snapshotRows = (await this.dataSource.query(
+        `
+          SELECT "hubId", "status", "totalQuantity", "totalWeightKg",
+                 "totalVolumeCbm", "orderCount"
+          FROM "warehouse_hub_order_summary"
+          WHERE "deletedAt" IS NULL
+            AND "status" IN ('ALL', 'INBOUND', 'DRAFT', 'COMPLETED_INBOUND')
+            AND ($1::integer IS NULL OR "hubId" = $1)
+        `,
+        [parsedHubId],
+      )) as Array<{
+        hubId: number;
+        status: 'ALL' | 'INBOUND' | 'DRAFT' | 'COMPLETED_INBOUND';
+        totalQuantity: number;
+        totalWeightKg: number;
+        totalVolumeCbm: number;
+        orderCount: number;
+      }>;
+
+      for (const row of snapshotRows) {
+        const target =
+          summaryMap[hubRegions.get(Number(row.hubId)) || RegionEnum.NA];
+        const weightKg = Number(row.totalWeightKg) || 0;
+        const volumeCbm = Number(row.totalVolumeCbm) || 0;
+        const packageCount = Number(row.totalQuantity) || 0;
+        const orderCount = Number(row.orderCount) || 0;
+
+        if (row.status === 'INBOUND') {
+          target.onhandWeightKg += weightKg;
+          target.onhandVolumeCbm += volumeCbm;
+          target.onhandPackageCount += packageCount;
+          target.onhandOrderCount += orderCount;
+        } else if (row.status === 'DRAFT') {
+          target.draftWeightKg += weightKg;
+          target.draftVolumeCbm += volumeCbm;
+          target.draftOrderCount += orderCount;
+        } else if (row.status === 'COMPLETED_INBOUND') {
+          // Keep the existing response shape for compatibility; in live mode
+          // this bucket is displayed as "Đã xuất kho", not "Sắp về kho".
+          target.incomingWeightKg += weightKg;
+          target.incomingVolumeCbm += volumeCbm;
+          target.incomingPackageCount += packageCount;
+          target.incomingTripCount += orderCount;
+        } else if (row.status === 'ALL') {
+          target.totalWeightKg += weightKg;
+          target.totalVolumeCbm += volumeCbm;
+          target.totalPackageCount += packageCount;
+          target.totalOrderCount += orderCount;
+        }
+      }
     }
 
     // A range report can merge snapshots from multiple days. A waybill that
     // was a draft earlier in the range must not remain in the current draft
     // list after it has been dispatched. Reconcile the code list against the
     // current order lifecycle before returning draft details/counters.
-    const snapshotDraftCodes = [
-      ...new Set(
-        Object.values(summaryMap).flatMap((summary) => [
-          ...summary.draftOrderCodes,
-        ]),
-      ),
-    ];
+    const snapshotDraftCodes =
+      query?.mode === 'live'
+        ? []
+        : [
+            ...new Set(
+              Object.values(summaryMap).flatMap((summary) => [
+                ...summary.draftOrderCodes,
+              ]),
+            ),
+          ];
     if (snapshotDraftCodes.length > 0) {
       const currentDraftRows = (await this.dataSource.query(
         `
@@ -3780,13 +3845,16 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     // inventory ledger so an order exported after the snapshot (for example a
     // consignment with zero remaining quantity) is not shown as currently
     // stored in the report details.
-    const snapshotOnhandCodes = [
-      ...new Set(
-        Object.values(summaryMap).flatMap((summary) => [
-          ...summary.onhandOrderCodes,
-        ]),
-      ),
-    ];
+    const snapshotOnhandCodes =
+      query?.mode === 'live'
+        ? []
+        : [
+            ...new Set(
+              Object.values(summaryMap).flatMap((summary) => [
+                ...summary.onhandOrderCodes,
+              ]),
+            ),
+          ];
     if (snapshotOnhandCodes.length > 0) {
       const currentOnhandRows = (await this.dataSource.query(
         `
@@ -3855,12 +3923,19 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         Math.round((item.incomingWeightKg / 1000) * 100) / 100;
       item.incomingVolumeCbm = Math.round(item.incomingVolumeCbm * 10) / 10;
 
-      item.totalWeightKg =
-        Math.round((item.onhandWeightKg + item.incomingWeightKg) * 100) / 100;
-      item.totalWeightTons =
-        Math.round((item.totalWeightKg / 1000) * 100) / 100;
-      item.totalVolumeCbm =
-        Math.round((item.onhandVolumeCbm + item.incomingVolumeCbm) * 10) / 10;
+      if (query?.mode !== 'live') {
+        item.totalWeightKg =
+          Math.round((item.onhandWeightKg + item.incomingWeightKg) * 100) / 100;
+        item.totalWeightTons =
+          Math.round((item.totalWeightKg / 1000) * 100) / 100;
+        item.totalVolumeCbm =
+          Math.round((item.onhandVolumeCbm + item.incomingVolumeCbm) * 10) / 10;
+      } else {
+        item.totalWeightKg = Math.round(item.totalWeightKg * 100) / 100;
+        item.totalWeightTons =
+          Math.round((item.totalWeightKg / 1000) * 100) / 100;
+        item.totalVolumeCbm = Math.round(item.totalVolumeCbm * 10) / 10;
+      }
 
       item.recommendedVehicle = this.getVehicleRecommendation(
         item.totalWeightTons,
@@ -3905,15 +3980,15 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         summaryMap[RegionEnum.SOUTH].incomingWeightKg +
         summaryMap[RegionEnum.NA].incomingWeightKg,
       packageCount:
-        summaryMap[RegionEnum.NORTH].onhandPackageCount +
-        summaryMap[RegionEnum.CENTRAL].onhandPackageCount +
-        summaryMap[RegionEnum.SOUTH].onhandPackageCount +
-        summaryMap[RegionEnum.NA].onhandPackageCount,
+        summaryMap[RegionEnum.NORTH].totalPackageCount +
+        summaryMap[RegionEnum.CENTRAL].totalPackageCount +
+        summaryMap[RegionEnum.SOUTH].totalPackageCount +
+        summaryMap[RegionEnum.NA].totalPackageCount,
       orderCount:
-        summaryMap[RegionEnum.NORTH].onhandOrderCount +
-        summaryMap[RegionEnum.CENTRAL].onhandOrderCount +
-        summaryMap[RegionEnum.SOUTH].onhandOrderCount +
-        summaryMap[RegionEnum.NA].onhandOrderCount,
+        summaryMap[RegionEnum.NORTH].totalOrderCount +
+        summaryMap[RegionEnum.CENTRAL].totalOrderCount +
+        summaryMap[RegionEnum.SOUTH].totalOrderCount +
+        summaryMap[RegionEnum.NA].totalOrderCount,
       incomingTripCount:
         summaryMap[RegionEnum.NORTH].incomingTripCount +
         summaryMap[RegionEnum.CENTRAL].incomingTripCount +
