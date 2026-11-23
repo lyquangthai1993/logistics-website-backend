@@ -8,6 +8,7 @@ export class CreateWarehouseHubOrderSummaryTable1789160000000 implements Migrati
       CREATE TABLE IF NOT EXISTS "warehouse_hub_order_summary" (
         "id" SERIAL NOT NULL,
         "hubId" integer NOT NULL,
+        "status" character varying(32) NOT NULL DEFAULT 'ALL',
         "totalQuantity" integer NOT NULL DEFAULT 0,
         "totalWeightKg" double precision NOT NULL DEFAULT 0,
         "totalVolumeCbm" double precision NOT NULL DEFAULT 0,
@@ -18,7 +19,7 @@ export class CreateWarehouseHubOrderSummaryTable1789160000000 implements Migrati
         "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "deletedAt" TIMESTAMP,
         CONSTRAINT "PK_warehouse_hub_order_summary_id" PRIMARY KEY ("id"),
-        CONSTRAINT "UQ_warehouse_hub_order_summary_hubId" UNIQUE ("hubId"),
+        CONSTRAINT "UQ_warehouse_hub_order_summary_hubId_status" UNIQUE ("hubId", "status"),
         CONSTRAINT "FK_warehouse_hub_order_summary_hub" FOREIGN KEY ("hubId") REFERENCES "hub"("id") ON DELETE CASCADE
       );
     `);
@@ -26,6 +27,8 @@ export class CreateWarehouseHubOrderSummaryTable1789160000000 implements Migrati
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "IDX_warehouse_hub_order_summary_hubId"
       ON "warehouse_hub_order_summary" ("hubId");
+      CREATE INDEX IF NOT EXISTS "IDX_warehouse_hub_order_summary_status"
+      ON "warehouse_hub_order_summary" ("status");
       CREATE INDEX IF NOT EXISTS "IDX_warehouse_hub_order_summary_calculatedAt"
       ON "warehouse_hub_order_summary" ("calculatedAt");
     `);

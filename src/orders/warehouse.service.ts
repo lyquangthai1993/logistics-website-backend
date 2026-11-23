@@ -215,6 +215,7 @@ export class WarehouseService {
   async getHubOrderSummary(
     user: UserEntity,
     requestedHubId?: number,
+    status?: string,
   ): Promise<{
     data: {
       hubId: number | null;
@@ -225,10 +226,12 @@ export class WarehouseService {
       calculatedAt: Date | null;
     };
   }> {
+    const normalizedStatus = status?.trim().toUpperCase() || 'ALL';
     const { userHubId, useHubContext } = await this.resolveHubContext(
       user,
       requestedHubId,
     );
+
     const qb = this.hubOrderSummaryRepository
       .createQueryBuilder('summary')
       .select('COALESCE(SUM(summary.totalQuantity), 0)', 'quantity')
@@ -236,7 +239,10 @@ export class WarehouseService {
       .addSelect('COALESCE(SUM(summary.totalVolumeCbm), 0)', 'volumeCbm')
       .addSelect('COALESCE(SUM(summary.orderCount), 0)', 'orderCount')
       .addSelect('MAX(summary.calculatedAt)', 'calculatedAt')
-      .where('summary.deletedAt IS NULL');
+      .where('summary.deletedAt IS NULL')
+      .andWhere('summary.status = :summaryStatus', {
+        summaryStatus: normalizedStatus,
+      });
 
     if (useHubContext && userHubId) {
       qb.andWhere('summary.hubId = :hubId', { hubId: userHubId });
@@ -262,33 +268,43 @@ export class WarehouseService {
     };
   }
 
-  /** Refresh one Hub snapshot using the canonical grouped-order aggregation. */
+  /** Refresh one Hub snapshot per status bucket using the canonical grouped-order aggregation. */
   async refreshHubOrderSummary(
     hubId: number,
     triggeredBy: 'CRON' | 'MANUAL' = 'CRON',
   ): Promise<WarehouseHubOrderSummaryEntity> {
-    const result = await this.getOrders(
-      { role: { id: RoleEnum.SUPER_ADMIN } } as UserEntity,
-      {
-        isExport: 'true',
-        groupBy: 'orderCode',
-        limit: 100000,
-        hubId,
-      },
-    );
-    const current =
-      (await this.hubOrderSummaryRepository.findOne({ where: { hubId } })) ??
-      this.hubOrderSummaryRepository.create({ hubId });
+    const statuses = ['ALL', 'INBOUND', 'DRAFT', 'COMPLETED_INBOUND'] as const;
+    let lastSnapshot: WarehouseHubOrderSummaryEntity | undefined;
 
-    current.totalQuantity = Number(result.meta.totalQuantity) || 0;
-    current.totalWeightKg =
-      Math.round((Number(result.meta.totalWeight) || 0) * 100) / 100;
-    current.totalVolumeCbm =
-      Math.round((Number(result.meta.totalVolume) || 0) * 1000) / 1000;
-    current.orderCount = Number(result.meta.total) || 0;
-    current.triggeredBy = triggeredBy;
-    current.calculatedAt = new Date();
-    return this.hubOrderSummaryRepository.save(current);
+    for (const status of statuses) {
+      const result = await this.getOrders(
+        { role: { id: RoleEnum.SUPER_ADMIN } } as UserEntity,
+        {
+          isExport: 'true',
+          groupBy: 'orderCode',
+          limit: 100000,
+          hubId,
+          ...(status === 'ALL' ? {} : { status }),
+        },
+      );
+      const current =
+        (await this.hubOrderSummaryRepository.findOne({
+          where: { hubId, status },
+        })) ?? this.hubOrderSummaryRepository.create({ hubId, status });
+
+      current.status = status;
+      current.totalQuantity = Number(result.meta.totalQuantity) || 0;
+      current.totalWeightKg =
+        Math.round((Number(result.meta.totalWeight) || 0) * 100) / 100;
+      current.totalVolumeCbm =
+        Math.round((Number(result.meta.totalVolume) || 0) * 1000) / 1000;
+      current.orderCount = Number(result.meta.total) || 0;
+      current.triggeredBy = triggeredBy;
+      current.calculatedAt = new Date();
+      lastSnapshot = await this.hubOrderSummaryRepository.save(current);
+    }
+
+    return lastSnapshot!;
   }
 
   /** Refresh Hubs one by one to cap concurrent database pressure. */

@@ -17,7 +17,7 @@ import { HubEntity } from '../../../../../hubs/infrastructure/persistence/relati
  * an immutable movement report for a 06:00 -> 05:59 operational window.
  */
 @Entity({ name: 'warehouse_hub_order_summary' })
-@Unique('UQ_warehouse_hub_order_summary_hubId', ['hubId'])
+@Unique('UQ_warehouse_hub_order_summary_hubId_status', ['hubId', 'status'])
 export class WarehouseHubOrderSummaryEntity extends AbstractBaseEntity {
   @PrimaryGeneratedColumn()
   id: number;
@@ -32,6 +32,11 @@ export class WarehouseHubOrderSummaryEntity extends AbstractBaseEntity {
     foreignKeyConstraintName: 'FK_warehouse_hub_order_summary_hub',
   })
   hub: Relation<HubEntity>;
+
+  /** Snapshot bucket consumed by the warehouse orders tabs. */
+  @Index('IDX_warehouse_hub_order_summary_status')
+  @Column({ type: 'varchar', length: 32, nullable: false, default: 'ALL' })
+  status: 'ALL' | 'INBOUND' | 'DRAFT' | 'COMPLETED_INBOUND';
 
   @Column({ type: 'int', nullable: false, default: 0 })
   totalQuantity: number;
