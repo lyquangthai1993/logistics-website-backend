@@ -58,9 +58,14 @@ const REPORT_REGIONS = [
   RegionEnum.NA,
 ] as const;
 
-function resolveHubReportRegion(hub?: Pick<HubEntity, 'region' | 'city'> | null): RegionEnum {
+function resolveHubReportRegion(
+  hub?: Pick<HubEntity, 'region' | 'city'> | null,
+): RegionEnum {
   const configured = hub?.region as RegionEnum | null | undefined;
-  if (configured && REPORT_REGIONS.includes(configured as (typeof REPORT_REGIONS)[number])) {
+  if (
+    configured &&
+    REPORT_REGIONS.includes(configured as (typeof REPORT_REGIONS)[number])
+  ) {
     return configured;
   }
 
@@ -298,6 +303,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         CREATE TABLE IF NOT EXISTS "warehouse_hub_order_summary" (
           "id" SERIAL NOT NULL,
           "hubId" integer NOT NULL,
+          "status" character varying(32) NOT NULL DEFAULT 'ALL',
           "totalQuantity" integer NOT NULL DEFAULT 0,
           "totalWeightKg" double precision NOT NULL DEFAULT 0,
           "totalVolumeCbm" double precision NOT NULL DEFAULT 0,
@@ -308,13 +314,15 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           "updatedAt" TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
           "deletedAt" TIMESTAMP,
           CONSTRAINT "PK_warehouse_hub_order_summary_id" PRIMARY KEY ("id"),
-          CONSTRAINT "UQ_warehouse_hub_order_summary_hubId" UNIQUE ("hubId"),
+          CONSTRAINT "UQ_warehouse_hub_order_summary_hubId_status" UNIQUE ("hubId", "status"),
           CONSTRAINT "FK_warehouse_hub_order_summary_hub" FOREIGN KEY ("hubId") REFERENCES "hub"("id") ON DELETE CASCADE
         );
       `);
       await this.dataSource.query(`
         CREATE INDEX IF NOT EXISTS "IDX_warehouse_hub_order_summary_hubId"
         ON "warehouse_hub_order_summary" ("hubId");
+        CREATE INDEX IF NOT EXISTS "IDX_warehouse_hub_order_summary_status"
+        ON "warehouse_hub_order_summary" ("status");
         CREATE INDEX IF NOT EXISTS "IDX_warehouse_hub_order_summary_calculatedAt"
         ON "warehouse_hub_order_summary" ("calculatedAt");
       `);
@@ -3443,7 +3451,11 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const ord of rawDraftOrders) {
       const hId = Number(ord.hubId);
-      const resolvedReg = resolveReportRegion(ord.province || '', hId, hubRegions);
+      const resolvedReg = resolveReportRegion(
+        ord.province || '',
+        hId,
+        hubRegions,
+      );
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -3457,11 +3469,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const trip of rawIncomingTrips) {
       const hId = Number(trip.effectiveHubId);
-      const resolvedReg = resolveReportRegion(
-        trip.province,
-        hId,
-        hubRegions,
-      );
+      const resolvedReg = resolveReportRegion(trip.province, hId, hubRegions);
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||

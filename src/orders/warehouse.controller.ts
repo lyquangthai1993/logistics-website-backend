@@ -63,13 +63,21 @@ export class WarehouseController {
     type: Number,
     description: 'Lọc snapshot theo Kho/Hub cụ thể (dành cho Super Admin)',
   })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['ALL', 'INBOUND', 'DRAFT', 'COMPLETED_INBOUND'],
+    description: 'Lọc tổng theo tab trạng thái đang chọn',
+  })
   async getOrdersSummary(
     @Request() req: any,
     @Query('hubId') hubId?: string | number,
+    @Query('status') status?: string,
   ) {
     return this.warehouseService.getHubOrderSummary(
       req.user,
       hubId ? Number(hubId) : undefined,
+      status,
     );
   }
 
