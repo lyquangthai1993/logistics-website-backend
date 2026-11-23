@@ -3563,7 +3563,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     date?: string;
     fromDate?: string;
     toDate?: string;
-    mode?: 'live' | 'snapshot';
   }) {
     await this.ensureTableExists();
 
@@ -3586,22 +3585,11 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     if (toDate > maxToDate) toDate = maxToDate;
     const parsedHubId =
       query?.hubId && query.hubId !== 'ALL' ? Number(query.hubId) : null;
-    // Live "Tình hình hàng hóa" is sourced from the same per-Hub snapshot as
-    // Warehouse Orders. Refresh the selected Hub(s) first, then read only the
-    // persisted snapshot rows below; this keeps both screens on one status
-    // classification and avoids a second, divergent aggregation formula.
-    if (query?.mode === 'live') {
-      fromDate = todayStr;
-      toDate = todayStr;
-      if (parsedHubId) {
-        await this.warehouseService.refreshHubOrderSummary(
-          parsedHubId,
-          'MANUAL',
-        );
-      } else {
-        await this.warehouseService.refreshAllHubOrderSummaries('MANUAL');
-      }
-    }
+    // This endpoint is a read-only snapshot view. Snapshot refresh is owned by
+    // the scheduled job and the explicit sync endpoint; never rebuild it in a
+    // GET request.
+    fromDate = todayStr;
+    toDate = todayStr;
     let reportDate = toDate;
 
     // Lấy thông tin Hub được chọn
@@ -3623,38 +3611,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     const cronConfig = await this.cronConfigRepository.findOne({
       where: { jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT' },
     });
-    let provinceAudit: Awaited<
-      ReturnType<AdminReportsService['buildProvinceAudit']>
-    >;
-
-    // Refresh only today's live row. Historical/future range days must use their own snapshots.
-    if (
-      query?.mode !== 'live' &&
-      query?.mode !== 'snapshot' &&
-      fromDate <= todayStr &&
-      toDate >= todayStr
-    ) {
-      const snapshotResult = await this.calculateRegionalDispatchSnapshot({
-        hubId: parsedHubId || undefined,
-        date: todayStr,
-        triggeredBy: 'MANUAL',
-      });
-      provinceAudit = snapshotResult.provinceAudit;
-    } else if (
-      query?.mode !== 'live' &&
-      query?.mode !== 'snapshot' &&
-      !query?.fromDate &&
-      !query?.toDate &&
-      toDate === todayStr
-    ) {
-      const snapshotResult = await this.calculateRegionalDispatchSnapshot({
-        hubId: parsedHubId || undefined,
-        date: reportDate,
-        triggeredBy: 'MANUAL',
-      });
-      provinceAudit = snapshotResult.provinceAudit;
-    }
-
     // Truy vấn dữ liệu snapshot tổng hợp từ daily_regional_dispatch_report
     const queryBuilder = this.regionalReportRepository
       .createQueryBuilder('r')
@@ -3672,20 +3628,16 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       .orderBy('r.reportDate', 'ASC')
       .addOrderBy('r.hubId', 'ASC')
       .getMany();
-    // `live` must never expose a stale future snapshot created from today's
-    // inventory. Snapshot mode remains an explicit historical/raw read.
-    const visibleRangeRows =
-      query?.mode === 'snapshot'
-        ? rangeRows
-        : rangeRows.filter((row) => row.reportDate <= todayStr);
+    const visibleRangeRows = rangeRows.filter(
+      (row) => row.reportDate <= todayStr,
+    );
     const isFutureOnlyRange = fromDate > todayStr;
     if (visibleRangeRows.length > 0) {
       reportDate = visibleRangeRows[visibleRangeRows.length - 1].reportDate;
     }
     // A range query is a sum of every snapshot day in the range. `reportDate`
     // remains the last available day only as the display/latest-close marker.
-    const reportRows = visibleRangeRows;
-    provinceAudit ??= await this.buildProvinceAudit(
+    const resolvedProvinceAudit = await this.buildProvinceAudit(
       parsedHubId || undefined,
       reportDate,
     );
@@ -3724,43 +3676,9 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       [RegionEnum.NA]: initRegionSummary(RegionEnum.NA),
     };
 
-    if (query?.mode !== 'live') {
-      for (const row of reportRows) {
-        const rowRegion =
-          row.region === RegionEnum.STORAGE
-            ? hubRegions.get(Number(row.hubId)) || RegionEnum.NA
-            : row.region;
-        const target = summaryMap[rowRegion] || summaryMap[RegionEnum.NA];
-        target.onhandWeightKg += Number(row.onhandWeightKg) || 0;
-        target.onhandVolumeCbm += Number(row.onhandVolumeCbm) || 0;
-        target.onhandPackageCount += Number(row.onhandPackageCount) || 0;
-        target.onhandOrderCount += Number(row.onhandOrderCount) || 0;
-        target.draftWeightKg += Number(row.draftWeightKg) || 0;
-        target.draftVolumeCbm += Number(row.draftVolumeCbm) || 0;
-        target.draftOrderCount += Number(row.draftOrderCount) || 0;
-        for (const code of row.onhandOrderCodes || []) {
-          target.onhandOrderCodes.add(String(code));
-        }
-        for (const code of row.draftOrderCodes || []) {
-          target.draftOrderCodes.add(String(code));
-        }
-
-        target.incomingWeightKg += Number(row.incomingWeightKg) || 0;
-        target.incomingVolumeCbm += Number(row.incomingVolumeCbm) || 0;
-        target.incomingPackageCount += Number(row.incomingPackageCount) || 0;
-        target.incomingTripCount += Number(row.incomingTripCount) || 0;
-
-        target.totalWeightKg += Number(row.totalWeightKg) || 0;
-        target.totalVolumeCbm += Number(row.totalVolumeCbm) || 0;
-      }
-    }
-
-    // The live warehouse situation must use the exact same per-Hub status
-    // snapshot as the Warehouse Orders screen. Historical report mode keeps
-    // the existing daily regional report behavior below.
-    if (query?.mode === 'live') {
-      const snapshotRows = (await this.dataSource.query(
-        `
+    // Read the exact same persisted status buckets used by Warehouse Orders.
+    const snapshotRows = (await this.dataSource.query(
+      `
           SELECT "hubId", "status", "totalQuantity", "totalWeightKg",
                  "totalVolumeCbm", "orderCount"
           FROM "warehouse_hub_order_summary"
@@ -3768,46 +3686,45 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
             AND "status" IN ('ALL', 'INBOUND', 'DRAFT', 'COMPLETED_INBOUND')
             AND ($1::integer IS NULL OR "hubId" = $1)
         `,
-        [parsedHubId],
-      )) as Array<{
-        hubId: number;
-        status: 'ALL' | 'INBOUND' | 'DRAFT' | 'COMPLETED_INBOUND';
-        totalQuantity: number;
-        totalWeightKg: number;
-        totalVolumeCbm: number;
-        orderCount: number;
-      }>;
+      [parsedHubId],
+    )) as Array<{
+      hubId: number;
+      status: 'ALL' | 'INBOUND' | 'DRAFT' | 'COMPLETED_INBOUND';
+      totalQuantity: number;
+      totalWeightKg: number;
+      totalVolumeCbm: number;
+      orderCount: number;
+    }>;
 
-      for (const row of snapshotRows) {
-        const target =
-          summaryMap[hubRegions.get(Number(row.hubId)) || RegionEnum.NA];
-        const weightKg = Number(row.totalWeightKg) || 0;
-        const volumeCbm = Number(row.totalVolumeCbm) || 0;
-        const packageCount = Number(row.totalQuantity) || 0;
-        const orderCount = Number(row.orderCount) || 0;
+    for (const row of snapshotRows) {
+      const target =
+        summaryMap[hubRegions.get(Number(row.hubId)) || RegionEnum.NA];
+      const weightKg = Number(row.totalWeightKg) || 0;
+      const volumeCbm = Number(row.totalVolumeCbm) || 0;
+      const packageCount = Number(row.totalQuantity) || 0;
+      const orderCount = Number(row.orderCount) || 0;
 
-        if (row.status === 'INBOUND') {
-          target.onhandWeightKg += weightKg;
-          target.onhandVolumeCbm += volumeCbm;
-          target.onhandPackageCount += packageCount;
-          target.onhandOrderCount += orderCount;
-        } else if (row.status === 'DRAFT') {
-          target.draftWeightKg += weightKg;
-          target.draftVolumeCbm += volumeCbm;
-          target.draftOrderCount += orderCount;
-        } else if (row.status === 'COMPLETED_INBOUND') {
-          // Keep the existing response shape for compatibility; in live mode
-          // this bucket is displayed as "Đã xuất kho", not "Sắp về kho".
-          target.incomingWeightKg += weightKg;
-          target.incomingVolumeCbm += volumeCbm;
-          target.incomingPackageCount += packageCount;
-          target.incomingTripCount += orderCount;
-        } else if (row.status === 'ALL') {
-          target.totalWeightKg += weightKg;
-          target.totalVolumeCbm += volumeCbm;
-          target.totalPackageCount += packageCount;
-          target.totalOrderCount += orderCount;
-        }
+      if (row.status === 'INBOUND') {
+        target.onhandWeightKg += weightKg;
+        target.onhandVolumeCbm += volumeCbm;
+        target.onhandPackageCount += packageCount;
+        target.onhandOrderCount += orderCount;
+      } else if (row.status === 'DRAFT') {
+        target.draftWeightKg += weightKg;
+        target.draftVolumeCbm += volumeCbm;
+        target.draftOrderCount += orderCount;
+      } else if (row.status === 'COMPLETED_INBOUND') {
+        // Keep the existing response shape for compatibility; in live mode
+        // this bucket is displayed as "Đã xuất kho", not "Sắp về kho".
+        target.incomingWeightKg += weightKg;
+        target.incomingVolumeCbm += volumeCbm;
+        target.incomingPackageCount += packageCount;
+        target.incomingTripCount += orderCount;
+      } else if (row.status === 'ALL') {
+        target.totalWeightKg += weightKg;
+        target.totalVolumeCbm += volumeCbm;
+        target.totalPackageCount += packageCount;
+        target.totalOrderCount += orderCount;
       }
     }
 
@@ -3815,16 +3732,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     // was a draft earlier in the range must not remain in the current draft
     // list after it has been dispatched. Reconcile the code list against the
     // current order lifecycle before returning draft details/counters.
-    const snapshotDraftCodes =
-      query?.mode === 'live'
-        ? []
-        : [
-            ...new Set(
-              Object.values(summaryMap).flatMap((summary) => [
-                ...summary.draftOrderCodes,
-              ]),
-            ),
-          ];
+    const snapshotDraftCodes: string[] = [];
     if (snapshotDraftCodes.length > 0) {
       const currentDraftRows = (await this.dataSource.query(
         `
@@ -3854,16 +3762,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     // inventory ledger so an order exported after the snapshot (for example a
     // consignment with zero remaining quantity) is not shown as currently
     // stored in the report details.
-    const snapshotOnhandCodes =
-      query?.mode === 'live'
-        ? []
-        : [
-            ...new Set(
-              Object.values(summaryMap).flatMap((summary) => [
-                ...summary.onhandOrderCodes,
-              ]),
-            ),
-          ];
+    const snapshotOnhandCodes: string[] = [];
     if (snapshotOnhandCodes.length > 0) {
       const currentOnhandRows = (await this.dataSource.query(
         `
@@ -3932,19 +3831,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         Math.round((item.incomingWeightKg / 1000) * 100) / 100;
       item.incomingVolumeCbm = Math.round(item.incomingVolumeCbm * 10) / 10;
 
-      if (query?.mode !== 'live') {
-        item.totalWeightKg =
-          Math.round((item.onhandWeightKg + item.incomingWeightKg) * 100) / 100;
-        item.totalWeightTons =
-          Math.round((item.totalWeightKg / 1000) * 100) / 100;
-        item.totalVolumeCbm =
-          Math.round((item.onhandVolumeCbm + item.incomingVolumeCbm) * 10) / 10;
-      } else {
-        item.totalWeightKg = Math.round(item.totalWeightKg * 100) / 100;
-        item.totalWeightTons =
-          Math.round((item.totalWeightKg / 1000) * 100) / 100;
-        item.totalVolumeCbm = Math.round(item.totalVolumeCbm * 10) / 10;
-      }
+      item.totalWeightKg = Math.round(item.totalWeightKg * 100) / 100;
+      item.totalWeightTons =
+        Math.round((item.totalWeightKg / 1000) * 100) / 100;
+      item.totalVolumeCbm = Math.round(item.totalVolumeCbm * 10) / 10;
 
       item.recommendedVehicle = this.getVehicleRecommendation(
         item.totalWeightTons,
@@ -4275,7 +4165,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       })),
       incomingTripsList,
       onhandOrdersList,
-      provinceAudit,
+      provinceAudit: resolvedProvinceAudit,
     };
   }
 }
