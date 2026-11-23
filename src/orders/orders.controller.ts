@@ -202,7 +202,7 @@ export class OrdersController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Điều chỉnh hợp đồng gốc (chỉ SUPER_ADMIN, bắt buộc lý do, tự ghi phiếu điều chỉnh)',
+      'Điều chỉnh thông tin đơn hàng Lưu kho (chỉ SUPER_ADMIN, bắt buộc lý do, tự ghi phiếu điều chỉnh)',
   })
   @ApiParam({ name: 'id', type: Number, required: true })
   adminOverride(

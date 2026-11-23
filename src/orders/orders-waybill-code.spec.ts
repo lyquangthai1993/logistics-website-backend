@@ -19,12 +19,14 @@ import { TripStopEntity } from '../trips/infrastructure/persistence/relational/e
 import { OrderCodeService } from './order-code.service';
 import { OperationalLedgerService } from './operational-ledger.service';
 import { OrderActivityLogService } from './order-activity-log.service';
+import { WarehouseHubOrderSummaryEntity } from './infrastructure/persistence/relational/entities/warehouse-hub-order-summary.entity';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { DeliveryDestinationMode } from './dto/quick-create-inbound-order.dto';
 import { AppendOrderMode } from './dto/append-order-to-trip.dto';
 import { RoleEnum } from '../roles/roles.enum';
+import { ProvinceReferenceService } from '../provinces/province-reference.service';
 
 /**
  * Builds an in-memory repository mock usable both as injected repository
@@ -51,6 +53,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
   let hubRepo: ReturnType<typeof makeRepo>;
   let tripRepo: ReturnType<typeof makeRepo>;
   let txRepo: ReturnType<typeof makeRepo>;
+  let hubOrderSummaryRepo: ReturnType<typeof makeRepo>;
   let orderCodeService: { generateOrderCode: jest.Mock };
   let ledgerService: Record<string, jest.Mock>;
   let manager: { getRepository: jest.Mock; query: jest.Mock };
@@ -96,6 +99,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
     hubRepo = makeRepo({ findOne: jest.fn().mockResolvedValue(hub) });
     tripRepo = makeRepo();
     txRepo = makeRepo();
+    hubOrderSummaryRepo = makeRepo();
 
     orderCodeService = {
       generateOrderCode: jest.fn().mockResolvedValue('HAN-OP-2609-099'),
@@ -139,6 +143,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       [TripEntity, tripRepo],
       [TripStopEntity, tripStopRepo],
       [OrderInventoryTransactionEntity, txRepo],
+      [WarehouseHubOrderSummaryEntity, hubOrderSummaryRepo],
     ]);
     manager = {
       getRepository: jest.fn((entity: any) => repoByEntity.get(entity)),
@@ -162,6 +167,10 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
           provide: getRepositoryToken(OrderInventoryTransactionEntity),
           useValue: txRepo,
         },
+        {
+          provide: getRepositoryToken(WarehouseHubOrderSummaryEntity),
+          useValue: hubOrderSummaryRepo,
+        },
         { provide: OrderCodeService, useValue: orderCodeService },
         { provide: OperationalLedgerService, useValue: ledgerService },
         {
@@ -184,6 +193,13 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
           },
         },
         { provide: DataSource, useValue: dataSource },
+        {
+          provide: ProvinceReferenceService,
+          useValue: {
+            normalizeProvince: jest.fn((value: string) => value),
+            findByNameOrAlias: jest.fn().mockResolvedValue(null),
+          },
+        },
       ],
     }).compile();
 
@@ -325,6 +341,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       destinationHubId: 2,
       originHub: 'Hà Nội',
       destinationHub: 'Hồ Chí Minh',
+      route: 'Kho cũ → Nơi cũ',
       currentHubId: 1,
       remainingQuantity: 20,
       isExternalVehicleNeeded: false,
@@ -392,6 +409,90 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
           discrepancyReason: 'Khách báo sai số kiện',
         }),
       );
+    });
+
+    it('should reject admin override for every status other than stored', async () => {
+      for (const status of [
+        'DRAFT',
+        'PENDING_FLEET',
+        'IN_TRANSIT',
+        'COMPLETED_INBOUND',
+      ]) {
+        orderRepo.findOne.mockResolvedValue({ ...lockedOrder, status });
+
+        await expect(
+          ordersService.adminOverride(
+            5,
+            {
+              auditReason: 'Cập nhật thông tin nghiệp vụ',
+              warehouseHubId: 1,
+              totalWeight: 451,
+            } as any,
+            adminUser,
+          ),
+        ).rejects.toThrow(ForbiddenException);
+      }
+    });
+
+    it('should never change the order code through admin override', async () => {
+      orderRepo.findOne.mockResolvedValue({ ...lockedOrder });
+
+      const saved = await ordersService.adminOverride(
+        5,
+        {
+          auditReason: 'Cập nhật thông tin nghiệp vụ',
+          warehouseHubId: 1,
+          orderCode: 'MÃ-MỚI-KHÔNG-HỢP-LỆ',
+          totalWeight: 451,
+        } as any,
+        adminUser,
+      );
+
+      expect(saved.orderCode).toBe(lockedOrder.orderCode);
+      expect(orderRepo.save).toHaveBeenCalledWith(
+        expect.not.objectContaining({ orderCode: 'MÃ-MỚI-KHÔNG-HỢP-LỆ' }),
+      );
+    });
+
+    it('should update pickup and delivery addresses independently without changing the order code', async () => {
+      orderRepo.findOne.mockResolvedValue({ ...lockedOrder });
+
+      const saved = await ordersService.adminOverride(
+        5,
+        {
+          auditReason: 'Cập nhật lại địa chỉ giao nhận',
+          warehouseHubId: 1,
+          pickupAddress: 'Kho Bình Tân, TP.HCM',
+          deliveryAddress: 'KCN Biên Hòa 2, Đồng Nai',
+        } as any,
+        adminUser,
+      );
+
+      expect(saved.orderCode).toBe(lockedOrder.orderCode);
+      expect(saved.route).toBe(
+        'Kho Bình Tân, TP.HCM → KCN Biên Hòa 2, Đồng Nai',
+      );
+      expect(orderRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          route: 'Kho Bình Tân, TP.HCM → KCN Biên Hòa 2, Đồng Nai',
+        }),
+      );
+    });
+
+    it('should reject admin override when the selected warehouse is not holding the order', async () => {
+      orderRepo.findOne.mockResolvedValue({ ...lockedOrder });
+
+      await expect(
+        ordersService.adminOverride(
+          5,
+          {
+            auditReason: 'Cập nhật thông tin nghiệp vụ',
+            warehouseHubId: 2,
+            totalWeight: 451,
+          } as any,
+          adminUser,
+        ),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('should reject a no-op change on admin override', async () => {

@@ -62,6 +62,16 @@ export class AdminOverrideOrderDto {
   @IsString()
   route?: string;
 
+  @ApiPropertyOptional({ example: 'Kho Bình Tân, TP.HCM' })
+  @IsOptional()
+  @IsString()
+  pickupAddress?: string;
+
+  @ApiPropertyOptional({ example: 'KCN Biên Hòa 2, Đồng Nai' })
+  @IsOptional()
+  @IsString()
+  deliveryAddress?: string;
+
   @ApiPropertyOptional({ example: 'Gửi kho' })
   @IsOptional()
   @IsString()
