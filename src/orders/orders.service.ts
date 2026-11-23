@@ -519,7 +519,7 @@ export class OrdersService {
       );
       if (changed.length > 0) {
         throw new ForbiddenException(
-          'Hợp đồng gốc của đơn hàng đã được khóa sau khi gửi đi (số kiện, khối lượng, thể tích, mô tả hàng, nơi gửi, nơi nhận). Chỉ Quản trị viên được điều chỉnh qua chức năng "Điều chỉnh hợp đồng gốc" kèm lý do.',
+          'Thông tin đơn hàng đã được khóa sau khi gửi đi (số kiện, khối lượng, thể tích, mô tả hàng, nơi gửi, nơi nhận). Chỉ Quản trị viên được điều chỉnh thông tin Lưu kho kèm lý do.',
         );
       }
     }
@@ -643,6 +643,12 @@ export class OrdersService {
         originHubId: order.originHubId,
         destinationHubId: order.destinationHubId,
         route: order.route,
+        pickupAddress: order.route?.includes('→')
+          ? order.route.split('→')[0]?.trim()
+          : order.originHub,
+        deliveryAddress: order.route?.includes('→')
+          ? order.route.split('→')[1]?.trim()
+          : order.destinationHub,
         province: order.province,
         notes: order.notes,
         accompanyingDocs: order.accompanyingDocs,
@@ -707,6 +713,33 @@ export class OrdersService {
       applyScalar('externalNote');
       applyScalar('isExternalVehicleNeeded');
 
+      const currentPickupAddress = order.route?.includes('→')
+        ? order.route.split('→')[0]?.trim() || ''
+        : order.originHub || '';
+      const currentDeliveryAddress = order.route?.includes('→')
+        ? order.route.split('→')[1]?.trim() || ''
+        : order.destinationHub || '';
+      const nextPickupAddress =
+        dto.pickupAddress?.trim() ?? currentPickupAddress;
+      const nextDeliveryAddress =
+        dto.deliveryAddress?.trim() ?? currentDeliveryAddress;
+      const addressChanged =
+        dto.pickupAddress !== undefined || dto.deliveryAddress !== undefined;
+
+      if (
+        addressChanged &&
+        (nextPickupAddress !== currentPickupAddress ||
+          nextDeliveryAddress !== currentDeliveryAddress)
+      ) {
+        changes.push(
+          `Địa chỉ nhận hàng: ${currentPickupAddress || '—'} → ${nextPickupAddress || '—'}`,
+        );
+        changes.push(
+          `Địa chỉ giao hàng: ${currentDeliveryAddress || '—'} → ${nextDeliveryAddress || '—'}`,
+        );
+        order.route = `${nextPickupAddress || 'Kho gửi'} → ${nextDeliveryAddress || 'Điểm giao'}`;
+      }
+
       const applyHub = async (
         idField: 'originHubId' | 'destinationHubId',
         nameField: 'originHub' | 'destinationHub',
@@ -757,7 +790,7 @@ export class OrdersService {
           volume: 0,
           performedByUserId: admin.id,
           discrepancyReason: auditReason,
-          notes: `Điều chỉnh hợp đồng gốc: ${changes.join('; ')}`,
+          notes: `Điều chỉnh thông tin đơn hàng: ${changes.join('; ')}`,
         }),
       );
 
