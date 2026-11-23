@@ -3584,16 +3584,25 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     if (fromDate > toDate) [fromDate, toDate] = [toDate, fromDate];
     const maxToDate = this.addDays(fromDate, 365);
     if (toDate > maxToDate) toDate = maxToDate;
-    // Live "Tình hình hàng hóa" is a current ledger scan, never a sum of the
-    // report date range selected by the operational report screen.
+    const parsedHubId =
+      query?.hubId && query.hubId !== 'ALL' ? Number(query.hubId) : null;
+    // Live "Tình hình hàng hóa" is sourced from the same per-Hub snapshot as
+    // Warehouse Orders. Refresh the selected Hub(s) first, then read only the
+    // persisted snapshot rows below; this keeps both screens on one status
+    // classification and avoids a second, divergent aggregation formula.
     if (query?.mode === 'live') {
       fromDate = todayStr;
       toDate = todayStr;
+      if (parsedHubId) {
+        await this.warehouseService.refreshHubOrderSummary(
+          parsedHubId,
+          'MANUAL',
+        );
+      } else {
+        await this.warehouseService.refreshAllHubOrderSummaries('MANUAL');
+      }
     }
     let reportDate = toDate;
-
-    const parsedHubId =
-      query?.hubId && query.hubId !== 'ALL' ? Number(query.hubId) : null;
 
     // Lấy thông tin Hub được chọn
     let selectedHub: HubEntity | null = null;
