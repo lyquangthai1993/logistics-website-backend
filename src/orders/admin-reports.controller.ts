@@ -226,7 +226,7 @@ export class AdminReportsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Báo cáo Cân Đối Tải Trọng Đội Xe Theo Miền (Super Admin) — Phân tích Tồn kho & Sắp về theo 3 Miền (Bắc, Trung, Nam)',
+      'Tình hình hàng hóa theo miền giao của từng Hub cấp 1 — đọc snapshot đã chốt',
   })
   @ApiQuery({ name: 'hubId', required: false, type: String })
   @ApiQuery({ name: 'date', required: false, type: String })

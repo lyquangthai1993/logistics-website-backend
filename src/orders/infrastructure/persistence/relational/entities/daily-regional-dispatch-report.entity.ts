@@ -12,7 +12,8 @@ import { AbstractBaseEntity } from '../../../../../utils/abstract-base.entity';
 import { HubEntity } from '../../../../../hubs/infrastructure/persistence/relational/entities/hub.entity';
 
 /**
- * Pre-aggregated regional dispatch snapshot report per Hub and Region (Bắc, Trung, Nam, N/A).
+ * Pre-aggregated regional dispatch snapshot per level 1 Hub and delivery group
+ * (Bắc, Trung, Nam, Lưu kho, N/A).
  * Populated automatically by Cronjob `REGIONAL_DISPATCH_CAPACITY_SNAPSHOT` or manual sync by Super Admin.
  */
 @Entity({
@@ -43,7 +44,7 @@ export class DailyRegionalDispatchReportEntity extends AbstractBaseEntity {
   })
   hub: Relation<HubEntity>;
 
-  /** Region: 'MIỀN BẮC' | 'MIỀN TRUNG' | 'MIỀN NAM' | 'N/A' */
+  /** Delivery group: 'MIỀN BẮC' | 'MIỀN TRUNG' | 'MIỀN NAM' | 'LƯU KHO' | 'N/A' */
   @Index('IDX_daily_regional_report_region')
   @Column({ type: String, length: 50, nullable: false })
   region: string;
