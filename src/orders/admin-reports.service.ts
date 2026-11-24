@@ -51,40 +51,8 @@ export interface DirectionMetrics {
   packageCount: number;
 }
 
-const REPORT_REGIONS = [
-  RegionEnum.NORTH,
-  RegionEnum.CENTRAL,
-  RegionEnum.SOUTH,
-  RegionEnum.NA,
-] as const;
-
-function resolveHubReportRegion(
-  hub?: Pick<HubEntity, 'region' | 'city'> | null,
-): RegionEnum {
-  const configured = hub?.region as RegionEnum | null | undefined;
-  if (
-    configured &&
-    REPORT_REGIONS.includes(configured as (typeof REPORT_REGIONS)[number])
-  ) {
-    return configured;
-  }
-
-  const derived = normalizeRegion(hub?.city).region;
-  return REPORT_REGIONS.includes(derived as (typeof REPORT_REGIONS)[number])
-    ? derived
-    : RegionEnum.NA;
-}
-
-function resolveReportRegion(
-  province: string | null | undefined,
-  hubId: number | null | undefined,
-  hubRegions: Map<number, RegionEnum>,
-): RegionEnum {
-  const resolved = normalizeRegion(province).region;
-  if (resolved === RegionEnum.STORAGE) {
-    return hubRegions.get(Number(hubId)) ?? RegionEnum.NA;
-  }
-  return resolved;
+function resolveReportRegion(province: string | null | undefined): RegionEnum {
+  return normalizeRegion(province).region;
 }
 
 export interface DailyReportPoint extends DirectionMetrics {
@@ -162,6 +130,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
   private lastCronProcessedDate: string | null = null;
   private lastCronRunAt: Date | null = null;
   private isRunningCron = false;
+  private isRunningRegionalCron = false;
   private isRunningHubSummaryCron = false;
   private tableEnsured = false;
   private defaultConfigsSeeded = false;
@@ -557,7 +526,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         description:
           'Định kỳ quét tồn kho khả dụng và các chuyến xe trung chuyển đang trên đường để tổng hợp sản lượng tải trọng theo 3 miền (Bắc, Trung, Nam) phục vụ điều phối đội xe',
         isEnabled: true,
-        cronTime: '17:00',
+        cronTime: '06:00',
         cutoffHour: 18,
         notifySuperAdmins: true,
       },
@@ -582,6 +551,13 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           await this.cronConfigRepository.save(
             this.cronConfigRepository.create(seed),
           );
+        } else if (
+          seed.jobKey === 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT' &&
+          existing.cronTime === '17:00'
+        ) {
+          // One-time upgrade of the former default. Other custom schedules stay intact.
+          existing.cronTime = '06:00';
+          await this.cronConfigRepository.save(existing);
         }
       }
       this.defaultConfigsSeeded = true;
@@ -619,8 +595,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     if (this.isRunningCron) return;
     try {
       const config = await this.getOrCreateDefaultCronConfig();
-      if (!config.isEnabled) return;
-
       const [cfgHourStr, cfgMinStr] = (config.cronTime || '18:05').split(':');
       const cfgHour = Number(cfgHourStr) || 18;
       const cfgMin = Number(cfgMinStr) || 5;
@@ -628,7 +602,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       const now = new Date();
       const vn = this.getVietnamDateParts(now);
 
-      if (vn.hour === cfgHour && vn.minute >= cfgMin) {
+      if (config.isEnabled && vn.hour === cfgHour && vn.minute >= cfgMin) {
         const targetReportDate = this.getLatestClosedReportDate(now);
         if (this.lastCronProcessedDate === targetReportDate) {
           return;
@@ -675,40 +649,81 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       const regionalConfig = await this.cronConfigRepository.findOne({
         where: { jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT' },
       });
-      if (regionalConfig && regionalConfig.isEnabled) {
-        const [regH, regM] = (regionalConfig.cronTime || '17:00')
+      if (regionalConfig?.isEnabled && !this.isRunningRegionalCron) {
+        const [regH, regM] = (regionalConfig.cronTime || '06:00')
           .split(':')
           .map(Number);
-        if (vn.hour === regH && vn.minute >= regM) {
+        if (vn.hour * 60 + vn.minute >= regH * 60 + regM) {
           const todayDate = `${vn.year}-${String(vn.month).padStart(2, '0')}-${String(vn.day).padStart(2, '0')}`;
           if (regionalConfig.lastReportDate !== todayDate) {
-            this.logger.log(
-              `[REGIONAL CRON ${regionalConfig.cronTime}] Đang chạy tổng hợp snapshot tải trọng đội xe ngày ${todayDate}...`,
-            );
-            const startTime = Date.now();
-            await this.calculateRegionalDispatchSnapshot({
-              date: todayDate,
-              triggeredBy: 'CRON',
-            });
-            const durationMs = Date.now() - startTime;
-            regionalConfig.lastReportDate = todayDate;
-            regionalConfig.lastRunAt = new Date();
-            regionalConfig.lastRunStatus = 'SUCCESS';
-            await this.cronConfigRepository.save(regionalConfig);
-
-            await this.cronLogRepository.save(
-              this.cronLogRepository.create({
-                jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT',
-                targetDate: todayDate,
-                targetEndDate: todayDate,
-                windowLabel: `Snapshot tải trọng đội xe ngày ${todayDate}`,
-                triggeredBy: 'CRON_SCHEDULED',
-                startedAt: new Date(startTime),
-                finishedAt: new Date(),
-                durationMs,
-                status: 'SUCCESS',
-              }),
-            );
+            this.isRunningRegionalCron = true;
+            const lockRunner = this.dataSource.createQueryRunner();
+            let acquired = false;
+            try {
+              await lockRunner.connect();
+              const [lock] = await lockRunner.query(
+                "SELECT pg_try_advisory_lock(hashtext('REGIONAL_DISPATCH_CAPACITY_SNAPSHOT')) AS acquired",
+              );
+              acquired = Boolean(lock?.acquired);
+              if (acquired) {
+                const latestConfig = await this.cronConfigRepository.findOne({
+                  where: { jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT' },
+                });
+                if (
+                  latestConfig?.isEnabled &&
+                  latestConfig.lastReportDate !== todayDate
+                ) {
+                  this.logger.log(
+                    `[REGIONAL CRON ${latestConfig.cronTime}] Đang chạy snapshot ngày ${todayDate}...`,
+                  );
+                  const startedAt = new Date();
+                  try {
+                    await this.calculateRegionalDispatchSnapshot({
+                      date: todayDate,
+                      triggeredBy: 'CRON',
+                    });
+                    const finishedAt = new Date();
+                    latestConfig.lastReportDate = todayDate;
+                    latestConfig.lastRunAt = finishedAt;
+                    latestConfig.lastRunStatus = 'SUCCESS';
+                    await this.cronConfigRepository.save(latestConfig);
+                    await this.cronLogRepository.save(
+                      this.cronLogRepository.create({
+                        jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT',
+                        targetDate: todayDate,
+                        targetEndDate: todayDate,
+                        windowLabel: `Snapshot tải trọng đội xe ngày ${todayDate}`,
+                        triggeredBy: 'CRON_SCHEDULED',
+                        startedAt,
+                        finishedAt,
+                        durationMs: finishedAt.getTime() - startedAt.getTime(),
+                        status: 'SUCCESS',
+                      }),
+                    );
+                  } catch (error) {
+                    latestConfig.lastRunStatus = 'FAILED';
+                    await this.cronConfigRepository.save(latestConfig);
+                    throw error;
+                  }
+                }
+              }
+            } finally {
+              try {
+                if (acquired) {
+                  await lockRunner.query(
+                    "SELECT pg_advisory_unlock(hashtext('REGIONAL_DISPATCH_CAPACITY_SNAPSHOT'))",
+                  );
+                }
+              } finally {
+                try {
+                  if (!lockRunner.isReleased) {
+                    await lockRunner.release();
+                  }
+                } finally {
+                  this.isRunningRegionalCron = false;
+                }
+              }
+            }
           }
         }
       }
@@ -1218,12 +1233,15 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     // Read strictly from daily_hub_operational_report (populated by Cronjob runs)
 
     const allHubs = await this.hubRepository.find({
-      where: { isActive: true },
+      where: { level: 1 },
       order: { level: 'ASC', id: 'ASC' },
     });
     const selectedHub = hubId
       ? allHubs.find((h) => h.id === hubId) || null
       : null;
+    if (hubId && !selectedHub) {
+      throw new BadRequestException('Báo cáo chỉ hỗ trợ Hub cấp 1.');
+    }
 
     // 1. Query daily rows from snapshot table for [overallQueryStart, toDate]
     const snapshotParams: any[] = [overallQueryStart, toDate];
@@ -1262,7 +1280,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         COALESCE(SUM(r."outboundOrderCount"), 0)::int AS "outboundOrderCount",
         MAX(r."triggeredBy") AS "triggeredBy"
       FROM "daily_hub_operational_report" r
+      JOIN "hub" report_hub ON report_hub.id = r."hubId"
       WHERE r."deletedAt" IS NULL
+        AND report_hub.level = 1
+        AND report_hub."deletedAt" IS NULL
         AND r."reportDate" >= $1
         AND r."reportDate" <= $2
         ${hubFilterSql}
@@ -1317,7 +1338,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         COUNT(DISTINCT tx."orderId")::int AS "orderCount"
       FROM "order_inventory_transaction" tx
       INNER JOIN "order" o ON o.id = tx."orderId" AND o."deletedAt" IS NULL
+      JOIN "hub" report_hub ON report_hub.id = COALESCE(tx."hubId", o."originHubId", o."currentHubId")
       WHERE tx."deletedAt" IS NULL
+        AND report_hub.level = 1
+        AND report_hub."deletedAt" IS NULL
         AND tx."type" = 'INBOUND'
         AND UPPER(TRIM(COALESCE(o."province", ''))) IN ('GỬI KHO', 'GUI KHO', 'LƯU KHO', 'LUU KHO')
         AND tx."createdAt" >= $1
@@ -1567,7 +1591,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         COALESCE(SUM(r."outboundTripCount"), 0)::int AS "outboundTripCount",
         COALESCE(SUM(r."outboundOrderCount"), 0)::int AS "outboundOrderCount"
       FROM "daily_hub_operational_report" r
+      JOIN "hub" report_hub ON report_hub.id = r."hubId"
       WHERE r."deletedAt" IS NULL
+        AND report_hub.level = 1
+        AND report_hub."deletedAt" IS NULL
         AND r."reportDate" >= $1
         AND r."reportDate" <= $2
         ${monthlyHubFilterSql}
@@ -1662,7 +1689,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         COALESCE(SUM(r."outboundTripCount"), 0)::int AS "outboundTripCount",
         COALESCE(SUM(r."outboundOrderCount"), 0)::int AS "outboundOrderCount"
       FROM "daily_hub_operational_report" r
+      JOIN "hub" report_hub ON report_hub.id = r."hubId"
       WHERE r."deletedAt" IS NULL
+        AND report_hub.level = 1
+        AND report_hub."deletedAt" IS NULL
         AND r."reportDate" >= $1
         AND r."reportDate" <= $2
       GROUP BY r."hubId"
@@ -1797,8 +1827,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         ), 0)::float AS "volumeCbm"
       FROM "order_inventory_transaction" tx
       INNER JOIN "order" o ON o.id = tx."orderId" AND o."deletedAt" IS NULL
-      LEFT JOIN "hub" h ON h.id = COALESCE(tx."hubId", o."originHubId", o."currentHubId")
+      JOIN "hub" h ON h.id = COALESCE(tx."hubId", o."originHubId", o."currentHubId")
       WHERE tx."deletedAt" IS NULL
+        AND h.level = 1
+        AND h."deletedAt" IS NULL
         AND tx."createdAt" >= $1
         AND tx."createdAt" < $2
         AND EXISTS (
@@ -1806,6 +1838,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           FROM "daily_hub_operational_report" r_snap
           WHERE r_snap."deletedAt" IS NULL
             AND r_snap."reportDate" = TO_CHAR(tx."createdAt" + INTERVAL '1 hour', 'YYYY-MM-DD')
+            AND r_snap."hubId" = h.id
         )
         ${tripTypeSql}
         ${tripHubSql}
@@ -3125,79 +3158,19 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
    * Tính toán và lưu snapshot dữ liệu cân đối tải trọng đội xe theo miền vào database.
    * Kích hoạt tự động bởi Cronjob hoặc Super Admin bấm đồng bộ thủ công.
    */
-  private async buildProvinceAudit(hubId?: number, reportDate?: string) {
-    const maxAuditOrders = 500;
-    const provinceAuditCandidates = await this.dataSource.query<
-      {
-        id: number;
-        orderCode: string;
-        province: string | null;
-      }[]
-    >(
-      `
-      SELECT o.id, o."orderCode", o."province"
-      FROM "order" o
-      WHERE o."deletedAt" IS NULL
-        AND ($2::date IS NULL OR o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh'))
-        AND (
-          $1::integer IS NULL
-          OR o."originHubId" = $1
-          OR o."currentHubId" = $1
-          OR o."destinationHubId" = $1
-          OR EXISTS (
-            SELECT 1
-            FROM "order_inventory_transaction" tx
-            WHERE tx."orderId" = o.id
-              AND tx."hubId" = $1
-              AND tx."deletedAt" IS NULL
-          )
-        )
-      ORDER BY o.id DESC
-      LIMIT ${maxAuditOrders}
-      `,
-      [hubId ?? null, reportDate ?? null],
-    );
-
-    const invalidProvinceOrders = provinceAuditCandidates
-      .map((order) => {
-        const normalized = normalizeRegion(order.province);
-        return {
-          id: order.id,
-          orderCode: order.orderCode,
-          province: order.province,
-          reason: order.province?.trim()
-            ? ('UNRECOGNIZED_PROVINCE' as const)
-            : ('MISSING_PROVINCE' as const),
-          normalizedRegion: normalized.region,
-        };
-      })
-      .filter((order) => order.normalizedRegion === RegionEnum.NA);
-
-    return {
-      scannedOrderCount: provinceAuditCandidates.length,
-      invalidOrderCount: invalidProvinceOrders.length,
-      missingProvinceCount: invalidProvinceOrders.filter(
-        (order) => order.reason === 'MISSING_PROVINCE',
-      ).length,
-      unrecognizedProvinceCount: invalidProvinceOrders.filter(
-        (order) => order.reason === 'UNRECOGNIZED_PROVINCE',
-      ).length,
-      orders: invalidProvinceOrders.map((order) => ({
-        id: order.id,
-        orderCode: order.orderCode,
-        province: order.province,
-        reason: order.reason,
-      })),
-      isTruncated: provinceAuditCandidates.length === maxAuditOrders,
-    };
-  }
-
   public async calculateRegionalDispatchSnapshot(options?: {
     hubId?: number;
     date?: string;
     triggeredBy?: 'CRON' | 'MANUAL';
   }) {
     await this.ensureTableExists();
+
+    if (
+      options?.hubId !== undefined &&
+      (!Number.isInteger(options.hubId) || options.hubId <= 0)
+    ) {
+      throw new BadRequestException('Hub được chọn không hợp lệ.');
+    }
 
     const now = new Date();
     const vnParts = this.getVietnamDateParts(now);
@@ -3209,10 +3182,13 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     const triggeredBy = options?.triggeredBy || 'CRON';
 
-    const provinceAudit = await this.buildProvinceAudit(
-      options?.hubId,
-      reportDate,
-    );
+    const hubs = await this.hubRepository.find({
+      where: options?.hubId ? { id: options.hubId, level: 1 } : { level: 1 },
+      select: ['id'],
+    });
+    if (options?.hubId && hubs.length === 0) {
+      throw new BadRequestException('Hub được chọn không phải Hub cấp 1.');
+    }
     // ────────────────────────────────────────────────────────────────────────────
 
     const rawStoredOrders = await this.dataSource.query(
@@ -3243,7 +3219,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
                         WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
                         ELSE 0 END) > 0
       ) stock ON TRUE
+      JOIN "hub" report_hub ON report_hub.id = stock."hubId"
       WHERE o."deletedAt" IS NULL
+        AND report_hub.level = 1
+        AND report_hub."deletedAt" IS NULL
         AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
         AND NOT (
           o.status IN ('DRAFT', 'PENDING', 'WAITING')
@@ -3294,7 +3273,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
              o."totalVolume", contexts."hubId"
       FROM warehouse_contexts contexts
       JOIN "order" o ON o.id = contexts."orderId"
+      JOIN "hub" report_hub ON report_hub.id = contexts."hubId"
       WHERE ($1::integer IS NULL OR contexts."hubId" = $1)
+        AND report_hub.level = 1
+        AND report_hub."deletedAt" IS NULL
         AND o."createdAt" < (($2::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
         AND (
           (o.status IN ('DRAFT', 'PENDING', 'WAITING')
@@ -3332,12 +3314,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       [options?.hubId ?? null, reportDate],
     );
 
-    const hubFilterTrips = options?.hubId
-      ? `AND (
-          (t.type = 'TRANSFER' AND t."destinationHubId" = ${options.hubId})
-          OR (t.type = 'INBOUND' AND t."originHubId" = ${options.hubId})
-        )`
-      : '';
     const rawIncomingTrips = await this.dataSource.query(
       `
       SELECT 
@@ -3360,31 +3336,27 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       FROM "trip" t
       LEFT JOIN "order" o ON o.id = t."orderId"
       LEFT JOIN "hub" dest ON dest.id = CASE WHEN t.type = 'TRANSFER' THEN t."destinationHubId" ELSE t."originHubId" END
+      JOIN "hub" report_hub ON report_hub.id = CASE WHEN t.type = 'TRANSFER' THEN t."destinationHubId" ELSE t."originHubId" END
       WHERE t."deletedAt" IS NULL
+        AND report_hub.level = 1
+        AND report_hub."deletedAt" IS NULL
         AND t."createdAt" < (($1::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
         AND (o."createdAt" IS NULL OR o."createdAt" < (($1::date + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh'))
         AND (
           (t.type = 'TRANSFER' AND t.status IN ('IN_TRANSIT', 'DISPATCHED') AND t."destinationHubId" IS NOT NULL)
           OR (t.type = 'INBOUND' AND t.status = 'PENDING')
         )
-        ${hubFilterTrips}
+        AND ($2::integer IS NULL OR
+          CASE WHEN t.type = 'TRANSFER' THEN t."destinationHubId" ELSE t."originHubId" END = $2)
     `,
-      [reportDate],
-    );
-
-    const hubs = await this.hubRepository.find({
-      where: options?.hubId ? { id: options.hubId } : {},
-      select: ['id', 'city', 'region'],
-    });
-
-    const hubRegions = new Map(
-      hubs.map((hub) => [hub.id, resolveHubReportRegion(hub)]),
+      [reportDate, options?.hubId ?? null],
     );
 
     const targetRegions = [
       RegionEnum.NORTH,
       RegionEnum.CENTRAL,
       RegionEnum.SOUTH,
+      RegionEnum.STORAGE,
       RegionEnum.NA,
     ];
     const hubRegionMap = new Map<
@@ -3432,7 +3404,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const ord of rawStoredOrders) {
       const hId = Number(ord.currentHubId);
-      const resolvedReg = resolveReportRegion(ord.province, hId, hubRegions);
+      const resolvedReg = resolveReportRegion(ord.province);
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -3451,11 +3423,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const ord of rawDraftOrders) {
       const hId = Number(ord.hubId);
-      const resolvedReg = resolveReportRegion(
-        ord.province || '',
-        hId,
-        hubRegions,
-      );
+      const resolvedReg = resolveReportRegion(ord.province);
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -3469,7 +3437,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     for (const trip of rawIncomingTrips) {
       const hId = Number(trip.effectiveHubId);
-      const resolvedReg = resolveReportRegion(trip.province, hId, hubRegions);
+      const resolvedReg = resolveReportRegion(trip.province);
 
       const target =
         hubRegionMap.get(`${hId}:::${resolvedReg}`) ||
@@ -3550,7 +3518,6 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       success: true,
       rowsProcessed: valueRows.length,
       reportDate,
-      provinceAudit,
     };
   }
 
@@ -3564,608 +3531,284 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
     fromDate?: string;
     toDate?: string;
   }) {
-    await this.ensureTableExists();
-
     const now = new Date();
-    const vnParts = this.getVietnamDateParts(now);
-    const todayStr = `${vnParts.year}-${String(vnParts.month).padStart(2, '0')}-${String(vnParts.day).padStart(2, '0')}`;
-    const legacyDate = this.sanitizeDateParam(query?.date, todayStr);
-    let fromDate = this.sanitizeDateParam(
-      query?.fromDate,
-      query?.toDate
-        ? this.sanitizeDateParam(query.toDate, legacyDate)
-        : legacyDate,
+    const vn = this.getVietnamDateParts(now);
+    const today = `${vn.year}-${String(vn.month).padStart(2, '0')}-${String(vn.day).padStart(2, '0')}`;
+    const throughDate = this.sanitizeDateParam(
+      query.date || query.toDate,
+      today,
     );
-    let toDate = this.sanitizeDateParam(
-      query?.toDate,
-      query?.fromDate ? fromDate : legacyDate,
-    );
-    if (fromDate > toDate) [fromDate, toDate] = [toDate, fromDate];
-    const maxToDate = this.addDays(fromDate, 365);
-    if (toDate > maxToDate) toDate = maxToDate;
-    const parsedHubId =
-      query?.hubId && query.hubId !== 'ALL' ? Number(query.hubId) : null;
-    // This endpoint is a read-only snapshot view. Snapshot refresh is owned by
-    // the scheduled job and the explicit sync endpoint; never rebuild it in a
-    // GET request.
-    fromDate = todayStr;
-    toDate = todayStr;
-    let reportDate = toDate;
-
-    // Lấy thông tin Hub được chọn
-    let selectedHub: HubEntity | null = null;
-    if (parsedHubId) {
-      selectedHub = await this.hubRepository.findOne({
-        where: { id: parsedHubId },
-      });
-    }
-
+    const fromDate = query.fromDate
+      ? this.sanitizeDateParam(query.fromDate, throughDate)
+      : null;
     const allHubs = await this.hubRepository.find({
-      order: { level: 'ASC', name: 'ASC' },
+      where: { level: 1 },
+      order: { name: 'ASC' },
     });
-    const hubRegions = new Map(
-      allHubs.map((hub) => [hub.id, resolveHubReportRegion(hub)]),
-    );
-
-    // Lấy cấu hình và thời điểm chạy gần nhất của Cronjob
-    const cronConfig = await this.cronConfigRepository.findOne({
-      where: { jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT' },
-    });
-    // Truy vấn dữ liệu snapshot tổng hợp từ daily_regional_dispatch_report
-    const queryBuilder = this.regionalReportRepository
-      .createQueryBuilder('r')
-      .leftJoinAndSelect('r.hub', 'hub')
-      .where('r.reportDate >= :fromDate AND r.reportDate <= :toDate', {
-        fromDate,
-        toDate,
-      });
-
-    if (parsedHubId) {
-      queryBuilder.andWhere('r.hubId = :hubId', { hubId: parsedHubId });
+    const requestedId =
+      query.hubId && query.hubId !== 'ALL' ? Number(query.hubId) : null;
+    if (
+      requestedId !== null &&
+      (!Number.isInteger(requestedId) || requestedId <= 0)
+    ) {
+      throw new BadRequestException('Hub được chọn không hợp lệ.');
     }
-
-    const rangeRows = await queryBuilder
-      .orderBy('r.reportDate', 'ASC')
-      .addOrderBy('r.hubId', 'ASC')
-      .getMany();
-    const visibleRangeRows = rangeRows.filter(
-      (row) => row.reportDate <= todayStr,
-    );
-    const isFutureOnlyRange = fromDate > todayStr;
-    if (visibleRangeRows.length > 0) {
-      reportDate = visibleRangeRows[visibleRangeRows.length - 1].reportDate;
+    const selectedHub =
+      requestedId === null
+        ? null
+        : allHubs.find((hub) => hub.id === requestedId);
+    if (requestedId !== null && !selectedHub) {
+      throw new BadRequestException('Báo cáo chỉ hỗ trợ Hub cấp 1.');
     }
-    // A range query is a sum of every snapshot day in the range. `reportDate`
-    // remains the last available day only as the display/latest-close marker.
-    const resolvedProvinceAudit = await this.buildProvinceAudit(
-      parsedHubId || undefined,
-      reportDate,
-    );
-
-    // Khởi tạo cấu trúc tổng hợp cho 3 miền chính + N/A
-    const initRegionSummary = (regionName: string) => ({
-      region: regionName,
-      onhandWeightKg: 0,
-      onhandWeightTons: 0,
-      onhandVolumeCbm: 0,
-      onhandPackageCount: 0,
-      onhandOrderCount: 0,
-      draftWeightKg: 0,
-      draftVolumeCbm: 0,
-      draftOrderCount: 0,
-      onhandOrderCodes: new Set<string>(),
-      draftOrderCodes: new Set<string>(),
-      incomingWeightKg: 0,
-      incomingWeightTons: 0,
-      incomingVolumeCbm: 0,
-      incomingPackageCount: 0,
-      incomingTripCount: 0,
-      totalWeightKg: 0,
-      totalWeightTons: 0,
-      totalVolumeCbm: 0,
-      totalPackageCount: 0,
-      totalOrderCount: 0,
-      recommendedVehicle: 'Chưa có hàng',
-      quickSnippet: '',
-    });
-
-    const summaryMap: Record<string, ReturnType<typeof initRegionSummary>> = {
-      [RegionEnum.NORTH]: initRegionSummary(RegionEnum.NORTH),
-      [RegionEnum.CENTRAL]: initRegionSummary(RegionEnum.CENTRAL),
-      [RegionEnum.SOUTH]: initRegionSummary(RegionEnum.SOUTH),
-      [RegionEnum.NA]: initRegionSummary(RegionEnum.NA),
-    };
-
-    // Read the exact same persisted status buckets used by Warehouse Orders.
-    const snapshotRows = (await this.dataSource.query(
-      `
-          SELECT "hubId", "status", "totalQuantity", "totalWeightKg",
-                 "totalVolumeCbm", "orderCount"
-          FROM "warehouse_hub_order_summary"
-          WHERE "deletedAt" IS NULL
-            AND "status" IN ('ALL', 'INBOUND', 'DRAFT', 'COMPLETED_INBOUND')
-            AND ($1::integer IS NULL OR "hubId" = $1)
-        `,
-      [parsedHubId],
-    )) as Array<{
-      hubId: number;
-      status: 'ALL' | 'INBOUND' | 'DRAFT' | 'COMPLETED_INBOUND';
-      totalQuantity: number;
-      totalWeightKg: number;
-      totalVolumeCbm: number;
-      orderCount: number;
-    }>;
-
-    for (const row of snapshotRows) {
-      const target =
-        summaryMap[hubRegions.get(Number(row.hubId)) || RegionEnum.NA];
-      const weightKg = Number(row.totalWeightKg) || 0;
-      const volumeCbm = Number(row.totalVolumeCbm) || 0;
-      const packageCount = Number(row.totalQuantity) || 0;
-      const orderCount = Number(row.orderCount) || 0;
-
-      if (row.status === 'INBOUND') {
-        target.onhandWeightKg += weightKg;
-        target.onhandVolumeCbm += volumeCbm;
-        target.onhandPackageCount += packageCount;
-        target.onhandOrderCount += orderCount;
-      } else if (row.status === 'DRAFT') {
-        target.draftWeightKg += weightKg;
-        target.draftVolumeCbm += volumeCbm;
-        target.draftOrderCount += orderCount;
-      } else if (row.status === 'COMPLETED_INBOUND') {
-        // Keep the existing response shape for compatibility; in live mode
-        // this bucket is displayed as "Đã xuất kho", not "Sắp về kho".
-        target.incomingWeightKg += weightKg;
-        target.incomingVolumeCbm += volumeCbm;
-        target.incomingPackageCount += packageCount;
-        target.incomingTripCount += orderCount;
-      } else if (row.status === 'ALL') {
-        target.totalWeightKg += weightKg;
-        target.totalVolumeCbm += volumeCbm;
-        target.totalPackageCount += packageCount;
-        target.totalOrderCount += orderCount;
-      }
+    const scopedHubs = selectedHub ? [selectedHub] : allHubs;
+    const regionKeys = [
+      RegionEnum.NORTH,
+      RegionEnum.CENTRAL,
+      RegionEnum.SOUTH,
+      RegionEnum.STORAGE,
+      RegionEnum.NA,
+    ];
+    const hubIds = scopedHubs.map((hub) => hub.id);
+    // Pick the latest complete five-region snapshot independently for each Hub.
+    // GET never scans orders, trips, or inventory transactions.
+    const rows =
+      hubIds.length === 0
+        ? []
+        : ((await this.dataSource.query(
+            `
+      WITH complete_dates AS (
+        SELECT r."hubId", r."reportDate"
+        FROM "daily_regional_dispatch_report" r
+        WHERE r."deletedAt" IS NULL
+          AND r."hubId" = ANY($1::int[])
+          AND r."reportDate" <= $2
+          AND ($3::text IS NULL OR r."reportDate" >= $3)
+          AND r.region = ANY($4::text[])
+        GROUP BY r."hubId", r."reportDate"
+        HAVING COUNT(DISTINCT r.region) = $5
+      ), latest_dates AS (
+        SELECT DISTINCT ON ("hubId") "hubId", "reportDate"
+        FROM complete_dates
+        ORDER BY "hubId", "reportDate" DESC
+      )
+      SELECT r.*
+      FROM "daily_regional_dispatch_report" r
+      JOIN latest_dates latest
+        ON latest."hubId" = r."hubId"
+       AND latest."reportDate" = r."reportDate"
+      WHERE r."deletedAt" IS NULL
+        AND r.region = ANY($4::text[])
+      ORDER BY r."hubId", r.region
+      `,
+            [hubIds, throughDate, fromDate, regionKeys, regionKeys.length],
+          )) as DailyRegionalDispatchReportEntity[]);
+    const rowsByHub = new Map<
+      number,
+      Map<string, DailyRegionalDispatchReportEntity>
+    >();
+    for (const row of rows) {
+      const hubRows = rowsByHub.get(Number(row.hubId)) ?? new Map();
+      hubRows.set(row.region, row);
+      rowsByHub.set(Number(row.hubId), hubRows);
     }
-
-    // A range report can merge snapshots from multiple days. A waybill that
-    // was a draft earlier in the range must not remain in the current draft
-    // list after it has been dispatched. Reconcile the code list against the
-    // current order lifecycle before returning draft details/counters.
-    const snapshotDraftCodes: string[] = [];
-    if (snapshotDraftCodes.length > 0) {
-      const currentDraftRows = (await this.dataSource.query(
-        `
-          SELECT o."orderCode"
-          FROM "order" o
-          WHERE o."deletedAt" IS NULL
-            AND o."orderCode" = ANY($1::text[])
-            AND o.status IN ('DRAFT', 'PENDING', 'PENDING_INBOUND', 'WAITING')
-        `,
-        [snapshotDraftCodes],
-      )) as Array<{ orderCode: string }>;
-      const currentDraftCodes = new Set(
-        currentDraftRows.map((row) => String(row.orderCode)),
-      );
-
-      for (const summary of Object.values(summaryMap)) {
-        summary.draftOrderCodes = new Set(
-          [...summary.draftOrderCodes].filter((code) =>
-            currentDraftCodes.has(code),
-          ),
-        );
-        summary.draftOrderCount = summary.draftOrderCodes.size;
-      }
-    }
-
-    // Snapshot code lists are historical. Reconcile them with the live
-    // inventory ledger so an order exported after the snapshot (for example a
-    // consignment with zero remaining quantity) is not shown as currently
-    // stored in the report details.
-    const snapshotOnhandCodes: string[] = [];
-    if (snapshotOnhandCodes.length > 0) {
-      const currentOnhandRows = (await this.dataSource.query(
-        `
-          SELECT DISTINCT o."orderCode", o."province", stock."hubId"
-          FROM "order" o
-          JOIN LATERAL (
-            SELECT tx."hubId",
-                   SUM(CASE WHEN tx.type = 'INBOUND' THEN tx.quantity
-                            WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
-                            ELSE 0 END) AS "hubStock"
-            FROM "order_inventory_transaction" tx
-            WHERE tx."orderId" = o.id AND tx."deletedAt" IS NULL
-            GROUP BY tx."hubId"
-            HAVING SUM(CASE WHEN tx.type = 'INBOUND' THEN tx.quantity
-                            WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
-                            ELSE 0 END) > 0
-          ) stock ON TRUE
-          WHERE o."deletedAt" IS NULL
-            AND o."orderCode" = ANY($1::text[])
-            AND COALESCE(o."remainingQuantity", 0) > 0
-            AND NOT (
-              o.status IN ('DRAFT', 'PENDING', 'WAITING')
-              AND COALESCE(o."currentHubId", o."originHubId") = stock."hubId"
-            )
-            AND ($2::integer IS NULL OR stock."hubId" = $2)
-        `,
-        [snapshotOnhandCodes, parsedHubId || null],
-      )) as Array<{
-        orderCode: string;
-        province: string | null;
-        hubId: number;
-      }>;
-      const currentOnhandRegions = new Map(
-        currentOnhandRows.map((row) => [
-          String(row.orderCode),
-          resolveReportRegion(row.province, row.hubId, hubRegions),
-        ]),
-      );
-
-      for (const summary of Object.values(summaryMap)) {
-        summary.onhandOrderCodes = new Set(
-          [...summary.onhandOrderCodes].filter(
-            (code) => currentOnhandRegions.get(code) === summary.region,
-          ),
-        );
-        summary.onhandOrderCount = summary.onhandOrderCodes.size;
-      }
-    }
-
-    const hubDisplayName = selectedHub
-      ? selectedHub.name
-      : 'Tất cả Chi nhánh (Toàn quốc)';
-
-    // Hoàn tất quy đổi tấn, khuyến nghị phương tiện và Quick Snippet cho từng miền
-    for (const key of Object.keys(summaryMap)) {
-      const item = summaryMap[key];
-      item.onhandWeightKg = Math.round(item.onhandWeightKg * 100) / 100;
-      item.onhandWeightTons =
-        Math.round((item.onhandWeightKg / 1000) * 100) / 100;
-      item.onhandVolumeCbm = Math.round(item.onhandVolumeCbm * 10) / 10;
-      item.draftWeightKg = Math.round(item.draftWeightKg * 100) / 100;
-      item.draftVolumeCbm = Math.round(item.draftVolumeCbm * 10) / 10;
-
-      item.incomingWeightKg = Math.round(item.incomingWeightKg * 100) / 100;
-      item.incomingWeightTons =
-        Math.round((item.incomingWeightKg / 1000) * 100) / 100;
-      item.incomingVolumeCbm = Math.round(item.incomingVolumeCbm * 10) / 10;
-
-      item.totalWeightKg = Math.round(item.totalWeightKg * 100) / 100;
-      item.totalWeightTons =
-        Math.round((item.totalWeightKg / 1000) * 100) / 100;
-      item.totalVolumeCbm = Math.round(item.totalVolumeCbm * 10) / 10;
-
-      item.recommendedVehicle = this.getVehicleRecommendation(
-        item.totalWeightTons,
-        item.totalVolumeCbm,
-      );
-
-      item.quickSnippet = this.generateRegionalQuickSnippet({
-        regionName: item.region,
-        hubName: hubDisplayName,
-        onhandWeightKg: item.onhandWeightKg,
-        onhandPackageCount: item.onhandPackageCount,
-        onhandVolumeCbm: item.onhandVolumeCbm,
-        incomingWeightKg: item.incomingWeightKg,
-        incomingTripCount: item.incomingTripCount,
-        totalWeightKg: item.totalWeightKg,
-        totalVolumeCbm: item.totalVolumeCbm,
-        recommendedVehicle: item.recommendedVehicle,
-      });
-    }
-
-    // Tính tổng toàn hệ thống
-    const grandTotals = {
-      totalWeightKg:
-        summaryMap[RegionEnum.NORTH].totalWeightKg +
-        summaryMap[RegionEnum.CENTRAL].totalWeightKg +
-        summaryMap[RegionEnum.SOUTH].totalWeightKg +
-        summaryMap[RegionEnum.NA].totalWeightKg,
-      totalWeightTons: 0,
-      totalVolumeCbm:
-        summaryMap[RegionEnum.NORTH].totalVolumeCbm +
-        summaryMap[RegionEnum.CENTRAL].totalVolumeCbm +
-        summaryMap[RegionEnum.SOUTH].totalVolumeCbm +
-        summaryMap[RegionEnum.NA].totalVolumeCbm,
-      onhandWeightKg:
-        summaryMap[RegionEnum.NORTH].onhandWeightKg +
-        summaryMap[RegionEnum.CENTRAL].onhandWeightKg +
-        summaryMap[RegionEnum.SOUTH].onhandWeightKg +
-        summaryMap[RegionEnum.NA].onhandWeightKg,
-      incomingWeightKg:
-        summaryMap[RegionEnum.NORTH].incomingWeightKg +
-        summaryMap[RegionEnum.CENTRAL].incomingWeightKg +
-        summaryMap[RegionEnum.SOUTH].incomingWeightKg +
-        summaryMap[RegionEnum.NA].incomingWeightKg,
-      packageCount:
-        summaryMap[RegionEnum.NORTH].totalPackageCount +
-        summaryMap[RegionEnum.CENTRAL].totalPackageCount +
-        summaryMap[RegionEnum.SOUTH].totalPackageCount +
-        summaryMap[RegionEnum.NA].totalPackageCount,
-      orderCount:
-        summaryMap[RegionEnum.NORTH].totalOrderCount +
-        summaryMap[RegionEnum.CENTRAL].totalOrderCount +
-        summaryMap[RegionEnum.SOUTH].totalOrderCount +
-        summaryMap[RegionEnum.NA].totalOrderCount,
-      incomingTripCount:
-        summaryMap[RegionEnum.NORTH].incomingTripCount +
-        summaryMap[RegionEnum.CENTRAL].incomingTripCount +
-        summaryMap[RegionEnum.SOUTH].incomingTripCount +
-        summaryMap[RegionEnum.NA].incomingTripCount,
-    };
-    grandTotals.totalWeightTons =
-      Math.round((grandTotals.totalWeightKg / 1000) * 100) / 100;
-    grandTotals.totalVolumeCbm =
-      Math.round(grandTotals.totalVolumeCbm * 10) / 10;
-
-    const rowsByDate = new Map<string, DailyRegionalDispatchReportEntity[]>();
-    for (const row of visibleRangeRows) {
-      const rows = rowsByDate.get(row.reportDate) || [];
-      rows.push(row);
-      rowsByDate.set(row.reportDate, rows);
-    }
-    const dailySeries = this.enumerateDates(fromDate, toDate).map((date) => {
-      const rows = rowsByDate.get(date) || [];
-      const sum = (key: keyof DailyRegionalDispatchReportEntity) =>
-        rows.reduce((total, row) => total + (Number(row[key]) || 0), 0);
-      const onhandWeightKg = sum('onhandWeightKg');
-      const onhandVolumeCbm = sum('onhandVolumeCbm');
-      const draftWeightKg = sum('draftWeightKg');
-      const draftVolumeCbm = sum('draftVolumeCbm');
-      const incomingWeightKg = sum('incomingWeightKg');
-      const incomingVolumeCbm = sum('incomingVolumeCbm');
+    const makeMetric = (
+      region: RegionEnum,
+      row: DailyRegionalDispatchReportEntity,
+    ) => {
+      const onhandWeightKg = Number(row.onhandWeightKg ?? 0);
+      const onhandVolumeCbm = Number(row.onhandVolumeCbm ?? 0);
+      const draftWeightKg = Number(row.draftWeightKg ?? 0);
+      const draftVolumeCbm = Number(row.draftVolumeCbm ?? 0);
+      const incomingWeightKg = Number(row.incomingWeightKg ?? 0);
+      const incomingVolumeCbm = Number(row.incomingVolumeCbm ?? 0);
+      const totalWeightKg = onhandWeightKg + draftWeightKg;
+      const totalVolumeCbm = onhandVolumeCbm + draftVolumeCbm;
       return {
-        reportDate: date,
-        hasSnapshot: rows.length > 0,
+        region,
         onhandWeightKg,
+        onhandWeightTons: onhandWeightKg / 1000,
         onhandVolumeCbm,
-        onhandOrderCount: sum('onhandOrderCount'),
+        onhandPackageCount: Number(row.onhandPackageCount ?? 0),
+        onhandOrderCount: Number(row.onhandOrderCount ?? 0),
+        onhandOrderCodes: row.onhandOrderCodes ?? [],
         draftWeightKg,
         draftVolumeCbm,
-        draftOrderCount: sum('draftOrderCount'),
+        draftOrderCount: Number(row.draftOrderCount ?? 0),
+        draftOrderCodes: row.draftOrderCodes ?? [],
         incomingWeightKg,
+        incomingWeightTons: incomingWeightKg / 1000,
         incomingVolumeCbm,
+        incomingPackageCount: Number(row.incomingPackageCount ?? 0),
+        incomingTripCount: Number(row.incomingTripCount ?? 0),
+        totalWeightKg,
+        totalWeightTons: totalWeightKg / 1000,
+        totalVolumeCbm,
+        recommendedVehicle: this.getVehicleRecommendation(
+          totalWeightKg / 1000,
+          totalVolumeCbm,
+        ),
+      };
+    };
+    const summarize = (regions: ReturnType<typeof makeMetric>[]) => {
+      const sum = (field: keyof ReturnType<typeof makeMetric>) =>
+        regions.reduce(
+          (value, region) => value + Number(region[field] ?? 0),
+          0,
+        );
+      return {
+        totalWeightKg: sum('totalWeightKg'),
+        totalWeightTons: sum('totalWeightKg') / 1000,
+        totalVolumeCbm: sum('totalVolumeCbm'),
+        onhandWeightKg: sum('onhandWeightKg'),
+        draftWeightKg: sum('draftWeightKg'),
+        incomingWeightKg: sum('incomingWeightKg'),
+        packageCount: sum('onhandPackageCount'),
+        orderCount: sum('onhandOrderCount') + sum('draftOrderCount'),
         incomingTripCount: sum('incomingTripCount'),
-        totalWeightKg: onhandWeightKg + draftWeightKg + incomingWeightKg,
-        totalVolumeCbm: onhandVolumeCbm + draftVolumeCbm + incomingVolumeCbm,
+      };
+    };
+    const hubReports = scopedHubs.map((hub) => {
+      const hubRows = rowsByHub.get(hub.id);
+      const hasSnapshot = Boolean(
+        hubRows && regionKeys.every((region) => hubRows.has(region)),
+      );
+      if (!hubRows || !hasSnapshot) {
+        return {
+          hub: { id: hub.id, code: hub.code, name: hub.name, level: hub.level },
+          hasSnapshot: false,
+          reportDate: null,
+          calculatedAt: null,
+          regions: null,
+          totals: null,
+        };
+      }
+      const metrics = regionKeys.map((region) =>
+        makeMetric(region, hubRows.get(region)!),
+      );
+      const regions = {
+        north: metrics[0],
+        central: metrics[1],
+        south: metrics[2],
+        storage: metrics[3],
+        na: metrics[4],
+      };
+      const calculatedAt = new Date(
+        Math.min(
+          ...[...hubRows.values()].map((row) =>
+            new Date(row.calculatedAt).getTime(),
+          ),
+        ),
+      ).toISOString();
+      return {
+        hub: { id: hub.id, code: hub.code, name: hub.name, level: hub.level },
+        hasSnapshot: true,
+        reportDate: hubRows.get(RegionEnum.NORTH)!.reportDate,
+        calculatedAt,
+        regions,
+        totals: summarize(metrics),
       };
     });
-
-    // Chi tiết danh sách chuyến xe đang chạy về kho
-    const hubFilterSql = parsedHubId
-      ? `AND (
-          (t.type = 'TRANSFER' AND t."destinationHubId" = ${parsedHubId})
-          OR (t.type = 'INBOUND' AND t."originHubId" = ${parsedHubId})
-        )`
-      : '';
-    const rawIncomingTripsList = await this.dataSource.query(`
-      SELECT 
-        t.id,
-        t."tripCode",
-        t.type AS "tripType",
-        t."licensePlate",
-        t."driverName",
-        t."status",
-        t."originHubId",
-        t."destinationHubId",
-        orig.name AS "originHubName",
-        dest.name AS "destinationHubName",
-        COALESCE(t."weightAllocated", 0) AS "weightAllocated",
-        COALESCE(t."volumeAllocated", 0) AS "volumeAllocated",
-        COALESCE(t."quantityAllocated", 0) AS "quantityAllocated",
-        t."estimatedDeliveryDate",
-        t."createdAt",
-        o."orderCode",
-        o."province",
-        o."destinationRegion",
-        o."destinationHub"
-      FROM "trip" t
-      LEFT JOIN "hub" orig ON orig.id = t."originHubId"
-      LEFT JOIN "hub" dest ON dest.id = CASE WHEN t.type = 'TRANSFER' THEN t."destinationHubId" ELSE t."originHubId" END
-      LEFT JOIN "order" o ON o.id = t."orderId"
-      WHERE t."deletedAt" IS NULL
-        AND (
-          (t.type = 'TRANSFER' AND t.status IN ('IN_TRANSIT', 'DISPATCHED') AND t."destinationHubId" IS NOT NULL)
-          OR (t.type = 'INBOUND' AND t.status = 'PENDING')
-        )
-        ${hubFilterSql}
-      ORDER BY t."createdAt" DESC
-      LIMIT 100
-    `);
-
-    // Chi tiết danh sách đơn hàng đang tồn tại kho
-    const rawStoredOrdersList = await this.dataSource.query(
-      `
-      SELECT 
-        o.id,
-        o."orderCode",
-        o."province",
-        o."destinationRegion",
-        o."destinationHub",
-        stock."hubStock" AS "remainingQuantity",
-        o."totalQuantity",
-        o."totalWeight",
-        o."totalVolume",
-        o."goodsDescription",
-        o."notes",
-        stock."hubId" AS "currentHubId",
-        h.name AS "currentHubName"
-      FROM "order" o
-      JOIN LATERAL (
-        SELECT tx."hubId",
-               SUM(CASE WHEN tx.type = 'INBOUND' THEN tx.quantity
-                        WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
-                        ELSE 0 END)::int AS "hubStock"
-        FROM "order_inventory_transaction" tx
-        WHERE tx."orderId" = o.id AND tx."deletedAt" IS NULL
-        GROUP BY tx."hubId"
-        HAVING SUM(CASE WHEN tx.type = 'INBOUND' THEN tx.quantity
-                        WHEN tx.type IN ('OUTBOUND', 'TRANSFER') THEN -tx.quantity
-                        ELSE 0 END) > 0
-      ) stock ON TRUE
-      LEFT JOIN "hub" h ON h.id = stock."hubId"
-      WHERE o."deletedAt" IS NULL
-        AND NOT (
-          o.status IN ('DRAFT', 'PENDING', 'WAITING')
-          AND COALESCE(o."currentHubId", o."originHubId") = stock."hubId"
-        )
-        AND ($1::integer IS NULL OR stock."hubId" = $1)
-      ORDER BY o."createdAt" DESC
-      LIMIT 150
-    `,
-      [parsedHubId],
-    );
-
-    const onhandOrdersList = isFutureOnlyRange
-      ? []
-      : rawStoredOrdersList.map((ord: any) => {
-          const reg = resolveReportRegion(
-            ord.province,
-            Number(ord.currentHubId),
-            hubRegions,
-          );
-
-          const totalQty = Number(ord.totalQuantity) || 1;
-          const remainQty = Number(ord.remainingQuantity) || 0;
-          const ratio = totalQty > 0 ? remainQty / totalQty : 1;
-          const wKg =
-            Math.round((Number(ord.totalWeight) || 0) * ratio * 100) / 100;
-          const vCbm =
-            Math.round((Number(ord.totalVolume) || 0) * ratio * 10) / 10;
-
-          return {
-            id: ord.id,
-            orderCode: ord.orderCode,
-            province: ord.province || 'Chưa nhập',
-            region: reg,
-            remainingQuantity: remainQty,
-            totalQuantity: totalQty,
-            weightKg: wKg,
-            weightTons: Math.round((wKg / 1000) * 100) / 100,
-            volumeCbm: vCbm,
-            goodsDescription: ord.goodsDescription,
-            currentHubId: ord.currentHubId,
-            currentHubName: ord.currentHubName || 'Kho hiện tại',
-          };
-        });
-
-    const incomingTripsList = isFutureOnlyRange
-      ? []
-      : rawIncomingTripsList.map((trip: any) => {
-          const effectiveHubId =
-            trip.tripType === 'TRANSFER'
-              ? Number(trip.destinationHubId)
-              : Number(trip.originHubId);
-          const reg = resolveReportRegion(
-            trip.province,
-            effectiveHubId,
-            hubRegions,
-          );
-
-          return {
-            id: trip.id,
-            tripCode: trip.tripCode,
-            licensePlate: trip.licensePlate || 'Chưa gán xe',
-            driverName: trip.driverName || 'Chưa gán tài xế',
-            status: trip.status,
-            originHubName: trip.originHubName || 'Kho gửi',
-            destinationHubName: trip.destinationHubName || 'Kho đích',
-            weightKg: Number(trip.weightAllocated) || 0,
-            weightTons:
-              Math.round(((Number(trip.weightAllocated) || 0) / 1000) * 100) /
-              100,
-            volumeCbm: Number(trip.volumeAllocated) || 0,
-            packageCount: Number(trip.quantityAllocated) || 0,
-            orderCode: trip.orderCode,
-            province: trip.province || '',
-            region: reg,
-            estimatedDeliveryDate: trip.estimatedDeliveryDate,
-          };
-        });
-
-    const draftRegions = {
-      north: {
-        weightKg: summaryMap[RegionEnum.NORTH].draftWeightKg,
-        volumeCbm: summaryMap[RegionEnum.NORTH].draftVolumeCbm,
-        orderCount: summaryMap[RegionEnum.NORTH].draftOrderCount,
-        orderCodes: [...summaryMap[RegionEnum.NORTH].draftOrderCodes],
-      },
-      central: {
-        weightKg: summaryMap[RegionEnum.CENTRAL].draftWeightKg,
-        volumeCbm: summaryMap[RegionEnum.CENTRAL].draftVolumeCbm,
-        orderCount: summaryMap[RegionEnum.CENTRAL].draftOrderCount,
-        orderCodes: [...summaryMap[RegionEnum.CENTRAL].draftOrderCodes],
-      },
-      south: {
-        weightKg: summaryMap[RegionEnum.SOUTH].draftWeightKg,
-        volumeCbm: summaryMap[RegionEnum.SOUTH].draftVolumeCbm,
-        orderCount: summaryMap[RegionEnum.SOUTH].draftOrderCount,
-        orderCodes: [...summaryMap[RegionEnum.SOUTH].draftOrderCodes],
-      },
-      na: {
-        weightKg: summaryMap[RegionEnum.NA].draftWeightKg,
-        volumeCbm: summaryMap[RegionEnum.NA].draftVolumeCbm,
-        orderCount: summaryMap[RegionEnum.NA].draftOrderCount,
-        orderCodes: [...summaryMap[RegionEnum.NA].draftOrderCodes],
-      },
-    };
-
+    const allComplete =
+      hubReports.length > 0 && hubReports.every((report) => report.hasSnapshot);
+    const topRegions = allComplete
+      ? (Object.fromEntries(
+          (['north', 'central', 'south', 'storage', 'na'] as const).map(
+            (key) => {
+              const metrics = hubReports.map((report) => report.regions![key]);
+              const first = metrics[0];
+              const sum = (field: keyof typeof first) =>
+                metrics.reduce(
+                  (value, metric) => value + Number(metric[field] ?? 0),
+                  0,
+                );
+              const onhandOrderCodes = metrics.flatMap(
+                (metric) => metric.onhandOrderCodes,
+              );
+              const draftOrderCodes = metrics.flatMap(
+                (metric) => metric.draftOrderCodes,
+              );
+              const totalWeightKg = sum('totalWeightKg');
+              const totalVolumeCbm = sum('totalVolumeCbm');
+              return [
+                key,
+                {
+                  ...first,
+                  onhandWeightKg: sum('onhandWeightKg'),
+                  onhandWeightTons: sum('onhandWeightKg') / 1000,
+                  onhandVolumeCbm: sum('onhandVolumeCbm'),
+                  onhandPackageCount: sum('onhandPackageCount'),
+                  onhandOrderCount: sum('onhandOrderCount'),
+                  onhandOrderCodes,
+                  draftWeightKg: sum('draftWeightKg'),
+                  draftVolumeCbm: sum('draftVolumeCbm'),
+                  draftOrderCount: sum('draftOrderCount'),
+                  draftOrderCodes,
+                  incomingWeightKg: sum('incomingWeightKg'),
+                  incomingWeightTons: sum('incomingWeightKg') / 1000,
+                  incomingVolumeCbm: sum('incomingVolumeCbm'),
+                  incomingPackageCount: sum('incomingPackageCount'),
+                  incomingTripCount: sum('incomingTripCount'),
+                  totalWeightKg,
+                  totalWeightTons: totalWeightKg / 1000,
+                  totalVolumeCbm,
+                  recommendedVehicle: this.getVehicleRecommendation(
+                    totalWeightKg / 1000,
+                    totalVolumeCbm,
+                  ),
+                },
+              ];
+            },
+          ),
+        ) as Record<
+          'north' | 'central' | 'south' | 'storage' | 'na',
+          ReturnType<typeof makeMetric>
+        >)
+      : null;
+    const topTotals = topRegions ? summarize(Object.values(topRegions)) : null;
+    const config = await this.cronConfigRepository.findOne({
+      where: { jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT' },
+    });
     return {
-      draftRegions,
-      range: { fromDate, toDate },
-      dailySeries,
-      hub: {
-        id: selectedHub ? selectedHub.id : 0,
-        code: selectedHub ? selectedHub.code : 'ALL',
-        name: hubDisplayName,
-        level: selectedHub ? selectedHub.level : 0,
-      },
-      reportDate,
+      hub: selectedHub
+        ? {
+            id: selectedHub.id,
+            code: selectedHub.code,
+            name: selectedHub.name,
+            level: selectedHub.level,
+          }
+        : { id: 0, code: 'ALL', name: 'Tất cả Hub Chính', level: 0 },
+      hubsList: allHubs.map((hub) => ({
+        id: hub.id,
+        code: hub.code,
+        name: hub.name,
+        level: hub.level,
+      })),
+      hubReports,
+      hasSnapshot: allComplete,
+      reportDate: hubReports.length === 1 ? hubReports[0].reportDate : null,
+      regions: topRegions,
+      totals: topTotals,
+      draftRegions: topRegions
+        ? Object.fromEntries(
+            Object.entries(topRegions).map(([key, region]) => [
+              key,
+              {
+                weightKg: region.draftWeightKg,
+                volumeCbm: region.draftVolumeCbm,
+                orderCount: region.draftOrderCount,
+                orderCodes: region.draftOrderCodes,
+              },
+            ]),
+          )
+        : null,
       cronInfo: {
         jobKey: 'REGIONAL_DISPATCH_CAPACITY_SNAPSHOT',
-        name: cronConfig?.name || 'Cân đối Tải trọng Đội xe theo Miền',
-        cronTime: cronConfig?.cronTime || '17:00',
-        isEnabled: cronConfig?.isEnabled ?? true,
-        lastRunAt: cronConfig?.lastRunAt
-          ? cronConfig.lastRunAt.toISOString()
-          : null,
-        lastRunStatus: cronConfig?.lastRunStatus || 'IDLE',
+        name: config?.name ?? 'Tình hình hàng hóa',
+        cronTime: config?.cronTime ?? '06:00',
+        isEnabled: config?.isEnabled ?? true,
+        lastRunAt: config?.lastRunAt?.toISOString() ?? null,
+        lastRunStatus: config?.lastRunStatus ?? 'IDLE',
       },
-      regions: {
-        north: {
-          ...summaryMap[RegionEnum.NORTH],
-          onhandOrderCodes: [...summaryMap[RegionEnum.NORTH].onhandOrderCodes],
-          draftOrderCodes: [...summaryMap[RegionEnum.NORTH].draftOrderCodes],
-        },
-        central: {
-          ...summaryMap[RegionEnum.CENTRAL],
-          onhandOrderCodes: [
-            ...summaryMap[RegionEnum.CENTRAL].onhandOrderCodes,
-          ],
-          draftOrderCodes: [...summaryMap[RegionEnum.CENTRAL].draftOrderCodes],
-        },
-        south: {
-          ...summaryMap[RegionEnum.SOUTH],
-          onhandOrderCodes: [...summaryMap[RegionEnum.SOUTH].onhandOrderCodes],
-          draftOrderCodes: [...summaryMap[RegionEnum.SOUTH].draftOrderCodes],
-        },
-        na: {
-          ...summaryMap[RegionEnum.NA],
-          onhandOrderCodes: [...summaryMap[RegionEnum.NA].onhandOrderCodes],
-          draftOrderCodes: [...summaryMap[RegionEnum.NA].draftOrderCodes],
-        },
-      },
-      totals: grandTotals,
-      hubsList: allHubs.map((h) => ({
-        id: h.id,
-        code: h.code,
-        name: h.name,
-        level: h.level,
-      })),
-      incomingTripsList,
-      onhandOrdersList,
-      provinceAudit: resolvedProvinceAudit,
     };
   }
 }
