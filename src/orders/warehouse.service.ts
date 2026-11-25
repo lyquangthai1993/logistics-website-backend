@@ -53,6 +53,8 @@ import {
   DeliveryModeEnum,
 } from './dto/update-trip-order-destination.dto';
 import { RedisCacheService } from '../redis/redis-cache.service';
+import { WarehouseHubOrderSummaryEntity } from './infrastructure/persistence/relational/entities/warehouse-hub-order-summary.entity';
+import { ProvinceReferenceService } from '../provinces/province-reference.service';
 
 export interface WarehouseOrdersResult {
   data: Array<
@@ -134,6 +136,9 @@ export class WarehouseService {
     private readonly activityLogService: OrderActivityLogService,
     private readonly dataSource: DataSource,
     private readonly redisCacheService: RedisCacheService,
+    @InjectRepository(WarehouseHubOrderSummaryEntity)
+    private readonly hubOrderSummaryRepository: Repository<WarehouseHubOrderSummaryEntity>,
+    private readonly provinceReferenceService: ProvinceReferenceService,
   ) {}
 
   /**
@@ -201,6 +206,121 @@ export class WarehouseService {
       (user.role?.id === RoleEnum.WAREHOUSE_MANAGER || hasExplicitHubFilter) &&
       !!userHubId;
     return { userHubId, useHubContext };
+  }
+
+  /**
+   * Read the latest per-Hub order totals snapshot. The warehouse orders screen
+   * must not scan and aggregate the full order set on every request.
+   */
+  async getHubOrderSummary(
+    user: UserEntity,
+    requestedHubId?: number,
+    status?: string,
+  ): Promise<{
+    data: {
+      hubId: number | null;
+      quantity: number;
+      weightKg: number;
+      volumeCbm: number;
+      orderCount: number;
+      calculatedAt: Date | null;
+    };
+  }> {
+    const normalizedStatus = status?.trim().toUpperCase() || 'ALL';
+    const { userHubId, useHubContext } = await this.resolveHubContext(
+      user,
+      requestedHubId,
+    );
+
+    const qb = this.hubOrderSummaryRepository
+      .createQueryBuilder('summary')
+      .select('COALESCE(SUM(summary.totalQuantity), 0)', 'quantity')
+      .addSelect('COALESCE(SUM(summary.totalWeightKg), 0)', 'weightKg')
+      .addSelect('COALESCE(SUM(summary.totalVolumeCbm), 0)', 'volumeCbm')
+      .addSelect('COALESCE(SUM(summary.orderCount), 0)', 'orderCount')
+      .addSelect('MAX(summary.calculatedAt)', 'calculatedAt')
+      .where('summary.deletedAt IS NULL')
+      .andWhere('summary.status = :summaryStatus', {
+        summaryStatus: normalizedStatus,
+      });
+
+    if (useHubContext && userHubId) {
+      qb.andWhere('summary.hubId = :hubId', { hubId: userHubId });
+    }
+
+    const row = await qb.getRawOne<{
+      quantity: string | number;
+      weightKg: string | number;
+      volumeCbm: string | number;
+      orderCount: string | number;
+      calculatedAt: Date | string | null;
+    }>();
+
+    return {
+      data: {
+        hubId: useHubContext ? Number(userHubId) : null,
+        quantity: Number(row?.quantity) || 0,
+        weightKg: Math.round((Number(row?.weightKg) || 0) * 100) / 100,
+        volumeCbm: Math.round((Number(row?.volumeCbm) || 0) * 1000) / 1000,
+        orderCount: Number(row?.orderCount) || 0,
+        calculatedAt: row?.calculatedAt ? new Date(row.calculatedAt) : null,
+      },
+    };
+  }
+
+  /** Refresh one Hub snapshot per status bucket using the canonical grouped-order aggregation. */
+  async refreshHubOrderSummary(
+    hubId: number,
+    triggeredBy: 'CRON' | 'MANUAL' = 'CRON',
+  ): Promise<WarehouseHubOrderSummaryEntity> {
+    const statuses = ['ALL', 'INBOUND', 'DRAFT', 'COMPLETED_INBOUND'] as const;
+    let lastSnapshot: WarehouseHubOrderSummaryEntity | undefined;
+
+    for (const status of statuses) {
+      const result = await this.getOrders(
+        { role: { id: RoleEnum.SUPER_ADMIN } } as UserEntity,
+        {
+          isExport: 'true',
+          groupBy: 'orderCode',
+          limit: 100000,
+          hubId,
+          ...(status === 'ALL' ? {} : { status }),
+        },
+      );
+      const current =
+        (await this.hubOrderSummaryRepository.findOne({
+          where: { hubId, status },
+        })) ?? this.hubOrderSummaryRepository.create({ hubId, status });
+
+      current.status = status;
+      current.totalQuantity = Number(result.meta.totalQuantity) || 0;
+      current.totalWeightKg =
+        Math.round((Number(result.meta.totalWeight) || 0) * 100) / 100;
+      current.totalVolumeCbm =
+        Math.round((Number(result.meta.totalVolume) || 0) * 1000) / 1000;
+      current.orderCount = Number(result.meta.total) || 0;
+      current.triggeredBy = triggeredBy;
+      current.calculatedAt = new Date();
+      lastSnapshot = await this.hubOrderSummaryRepository.save(current);
+    }
+
+    return lastSnapshot!;
+  }
+
+  /** Refresh Hubs one by one to cap concurrent database pressure. */
+  async refreshAllHubOrderSummaries(
+    triggeredBy: 'CRON' | 'MANUAL' = 'CRON',
+  ): Promise<number> {
+    const hubs = await this.hubRepository.find({
+      where: { isActive: true },
+      order: { id: 'ASC' },
+    });
+    let refreshed = 0;
+    for (const hub of hubs) {
+      await this.refreshHubOrderSummary(hub.id, triggeredBy);
+      refreshed += 1;
+    }
+    return refreshed;
   }
 
   /** Proportional share of a contract metric for a partial quantity. */
@@ -413,6 +533,9 @@ export class WarehouseService {
       .filter((n) => Number.isInteger(n) && n > 0);
     const groupByOrderCode =
       query?.groupBy === 'orderCode' || flowUpper === 'OUTBOUND_LOOKUP';
+    const provinceRegionLookup = isExport
+      ? await this.provinceReferenceService.getRegionLookup()
+      : undefined;
     const waitingOrStored = sqlList([...WAITING_STATUSES, ...STORED_STATUSES]);
     const storedOrDispatched = sqlList([
       ...STORED_STATUSES,
@@ -583,6 +706,7 @@ export class WarehouseService {
         skip,
         userHubId,
         useHubContext,
+        provinceRegionLookup,
         counts: { allCount, storedCount, draftCount, dispatchedCount },
       });
     }
@@ -618,6 +742,8 @@ export class WarehouseService {
       data,
       userHubId,
       useHubContext,
+      undefined,
+      provinceRegionLookup,
     );
 
     return {
@@ -645,6 +771,7 @@ export class WarehouseService {
     userHubId: number | null,
     useHubContext: boolean,
     precomputedHubView?: Map<number, any>,
+    provinceRegionLookup?: Map<string, string>,
   ): Promise<any[]> {
     const hubView =
       precomputedHubView ??
@@ -864,6 +991,24 @@ export class WarehouseService {
         deliveryAddr ||
         item.province ||
         '';
+      const destinationRegion =
+        (provinceRegionLookup &&
+          [
+            item.province,
+            (item as unknown as { destinationProvince?: string })
+              .destinationProvince,
+            item.destinationHubEntity?.city,
+            deliveryAddr,
+          ]
+            .map((candidate) =>
+              this.provinceReferenceService.resolveRegion(
+                candidate,
+                provinceRegionLookup,
+              ),
+            )
+            .find(Boolean)) ||
+        item.destinationRegion ||
+        'N/A';
 
       const round3Metric = (n: number) => Math.round(n * 1000) / 1000;
       const activeHubTxs = hubTxs.filter((t) => !t.deletedAt);
@@ -944,6 +1089,7 @@ export class WarehouseService {
           '',
         destinationHub: originalDestination,
         originalDestination,
+        destinationRegion,
         outboundDestination,
         /** Status seen from the viewer's hub (falls back to global status). */
         hubStatus: effectiveStatus,
@@ -993,6 +1139,7 @@ export class WarehouseService {
     skip: number;
     userHubId: number | null;
     useHubContext: boolean;
+    provinceRegionLookup?: Map<string, string>;
     counts: {
       allCount: number;
       storedCount: number;
@@ -1034,6 +1181,8 @@ export class WarehouseService {
       members,
       ctx.userHubId,
       ctx.useHubContext,
+      undefined,
+      ctx.provinceRegionLookup,
     );
 
     const byCode = new Map<string, any[]>();
@@ -3803,6 +3952,17 @@ export class WarehouseService {
 
       if (rawOrders.length === 0) {
         throw new NotFoundException('Không tìm thấy đơn hàng nào để xuất kho');
+      }
+
+      if (!dto.items?.length) {
+        const missingProvince = rawOrders.find(
+          (order) => !order.province || !order.province.trim(),
+        );
+        if (missingProvince) {
+          throw new BadRequestException(
+            `Đơn ${missingProvince.orderCode}: Tỉnh/Thành phố không được để trống`,
+          );
+        }
       }
 
       await this.lockOrdersForInventory(

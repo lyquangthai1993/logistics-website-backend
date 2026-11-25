@@ -18,12 +18,14 @@ import { DailyHubOperationalReportEntity } from './infrastructure/persistence/re
 import { DailyRegionalDispatchReportEntity } from './infrastructure/persistence/relational/entities/daily-regional-dispatch-report.entity';
 import { CronJobConfigEntity } from './infrastructure/persistence/relational/entities/cron-job-config.entity';
 import { CronJobExecutionLogEntity } from './infrastructure/persistence/relational/entities/cron-job-execution-log.entity';
+import { WarehouseHubOrderSummaryEntity } from './infrastructure/persistence/relational/entities/warehouse-hub-order-summary.entity';
 import { OrderActivityLogService } from './order-activity-log.service';
 import { WarehouseController } from './warehouse.controller';
 import { WarehouseService } from './warehouse.service';
 import { OperationalLedgerService } from './operational-ledger.service';
 import { AdminReportsController } from './admin-reports.controller';
 import { AdminReportsService } from './admin-reports.service';
+import { ProvincesModule } from '../provinces/provinces.module';
 
 @Module({
   imports: [
@@ -40,9 +42,11 @@ import { AdminReportsService } from './admin-reports.service';
       DailyRegionalDispatchReportEntity,
       CronJobConfigEntity,
       CronJobExecutionLogEntity,
+      WarehouseHubOrderSummaryEntity,
     ]),
     NotificationsModule,
     MailModule,
+    ProvincesModule,
   ],
   controllers: [OrdersController, WarehouseController, AdminReportsController],
   providers: [

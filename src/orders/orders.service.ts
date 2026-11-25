@@ -4,7 +4,6 @@ import {
   NotFoundException,
   UnprocessableEntityException,
   ForbiddenException,
-  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -520,7 +519,7 @@ export class OrdersService {
       );
       if (changed.length > 0) {
         throw new ForbiddenException(
-          'Hợp đồng gốc của đơn hàng đã được khóa sau khi gửi đi (số kiện, khối lượng, thể tích, mô tả hàng, nơi gửi, nơi nhận). Chỉ Quản trị viên được điều chỉnh qua chức năng "Điều chỉnh hợp đồng gốc" kèm lý do.',
+          'Thông tin đơn hàng đã được khóa sau khi gửi đi (số kiện, khối lượng, thể tích, mô tả hàng, nơi gửi, nơi nhận). Chỉ Quản trị viên được điều chỉnh thông tin Lưu kho kèm lý do.',
         );
       }
     }
@@ -616,6 +615,26 @@ export class OrdersService {
         throw new NotFoundException('Không tìm thấy đơn hàng cần điều chỉnh.');
       }
 
+      const storedStatuses = new Set([
+        'INBOUND',
+        'STORED',
+        'LUU_KHO',
+        'IN_WAREHOUSE',
+      ]);
+      if (!storedStatuses.has(String(order.status).toUpperCase())) {
+        throw new ForbiddenException(
+          'Chỉ đơn hàng ở trạng thái Lưu kho mới được điều chỉnh.',
+        );
+      }
+      if (
+        !dto.warehouseHubId ||
+        Number(order.currentHubId) !== Number(dto.warehouseHubId)
+      ) {
+        throw new ForbiddenException(
+          'Vui lòng chọn đúng một kho cụ thể đang giữ đơn hàng; không hỗ trợ bộ lọc Tất cả kho.',
+        );
+      }
+
       const currentVals = {
         totalQuantity: order.totalQuantity,
         totalWeight: order.totalWeight,
@@ -623,6 +642,18 @@ export class OrdersService {
         goodsDescription: order.goodsDescription,
         originHubId: order.originHubId,
         destinationHubId: order.destinationHubId,
+        route: order.route,
+        pickupAddress: order.route?.includes('→')
+          ? order.route.split('→')[0]?.trim()
+          : order.originHub,
+        deliveryAddress: order.route?.includes('→')
+          ? order.route.split('→')[1]?.trim()
+          : order.destinationHub,
+        province: order.province,
+        notes: order.notes,
+        accompanyingDocs: order.accompanyingDocs,
+        externalNote: order.externalNote,
+        isExternalVehicleNeeded: order.isExternalVehicleNeeded,
       };
 
       const LABELS: Record<string, string> = {
@@ -632,6 +663,12 @@ export class OrdersService {
         goodsDescription: 'Mô tả hàng',
         originHubId: 'Kho gửi',
         destinationHubId: 'Kho nhận',
+        route: 'Tuyến giao nhận',
+        province: 'Tỉnh / TP',
+        notes: 'Ghi chú',
+        accompanyingDocs: 'Chứng từ',
+        externalNote: 'Ghi chú xe ngoài',
+        isExternalVehicleNeeded: 'Dùng xe ngoài',
       };
       const changes: string[] = [];
 
@@ -640,13 +677,28 @@ export class OrdersService {
           | 'totalQuantity'
           | 'totalWeight'
           | 'totalVolume'
-          | 'goodsDescription',
+          | 'goodsDescription'
+          | 'route'
+          | 'province'
+          | 'notes'
+          | 'accompanyingDocs'
+          | 'externalNote'
+          | 'isExternalVehicleNeeded',
       ) => {
         const next = dto[field];
         if (next === undefined || next === null) return;
         const prev = order[field];
-        const nextVal = typeof next === 'string' ? next.trim() : Number(next);
-        if (nextVal === '' || nextVal === prev) return;
+        const nextVal =
+          typeof next === 'string'
+            ? next.trim()
+            : typeof next === 'boolean'
+              ? next
+              : Number(next);
+        if (
+          (typeof nextVal === 'number' && Number.isNaN(nextVal)) ||
+          nextVal === prev
+        )
+          return;
         changes.push(`${LABELS[field]}: ${prev ?? '—'} → ${nextVal}`);
         (order as any)[field] = nextVal;
       };
@@ -654,19 +706,38 @@ export class OrdersService {
       applyScalar('totalWeight');
       applyScalar('totalVolume');
       applyScalar('goodsDescription');
+      applyScalar('route');
+      applyScalar('province');
+      applyScalar('notes');
+      applyScalar('accompanyingDocs');
+      applyScalar('externalNote');
+      applyScalar('isExternalVehicleNeeded');
 
-      if (dto.orderCode && dto.orderCode.trim() !== order.orderCode) {
-        const candidateCode = dto.orderCode.trim().toUpperCase();
-        const duplicate = await orderRepo.findOne({
-          where: { orderCode: candidateCode },
-        });
-        if (duplicate && duplicate.id !== order.id) {
-          throw new ConflictException(
-            `Mã vận đơn ${candidateCode} đã tồn tại trong hệ thống.`,
-          );
-        }
-        changes.push(`Mã vận đơn: ${order.orderCode} → ${candidateCode}`);
-        order.orderCode = candidateCode;
+      const currentPickupAddress = order.route?.includes('→')
+        ? order.route.split('→')[0]?.trim() || ''
+        : order.originHub || '';
+      const currentDeliveryAddress = order.route?.includes('→')
+        ? order.route.split('→')[1]?.trim() || ''
+        : order.destinationHub || '';
+      const nextPickupAddress =
+        dto.pickupAddress?.trim() ?? currentPickupAddress;
+      const nextDeliveryAddress =
+        dto.deliveryAddress?.trim() ?? currentDeliveryAddress;
+      const addressChanged =
+        dto.pickupAddress !== undefined || dto.deliveryAddress !== undefined;
+
+      if (
+        addressChanged &&
+        (nextPickupAddress !== currentPickupAddress ||
+          nextDeliveryAddress !== currentDeliveryAddress)
+      ) {
+        changes.push(
+          `Địa chỉ nhận hàng: ${currentPickupAddress || '—'} → ${nextPickupAddress || '—'}`,
+        );
+        changes.push(
+          `Địa chỉ giao hàng: ${currentDeliveryAddress || '—'} → ${nextDeliveryAddress || '—'}`,
+        );
+        order.route = `${nextPickupAddress || 'Kho gửi'} → ${nextDeliveryAddress || 'Điểm giao'}`;
       }
 
       const applyHub = async (
@@ -719,7 +790,7 @@ export class OrdersService {
           volume: 0,
           performedByUserId: admin.id,
           discrepancyReason: auditReason,
-          notes: `Điều chỉnh hợp đồng gốc: ${changes.join('; ')}`,
+          notes: `Điều chỉnh thông tin đơn hàng: ${changes.join('; ')}`,
         }),
       );
 

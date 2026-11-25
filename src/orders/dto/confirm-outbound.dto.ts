@@ -7,7 +7,9 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  ValidateNested,
 } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 
 export enum OutboundMode {
   CUSTOMER = 'CUSTOMER',
@@ -71,10 +73,14 @@ export class OutboundItemDto {
   @IsString()
   accompanyingDocs?: string;
 
-  @ApiPropertyOptional({ example: 'Hà Nội' })
-  @IsOptional()
+  @ApiProperty({
+    example: 'Hà Nội',
+    description: 'Tỉnh/Thành phố nhận hàng (bắt buộc)',
+  })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsNotEmpty({ message: 'Tỉnh/Thành phố không được để trống' })
   @IsString()
-  province?: string;
+  province: string;
 
   @ApiPropertyOptional({ example: 'Thùng linh kiện điện tử' })
   @IsOptional()
@@ -103,6 +109,8 @@ export class ConfirmOutboundDto {
   })
   @IsOptional()
   @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OutboundItemDto)
   items?: OutboundItemDto[];
 
   @ApiProperty({ example: OutboundMode.CUSTOMER, enum: OutboundMode })

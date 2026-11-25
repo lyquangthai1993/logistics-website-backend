@@ -1,14 +1,14 @@
 services:
   postgres:
-    image: postgres:17.9-alpine
+    image: postgres:16-alpine
     ports:
-      - ${DATABASE_PORT}:5432
+      - ${DATABASE_PORT:-15432}:5432
     volumes:
-      - boilerplate-db:/var/lib/postgresql/data
+      - logistics-local-postgres-data:/var/lib/postgresql/data
     environment:
-      POSTGRES_USER: ${DATABASE_USERNAME}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
-      POSTGRES_DB: ${DATABASE_NAME}
+      POSTGRES_USER: ${DATABASE_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-local_dev_password}
+      POSTGRES_DB: ${DATABASE_NAME:-logistics_tms_core}
 
   maildev:
     build:
@@ -24,11 +24,20 @@ services:
     ports:
       - 8080:8080
 
-  # Uncomment to use redis
-  # redis:
-  #   image: redis:7-alpine
-  #   ports:
-  #     - 6379:6379
+  redis:
+    image: redis:7-alpine
+    container_name: logistics-local-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-local-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   api:
     build:
@@ -36,6 +45,16 @@ services:
       dockerfile: Dockerfile
     ports:
       - ${APP_PORT}:${APP_PORT}
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_ENABLED: "true"
 
 volumes:
-  boilerplate-db:
+  logistics-local-postgres-data:
+    external: true
+  redis-local-data:

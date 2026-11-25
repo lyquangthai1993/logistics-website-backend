@@ -16,6 +16,9 @@ export enum RegionEnum {
   NA = 'N/A',
 }
 
+/** Canonical province sentinel used only by the regional report. */
+export const CONSIGNMENT_STORAGE_PROVINCE = 'Gửi kho';
+
 export interface RegionResolveResult {
   region: RegionEnum;
   provinceName: string;
@@ -52,13 +55,13 @@ export function sanitizeProvinceString(input: string): string {
   return cleaned.replace(/\s+/g, ' ').trim();
 }
 
-interface ProvinceDefinition {
+export interface ProvinceDefinition {
   standardName: string;
   region: RegionEnum;
   aliases: string[];
 }
 
-const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
+export const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
   // ==========================================
   // 1. MIỀN BẮC (25 TỈNH/THÀNH)
   // ==========================================
@@ -215,7 +218,14 @@ const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
   {
     standardName: 'Thừa Thiên Huế',
     region: RegionEnum.CENTRAL,
-    aliases: ['thua thien hue', 'thua thien - hue', 'hue', 'tth'],
+    aliases: [
+      'thua thien hue',
+      'thua thien - hue',
+      'hue',
+      'Huế',
+      'TP. Huế',
+      'tth',
+    ],
   },
   {
     standardName: 'Đà Nẵng',
@@ -340,8 +350,11 @@ const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
     aliases: [
       'ba ria - vung tau',
       'ba ria vung tau',
+      'Bà Rịa Vũng Tàu',
       'ba ria',
+      'Bà Rịa',
       'vung tau',
+      'Vũng Tàu',
       'brvt',
       'vt',
     ],
@@ -400,7 +413,7 @@ const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
   {
     standardName: 'Cần Thơ',
     region: RegionEnum.SOUTH,
-    aliases: ['can tho', 'ct'],
+    aliases: ['can tho', 'TP. Cần Thơ', 'Tỉnh Cần Thơ', 'ct'],
   },
   {
     standardName: 'Hậu Giang',
@@ -420,7 +433,7 @@ const PROVINCE_DEFINITIONS: ProvinceDefinition[] = [
   {
     standardName: 'Cà Mau',
     region: RegionEnum.SOUTH,
-    aliases: ['ca mau', 'cm'],
+    aliases: ['ca mau', 'Tỉnh Cà Mau', 'cm'],
   },
 ];
 
@@ -522,22 +535,23 @@ function toReportRegion(excelRegion: string): RegionEnum {
     : (excelRegion as RegionEnum);
 }
 
-for (const [provinceName, excelRegion] of EXCEL_PROVINCE_REGION_ROWS) {
-  const key = removeVietnameseAccents(sanitizeProvinceString(provinceName));
-  if (!EXCEL_LOOKUP_MAP.has(key)) {
-    EXCEL_LOOKUP_MAP.set(key, {
-      standardName: provinceName,
-      region: toReportRegion(excelRegion),
-      aliases: [],
-    });
-  }
-}
-
 for (const prov of PROVINCE_DEFINITIONS) {
   const normStandard = removeVietnameseAccents(prov.standardName);
   LOOKUP_MAP.set(normStandard, prov);
   for (const alias of prov.aliases) {
     LOOKUP_MAP.set(removeVietnameseAccents(alias), prov);
+  }
+}
+
+for (const [provinceName, excelRegion] of EXCEL_PROVINCE_REGION_ROWS) {
+  const key = removeVietnameseAccents(sanitizeProvinceString(provinceName));
+  if (!EXCEL_LOOKUP_MAP.has(key)) {
+    const canonical = LOOKUP_MAP.get(key);
+    EXCEL_LOOKUP_MAP.set(key, {
+      standardName: canonical?.standardName ?? provinceName,
+      region: toReportRegion(excelRegion),
+      aliases: [],
+    });
   }
 }
 
@@ -558,10 +572,20 @@ export function normalizeRegion(
   const rawCleaned = sanitizeProvinceString(input);
   const normalizedKey = removeVietnameseAccents(rawCleaned);
 
-  if (/^(?:luu|gui)(?: tai| vao)? kho$/.test(normalizedKey)) {
+  const isConsignmentStorageProvince = [
+    'luu kho',
+    'luu tai kho',
+    'luu vao kho',
+    'gui kho',
+    'gui tai kho',
+    'gui vao kho',
+    'ky gui kho',
+  ].includes(normalizedKey);
+
+  if (isConsignmentStorageProvince) {
     return {
       region: RegionEnum.STORAGE,
-      provinceName: normalizedKey.startsWith('gui') ? 'Gửi Kho' : 'Lưu Kho',
+      provinceName: CONSIGNMENT_STORAGE_PROVINCE,
       isRecognized: true,
     };
   }

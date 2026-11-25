@@ -12,6 +12,7 @@ import { VehicleSeedModule } from './vehicle/vehicle-seed.module';
 import { DriverSeedModule } from './driver/driver-seed.module';
 import databaseConfig from '../../config/database.config';
 import appConfig from '../../../config/app.config';
+import { ProvinceSeedModule } from './province/province-seed.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import appConfig from '../../../config/app.config';
     HubSeedModule,
     VehicleSeedModule,
     DriverSeedModule,
+    ProvinceSeedModule,
     ConfigModule.forRoot({
       isGlobal: true,
       load: [databaseConfig, appConfig],

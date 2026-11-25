@@ -6,6 +6,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsIn,
   Max,
   Min,
 } from 'class-validator';
@@ -30,6 +31,15 @@ export class CreateHubDto {
   @IsNotEmpty()
   @IsString()
   city: string;
+
+  @ApiPropertyOptional({
+    example: 'MIỀN NAM',
+    enum: ['MIỀN BẮC', 'MIỀN TRUNG', 'MIỀN NAM'],
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['MIỀN BẮC', 'MIỀN TRUNG', 'MIỀN NAM'])
+  region?: 'MIỀN BẮC' | 'MIỀN TRUNG' | 'MIỀN NAM';
 
   @ApiPropertyOptional({
     example: 'KCN Bắc Thăng Long, Huyện Đông Anh, Hà Nội',
