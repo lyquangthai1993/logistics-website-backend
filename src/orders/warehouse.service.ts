@@ -697,6 +697,7 @@ export class WarehouseService {
 
     if (groupByOrderCode) {
       return this.getOrdersGroupedByCode({
+        status: query?.status?.toUpperCase() || 'ALL',
         createListQb,
         applyScope,
         applyStatusFilter,
@@ -1126,6 +1127,7 @@ export class WarehouseService {
    * aggregates only its rows matching the active filters. Member rows are returned in `items`.
    */
   private async getOrdersGroupedByCode(ctx: {
+    status: string;
     createListQb: () => SelectQueryBuilder<OrderEntity>;
     applyScope: (
       q: SelectQueryBuilder<OrderEntity>,
@@ -1193,7 +1195,13 @@ export class WarehouseService {
     }
     const grouped = codes
       .filter((code) => byCode.has(code))
-      .map((code) => this.aggregateOrderGroup(code, byCode.get(code)!));
+      .map((code) =>
+        this.aggregateOrderGroup(
+          code,
+          byCode.get(code)!,
+          ctx.status,
+        ),
+      );
 
     const sum = (pick: (g: any) => unknown) =>
       grouped.reduce((s, g) => s + (Number(pick(g)) || 0), 0);
@@ -1214,7 +1222,11 @@ export class WarehouseService {
   }
 
   /** Collapse the rows sharing one order code into a single summary row. */
-  private aggregateOrderGroup(orderCode: string, items: any[]): any {
+  private aggregateOrderGroup(
+    orderCode: string,
+    items: any[],
+    requestedStatus = 'ALL',
+  ): any {
     const first = items[0];
     const isDraftItem = (it: any) =>
       DRAFT_LIKE_STATUSES.includes(
@@ -1488,6 +1500,16 @@ export class WarehouseService {
             ),
           );
 
+    // The warehouse list and its ALL/stored totals represent stock still held,
+    // while completed and draft views keep their full order metrics.
+    const showOnHandMetrics = [
+      'ALL',
+      'INBOUND',
+      'STORED',
+      'LUU_KHO',
+      'IN_WAREHOUSE',
+    ].includes(requestedStatus);
+
     return {
       ...first,
       id: primaryRow.id,
@@ -1497,8 +1519,8 @@ export class WarehouseService {
       inboundQuantity: effectiveInbound,
       outboundQuantity: totalOutbound,
       remainingQuantity: effectiveRemaining,
-      totalWeight: groupTotalWeight,
-      totalVolume: groupTotalVolume,
+      totalWeight: showOnHandMetrics ? groupRemainingWeight : groupTotalWeight,
+      totalVolume: showOnHandMetrics ? groupRemainingVolume : groupTotalVolume,
       exportedWeight: groupExportedWeight,
       exportedVolume: groupExportedVolume,
       pendingOutboundWeight: groupPendingOutWeight,
