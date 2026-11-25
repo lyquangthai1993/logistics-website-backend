@@ -561,12 +561,18 @@ export class WarehouseController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Điều chỉnh số lượng kiện của dòng giao dịch kho (Chỉ Super Admin, đảm bảo ACID & cập nhật tồn kho)',
+      'Điều chỉnh kiện, kg và m³ của dòng giao dịch kho (Chỉ Super Admin, đảm bảo ACID & cập nhật tồn kho)',
   })
   async updateTransactionQuantity(
     @Request() req: any,
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { quantity: number; reason?: string },
+    @Body()
+    body: {
+      quantity: number;
+      weight?: number;
+      volume?: number;
+      reason?: string;
+    },
   ) {
     return this.warehouseService.updateTransactionQuantity(
       id,
@@ -574,6 +580,8 @@ export class WarehouseController {
       req.user,
       body?.reason,
       req.headers?.authorization,
+      body?.weight,
+      body?.volume,
     );
   }
 
@@ -582,12 +590,18 @@ export class WarehouseController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Điều chỉnh số lượng kiện của dòng giao dịch kho (Alias PATCH /transactions/:id)',
+      'Điều chỉnh kiện, kg và m³ của dòng giao dịch kho (Alias PATCH /transactions/:id)',
   })
   async updateTransaction(
     @Request() req: any,
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { quantity: number; reason?: string },
+    @Body()
+    body: {
+      quantity: number;
+      weight?: number;
+      volume?: number;
+      reason?: string;
+    },
   ) {
     return this.warehouseService.updateTransactionQuantity(
       id,
@@ -595,6 +609,8 @@ export class WarehouseController {
       req.user,
       body?.reason,
       req.headers?.authorization,
+      body?.weight,
+      body?.volume,
     );
   }
 
