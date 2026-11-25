@@ -8609,6 +8609,8 @@ export class WarehouseService {
     user: UserEntity,
     reason?: string,
     bearerToken?: string | null,
+    newWeight?: number,
+    newVolume?: number,
   ) {
     const roleId = Number(
       user?.role?.id || (typeof user?.role === 'number' ? user.role : 0),
@@ -8637,6 +8639,22 @@ export class WarehouseService {
       throw new BadRequestException(
         'Số lượng kiện điều chỉnh phải là số nguyên lớn hơn hoặc bằng 1.',
       );
+    }
+
+    const hasWeight = newWeight !== undefined && newWeight !== null;
+    const hasVolume = newVolume !== undefined && newVolume !== null;
+    if (hasWeight !== hasVolume) {
+      throw new BadRequestException('Vui lòng nhập đủ cả kg và m³.');
+    }
+    const parsedWeight = hasWeight ? Number(newWeight) : undefined;
+    const parsedVolume = hasVolume ? Number(newVolume) : undefined;
+    if (
+      (parsedWeight !== undefined &&
+        (!Number.isFinite(parsedWeight) || parsedWeight <= 0)) ||
+      (parsedVolume !== undefined &&
+        (!Number.isFinite(parsedVolume) || parsedVolume <= 0))
+    ) {
+      throw new BadRequestException('Kg và m³ phải là số lớn hơn 0.');
     }
 
     const auditReason =
@@ -8687,10 +8705,28 @@ export class WarehouseService {
       await this.lockOrdersForInventory(manager, [], [order.orderCode.trim()]);
 
       const oldTxQuantity = Number(tx.quantity) || 0;
+      const oldTxWeight = Number(tx.weight) || 0;
+      const oldTxVolume = Number(tx.volume) || 0;
+      const nextWeight = parsedWeight ?? oldTxWeight;
+      const nextVolume = parsedVolume ?? oldTxVolume;
+      const metricDeltaWeight =
+        tx.type === 'INBOUND' ? nextWeight - oldTxWeight : 0;
+      const metricDeltaVolume =
+        tx.type === 'INBOUND' ? nextVolume - oldTxVolume : 0;
+      const nextOrderTotalWeight = Math.max(
+        0,
+        (Number(order.totalWeight) || 0) + metricDeltaWeight,
+      );
+      const nextOrderTotalVolume = Math.max(
+        0,
+        (Number(order.totalVolume) || 0) + metricDeltaVolume,
+      );
 
-      // Update transaction quantity
+      // Update quantity and proportional metrics atomically.
       await txRepo.update(transactionId, {
         quantity: parsedQty,
+        weight: nextWeight,
+        volume: nextVolume,
       });
 
       // Query all active transactions for this orderCode
@@ -8742,7 +8778,11 @@ export class WarehouseService {
           },
         });
         for (const mt of matchingTrips) {
-          await tripRepo.update(mt.id, { quantityAllocated: parsedQty });
+          await tripRepo.update(mt.id, {
+            quantityAllocated: parsedQty,
+            weightAllocated: nextWeight,
+            volumeAllocated: nextVolume,
+          });
         }
       }
 
@@ -8763,10 +8803,14 @@ export class WarehouseService {
         inboundQuantity: order.inboundQuantity,
         outboundQuantity: order.outboundQuantity,
         remainingQuantity: order.remainingQuantity,
+        totalWeight: order.totalWeight,
+        totalVolume: order.totalVolume,
         status: order.status,
         transactionId: tx.id,
         transactionType: tx.type,
         quantity: oldTxQuantity,
+        weight: oldTxWeight,
+        volume: oldTxVolume,
       };
 
       for (const sibId of siblingOrderIds) {
@@ -8775,6 +8819,8 @@ export class WarehouseService {
           inboundQuantity: newTotalInbound,
           outboundQuantity: newTotalOutbound,
           remainingQuantity: newRemaining,
+          totalWeight: nextOrderTotalWeight,
+          totalVolume: nextOrderTotalVolume,
           status: newStatus,
           updatedAt: new Date(),
         });
@@ -8785,11 +8831,17 @@ export class WarehouseService {
         inboundQuantity: newTotalInbound,
         outboundQuantity: newTotalOutbound,
         remainingQuantity: newRemaining,
+        totalWeight: nextOrderTotalWeight,
+        totalVolume: nextOrderTotalVolume,
         status: newStatus,
         transactionId: tx.id,
         transactionType: tx.type,
         oldQuantity: oldTxQuantity,
         quantity: parsedQty,
+        oldWeight: oldTxWeight,
+        weight: nextWeight,
+        oldVolume: oldTxVolume,
+        volume: nextVolume,
       };
 
       await this.activityLogService.logActivity(
@@ -8818,6 +8870,10 @@ export class WarehouseService {
             txType: tx.type,
             oldQuantity: oldTxQuantity,
             newQuantity: parsedQty,
+            oldWeight: oldTxWeight,
+            newWeight: nextWeight,
+            oldVolume: oldTxVolume,
+            newVolume: nextVolume,
           },
         },
         manager,
@@ -8825,11 +8881,15 @@ export class WarehouseService {
 
       return {
         success: true,
-        message: `Đã điều chỉnh số lượng giao dịch #${transactionId} (${tx.type}: ${oldTxQuantity} → ${parsedQty} kiện) thành công. Tồn kho đã được cân bằng lại.`,
+        message: `Đã điều chỉnh giao dịch #${transactionId} (${tx.type}: ${oldTxQuantity} → ${parsedQty} kiện, ${oldTxVolume} → ${nextVolume} m³, ${oldTxWeight} → ${nextWeight} kg). Tồn kho đã được cân bằng lại.`,
         transactionId,
         orderCode: order.orderCode,
         oldQuantity: oldTxQuantity,
         quantity: parsedQty,
+        oldWeight: oldTxWeight,
+        weight: nextWeight,
+        oldVolume: oldTxVolume,
+        volume: nextVolume,
         inboundQuantity: newTotalInbound,
         outboundQuantity: newTotalOutbound,
         remainingQuantity: newRemaining,
