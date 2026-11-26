@@ -293,7 +293,16 @@ export class WarehouseService {
         })) ?? this.hubOrderSummaryRepository.create({ hubId, status });
 
       current.status = status;
-      current.totalQuantity = Number(result.meta.totalQuantity) || 0;
+      // The stored-orders snapshot represents on-hand inventory, so its package
+      // total must follow the remaining stock after outbound transactions. The
+      // grouped query's meta.totalQuantity is the original inbound quantity.
+      current.totalQuantity =
+        status === 'INBOUND'
+          ? (result.data ?? []).reduce(
+              (sum, row) => sum + (Number(row.remainingQuantity) || 0),
+              0,
+            )
+          : Number(result.meta.totalQuantity) || 0;
       current.totalWeightKg =
         Math.round((Number(result.meta.totalWeight) || 0) * 100) / 100;
       current.totalVolumeCbm =
@@ -1196,11 +1205,7 @@ export class WarehouseService {
     const grouped = codes
       .filter((code) => byCode.has(code))
       .map((code) =>
-        this.aggregateOrderGroup(
-          code,
-          byCode.get(code)!,
-          ctx.status,
-        ),
+        this.aggregateOrderGroup(code, byCode.get(code)!, ctx.status),
       );
 
     const sum = (pick: (g: any) => unknown) =>
