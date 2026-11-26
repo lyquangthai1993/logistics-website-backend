@@ -163,6 +163,7 @@ export class AdminReportsController {
       jobKey?: string;
       isEnabled?: boolean;
       cronTime?: string;
+      cronExpression?: string;
       cutoffHour?: number;
       notifySuperAdmins?: boolean;
       description?: string;

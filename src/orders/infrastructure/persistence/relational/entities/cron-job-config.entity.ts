@@ -26,6 +26,15 @@ export class CronJobConfigEntity extends AbstractBaseEntity {
   @Column({ type: String, length: 5, nullable: false, default: '18:05' })
   cronTime: string;
 
+  /** Five-field cron expression for jobs with a flexible schedule. */
+  @Column({
+    type: String,
+    length: 120,
+    nullable: false,
+    default: '0 0 * * *',
+  })
+  cronExpression: string;
+
   /** Operational day cutoff hour in GMT+7 (default 18 = 6:00 PM) */
   @Column({ type: 'int', nullable: false, default: 18 })
   cutoffHour: number;
