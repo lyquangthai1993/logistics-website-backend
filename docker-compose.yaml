@@ -56,5 +56,4 @@ services:
 
 volumes:
   logistics-local-postgres-data:
-    external: true
   redis-local-data:
