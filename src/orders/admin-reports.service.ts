@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import { CronExpressionParser } from 'cron-parser';
 import { DailyHubOperationalReportEntity } from './infrastructure/persistence/relational/entities/daily-hub-operational-report.entity';
 import { DailyRegionalDispatchReportEntity } from './infrastructure/persistence/relational/entities/daily-regional-dispatch-report.entity';
 import {
@@ -23,6 +24,36 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { WarehouseService } from './warehouse.service';
 
 export type ReportDirection = 'OUTBOUND' | 'INBOUND' | 'STORAGE' | 'ALL';
+
+const CRON_TIME_ZONE = 'Asia/Ho_Chi_Minh';
+const FLEXIBLE_SNAPSHOT_JOB_KEY = 'WAREHOUSE_HUB_ORDER_TOTALS';
+const DEFAULT_SNAPSHOT_CRON = '*/5 * * * *';
+
+function toParserCronExpression(expression: string): string {
+  return `0 ${expression}`;
+}
+
+export function normalizeFiveFieldCronExpression(value: string): string {
+  const expression = value.trim().replace(/\s+/g, ' ');
+  if (expression.split(' ').length !== 5) {
+    throw new BadRequestException(
+      'Biểu thức lịch phải gồm đúng 5 trường: phút giờ ngày tháng thứ.',
+    );
+  }
+
+  try {
+    CronExpressionParser.parse(toParserCronExpression(expression), {
+      tz: CRON_TIME_ZONE,
+      strict: true,
+    });
+  } catch {
+    throw new BadRequestException(
+      'Biểu thức lịch không hợp lệ. Ví dụ: */5 * * * *, 0 * * * * hoặc 30 8 * * 1-5.',
+    );
+  }
+
+  return expression;
+}
 
 export function resolveRegionalDispatchSyncDate(
   requestedDate: string | undefined,
@@ -303,6 +334,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           "description" text,
           "isEnabled" boolean NOT NULL DEFAULT true,
           "cronTime" character varying(5) NOT NULL DEFAULT '18:05',
+          "cronExpression" character varying(120) NOT NULL DEFAULT '0 0 * * *',
           "cutoffHour" integer NOT NULL DEFAULT 18,
           "notifySuperAdmins" boolean NOT NULL DEFAULT true,
           "lastRunAt" TIMESTAMP,
@@ -315,6 +347,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           CONSTRAINT "PK_cron_job_config_id" PRIMARY KEY ("id"),
           CONSTRAINT "UQ_cron_job_config_jobKey" UNIQUE ("jobKey")
         );
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE "cron_job_config"
+          ADD COLUMN IF NOT EXISTS "cronExpression" character varying(120) NOT NULL DEFAULT '0 0 * * *';
       `);
       await this.dataSource.query(`
         CREATE TABLE IF NOT EXISTS "cron_job_execution_log" (
@@ -487,6 +523,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       description: string;
       isEnabled: boolean;
       cronTime: string;
+      cronExpression: string;
       cutoffHour: number;
       notifySuperAdmins: boolean;
     }> = [
@@ -497,6 +534,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           'Tự động chốt sản lượng CBM, Số Tấn và Chuyến xe (TRIP) xác nhận Nhập/Xuất theo chu kỳ 06:00 (6:00 AM) ngày D → 05:59 (5:59 AM) ngày D+1',
         isEnabled: true,
         cronTime: '18:05',
+        cronExpression: '5 18 * * *',
         cutoffHour: 18,
         notifySuperAdmins: true,
       },
@@ -507,6 +545,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           'Rà soát toàn bộ chuyến xe (TRIP) đang ở trạng thái Chờ xử lý / Nháp (PENDING) chưa xác nhận Nhập/Xuất kho trước giờ chốt sổ 18:00 hàng ngày',
         isEnabled: true,
         cronTime: '17:30',
+        cronExpression: '30 17 * * *',
         cutoffHour: 18,
         notifySuperAdmins: true,
       },
@@ -517,6 +556,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           'Đối soát tự động tồn kho khả dụng tại các Hub Cấp 1 & Trạm Xe Bo Cấp 2, phát hiện đơn hàng lưu kho quá 48 giờ chưa phân bổ chuyến xuất',
         isEnabled: true,
         cronTime: '08:00',
+        cronExpression: '0 8 * * *',
         cutoffHour: 18,
         notifySuperAdmins: false,
       },
@@ -527,6 +567,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           'Định kỳ quét tồn kho khả dụng và các chuyến xe trung chuyển đang trên đường để tổng hợp sản lượng tải trọng theo 3 miền (Bắc, Trung, Nam) phục vụ điều phối đội xe',
         isEnabled: true,
         cronTime: '06:00',
+        cronExpression: '0 6 * * *',
         cutoffHour: 18,
         notifySuperAdmins: true,
       },
@@ -537,6 +578,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
           'Cứ mỗi 5 phút quét tuần tự từng Hub và lưu tổng số lượng, khối lượng kg, CBM để màn hình Đơn hàng kho đọc nhanh mà không quét toàn bộ dữ liệu mỗi lần tải',
         isEnabled: true,
         cronTime: '00:00',
+        cronExpression: DEFAULT_SNAPSHOT_CRON,
         cutoffHour: 0,
         notifySuperAdmins: false,
       },
@@ -738,7 +780,10 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         : 0;
       if (
         hubSummaryConfig?.isEnabled &&
-        vn.minute % 5 === 0 &&
+        this.isCronExpressionDue(
+          hubSummaryConfig.cronExpression || DEFAULT_SNAPSHOT_CRON,
+          now,
+        ) &&
         !this.isRunningCron &&
         !this.isRunningHubSummaryCron &&
         nowMs - lastHubSummaryRunMs >= 4 * 60 * 1000
@@ -784,6 +829,23 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       }
     } catch (err) {
       this.logger.warn(`[DAILY CRON CHECK] ${(err as Error)?.message}`);
+    }
+  }
+
+  private isCronExpressionDue(expression: string, now: Date): boolean {
+    const minute = new Date(now);
+    minute.setSeconds(0, 0);
+    try {
+      return CronExpressionParser.parse(toParserCronExpression(expression), {
+        currentDate: minute,
+        tz: CRON_TIME_ZONE,
+        strict: true,
+      }).includesDate(minute);
+    } catch (error) {
+      this.logger.warn(
+        `[CRON CONFIG] Bỏ qua biểu thức không hợp lệ "${expression}": ${(error as Error)?.message}`,
+      );
+      return false;
     }
   }
 
@@ -2211,6 +2273,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       jobKey?: string;
       isEnabled?: boolean;
       cronTime?: string;
+      cronExpression?: string;
       cutoffHour?: number;
       notifySuperAdmins?: boolean;
       description?: string;
@@ -2229,6 +2292,16 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
       /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(dto.cronTime.trim())
     ) {
       config.cronTime = dto.cronTime.trim();
+    }
+    if (typeof dto.cronExpression === 'string') {
+      if (config.jobKey !== FLEXIBLE_SNAPSHOT_JOB_KEY) {
+        throw new BadRequestException(
+          'Chỉ Snapshot Tổng đơn theo Hub hỗ trợ cấu hình cron linh hoạt.',
+        );
+      }
+      config.cronExpression = normalizeFiveFieldCronExpression(
+        dto.cronExpression,
+      );
     }
     if (
       typeof dto.cutoffHour === 'number' &&
@@ -2371,6 +2444,31 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
 
     // Calculate next scheduled run in GMT+7
     const computeNextRunInfo = (job: CronJobConfigEntity) => {
+      if (job.jobKey === FLEXIBLE_SNAPSHOT_JOB_KEY && job.cronExpression) {
+        try {
+          const nextAt = CronExpressionParser.parse(
+            toParserCronExpression(job.cronExpression),
+            {
+              currentDate: now,
+              tz: CRON_TIME_ZONE,
+              strict: true,
+            },
+          )
+            .next()
+            .toDate();
+          return {
+            nextRunAt: job.isEnabled ? nextAt.toISOString() : null,
+            nextRunLabel: job.isEnabled
+              ? `${job.cronExpression} → ${nextAt.toLocaleString('vi-VN', { timeZone: CRON_TIME_ZONE, hour12: false })} (GMT+7)`
+              : 'Đang tạm dừng (Tắt tự động)',
+          };
+        } catch {
+          return {
+            nextRunAt: null,
+            nextRunLabel: 'Biểu thức lịch không hợp lệ',
+          };
+        }
+      }
       const [jH, jM] = (job.cronTime || '18:05').split(':').map(Number);
       const todayCandidate = new Date(
         `${vnNow.dateStr}T${String(jH || 18).padStart(2, '0')}:${String(jM || 0).padStart(2, '0')}:00+07:00`,
@@ -2403,6 +2501,7 @@ export class AdminReportsService implements OnModuleInit, OnModuleDestroy {
         description: j.description,
         isEnabled: j.isEnabled,
         cronTime: j.cronTime,
+        cronExpression: j.cronExpression,
         cutoffHour: j.cutoffHour,
         notifySuperAdmins: j.notifySuperAdmins,
         lastRunAt: j.lastRunAt ? new Date(j.lastRunAt).toISOString() : null,
