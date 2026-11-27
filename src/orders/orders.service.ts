@@ -621,14 +621,13 @@ export class OrdersService {
         'LUU_KHO',
         'IN_WAREHOUSE',
       ]);
-      if (!storedStatuses.has(String(order.status).toUpperCase())) {
-        throw new ForbiddenException(
-          'Chỉ đơn hàng ở trạng thái Lưu kho mới được điều chỉnh.',
-        );
-      }
+      const isStoredOrder = storedStatuses.has(
+        String(order.status).toUpperCase(),
+      );
       if (
-        !dto.warehouseHubId ||
-        Number(order.currentHubId) !== Number(dto.warehouseHubId)
+        isStoredOrder &&
+        (!dto.warehouseHubId ||
+          Number(order.currentHubId) !== Number(dto.warehouseHubId))
       ) {
         throw new ForbiddenException(
           'Vui lòng chọn đúng một kho cụ thể đang giữ đơn hàng; không hỗ trợ bộ lọc Tất cả kho.',
@@ -773,9 +772,15 @@ export class OrdersService {
 
       const saved = await orderRepo.save(order);
 
+      const auditHubId =
+        saved.currentHubId ??
+        saved.originHubId ??
+        dto.warehouseHubId ??
+        admin.hubId ??
+        null;
       const invoiceCode = await this.ledgerService.generateInvoiceCode(
         InventoryTransactionType.ADJUSTMENT,
-        admin.hubId ?? null,
+        auditHubId,
         manager,
       );
       await txRepo.save(
@@ -783,7 +788,7 @@ export class OrdersService {
           orderId: saved.id,
           type: InventoryTransactionType.ADJUSTMENT,
           invoiceCode,
-          hubId: saved.originHubId ?? admin.hubId ?? null,
+          hubId: auditHubId,
           quantity: 0,
           remainingQuantity: saved.remainingQuantity ?? 0,
           weight: 0,
@@ -805,7 +810,7 @@ export class OrdersService {
           actorUserId: Number(admin.id),
           actorEmail: admin.email || 'admin@example.com',
           actorRole: 'SUPER_ADMIN',
-          hubId: Number(saved.originHubId ?? admin.hubId),
+          hubId: Number(auditHubId),
           hubName: saved.originHub || 'N/A Hub',
           reason: auditReason,
           bearerToken: bearerToken ?? null,
