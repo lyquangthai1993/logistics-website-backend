@@ -25,14 +25,15 @@ export class AdminOverrideOrderDto {
   @MinLength(5, { message: 'Lý do điều chỉnh cần tối thiểu 5 ký tự' })
   auditReason: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 3,
     description:
-      'Kho đang được chọn trên màn hình Đơn hàng kho; không được là ALL',
+      'Kho đang được chọn trên màn hình Đơn hàng kho; không bắt buộc với đơn chưa vào kho',
   })
+  @IsOptional()
   @IsInt()
   @IsPositive()
-  warehouseHubId: number;
+  warehouseHubId?: number;
 
   @ApiPropertyOptional({ example: 9 })
   @IsOptional()

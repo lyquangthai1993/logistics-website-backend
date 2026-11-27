@@ -411,7 +411,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
       );
     });
 
-    it('should reject admin override for every status other than stored', async () => {
+    it('should allow admin override for every order status', async () => {
       for (const status of [
         'DRAFT',
         'PENDING_FLEET',
@@ -430,7 +430,7 @@ describe('Orders & Warehouse — waybill code, Master Contract & operational led
             } as any,
             adminUser,
           ),
-        ).rejects.toThrow(ForbiddenException);
+        ).resolves.toEqual(expect.objectContaining({ status }));
       }
     });
 
