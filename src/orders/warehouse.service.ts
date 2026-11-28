@@ -5861,6 +5861,17 @@ export class WarehouseService {
         ? `(ts."deletedAt" IS NULL OR NOT EXISTS (SELECT 1 FROM "trip_stop" act_ts WHERE act_ts."tripCode" = ts."tripCode" AND act_ts."hubId" = ts."hubId" AND act_ts."deletedAt" IS NULL))`
         : `ts."deletedAt" IS NULL`,
       `ts."stopType" <> 'ORIGIN'`,
+      // An outbound transfer draft creates destination stops up front so the
+      // origin hub can keep editing the draft. It must not leak into the
+      // receiving hub's inbound board until the origin confirms dispatch.
+      `NOT EXISTS (
+        SELECT 1
+        FROM "trip" draft_trip
+        WHERE draft_trip."tripCode" = ts."tripCode"
+          AND draft_trip."type" = 'TRANSFER'
+          AND draft_trip."status" = 'PENDING'
+          AND draft_trip."deletedAt" IS NULL
+      )`,
     ];
 
     if (userHubId) {
